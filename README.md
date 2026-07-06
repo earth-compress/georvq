@@ -108,6 +108,7 @@ xhat = codec.decode(codec.encode(x), depths=[8, 4, 2])
 
 ## Docs
 
+- `docs/OVERVIEW.md` — codebase map, invariants, and working knowledge
 - `docs/ADDING_A_SOURCE.md` — the plug-point for new datasets
 - `docs/BITSTREAM.md` — packet/archive format, decoder-upgrade contract
 - `docs/FINDINGS.md` — the empirical results behind the design choices
