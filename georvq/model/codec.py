@@ -269,6 +269,47 @@ class PyramidCodec(nn.Module):
         return self.decode(zqs, Ls)
 
     @torch.no_grad()
+    def codebook_health(self, x, loc=None):
+        """Per-(tier, level) codebook usage / entropy / perplexity on one
+        batch: 'pyr{i}_usage_L{l}', 'pyr{i}_entropy_L{l}',
+        'pyr{i}_perplexity_L{l}'."""
+        out = {}
+        zs = self.encode_levels(x)
+
+        def _tally(i, sp, per_level_idx):
+            for j in range(sp.depth):
+                p = torch.bincount(per_level_idx[j].flatten(),
+                                   minlength=sp.codes).float()
+                out[f"pyr{i}_usage_L{j+1}"] = float((p > 0).float().mean())
+                p = p / p.sum()
+                out[f"pyr{i}_entropy_L{j+1}"] = float(
+                    -(p[p > 0] * p[p > 0].log2()).sum())
+                out[f"pyr{i}_perplexity_L{j+1}"] = float(
+                    2 ** out[f"pyr{i}_entropy_L{j+1}"])
+
+        if self.selector is not None:
+            scores = self.selector(loc)
+            for i, (z, rvq, sp) in enumerate(zip(zs, self.rvqs, self.specs)):
+                _, idxs = rvq.all_levels_gated(z.float(), scores[i],
+                                               self.selector.subset_k(sp))
+                _tally(i, sp, idxs)
+        elif self.conditioner is not None:
+            idxs = self.conditioner.full_depth_indices(
+                self.rvqs, self.specs, [z.float() for z in zs], loc)
+            for i, sp in enumerate(self.specs):
+                _tally(i, sp, idxs[i])
+        else:
+            for i, (z, rvq, sp) in enumerate(zip(zs, self.rvqs, self.specs)):
+                residual = z
+                idxs = []
+                for lev in rvq.levels:
+                    q, idx, _ = lev(residual)
+                    residual = residual - q
+                    idxs.append(idx)
+                _tally(i, sp, idxs)
+        return out
+
+    @torch.no_grad()
     def eval_ceiling(self, x):
         """Decode the un-quantized latents: the encoder/decoder ceiling."""
         zs = self.encode_levels(x)

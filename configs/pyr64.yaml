@@ -25,6 +25,8 @@ model:
     ema_decay: 0.99
     bf16_scores: true
     skip_masked: true
+    warmup_steps: 500     # VQ-free warmup, then residual k-means codebook init
+    kmeans_sample: 32768
 
 train:
   steps: 200000

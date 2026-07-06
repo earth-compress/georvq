@@ -50,7 +50,7 @@ class TierSpec(StrictModel):
         return f"{self.grid}:{self.dim}:{self.codes}:{self.depth}"
 
 
-def _parse_tier(v):
+def parse_tier(v):
     if isinstance(v, str):
         g, d, k, dep = (int(t) for t in v.split(":"))
         return {"grid": g, "dim": d, "codes": k, "depth": dep}
@@ -161,7 +161,7 @@ class ModelConfig(StrictModel):
     @classmethod
     def _tiers_shorthand(cls, v):
         if isinstance(v, (list, tuple)):
-            return [_parse_tier(t) for t in v]
+            return [parse_tier(t) for t in v]
         return v
 
     @model_validator(mode="after")

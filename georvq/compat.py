@@ -123,8 +123,9 @@ def config_from_legacy_args(a: dict) -> Config:
     return Config.model_validate(raw)
 
 
-def remap_state_dict(sd: dict) -> dict:
+def remap_state_dict(sd: dict, strict=True) -> dict:
     out = {}
+    dropped = []
     for k, v in sd.items():
         if k in _DROP:
             continue
@@ -133,7 +134,12 @@ def remap_state_dict(sd: dict) -> dict:
                 out[new + k[len(old):]] = v
                 break
         else:
-            raise KeyError(f"unrecognized legacy state-dict key: {k}")
+            if strict:
+                raise KeyError(f"unrecognized legacy state-dict key: {k}")
+            dropped.append(k)
+    if dropped:
+        print(f"legacy remap: dropped {len(dropped)} unmapped keys "
+              f"(e.g. {dropped[0]})", flush=True)
     return out
 
 

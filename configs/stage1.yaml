@@ -1,0 +1,37 @@
+# Stage-1 continuous sigma-conditioned pyramidal AE (warm-start substrate).
+data:
+  source: ae
+  store_dir: /data/AE-samples/chips_1024
+  val_frac: 0.04
+  pool:
+    size: 38300
+    workers: 6
+    slot_rows: 96
+    refresh_per_s: 60.0
+    device: cpu
+    cycle: true
+    align_crops: true
+
+model:
+  window: 64
+  bands: 64
+  tiers: ["1:256:256:1", "4:192:256:1", "16:64:256:1"]   # codes/depth unused (continuous)
+  ff_ratio: 2.0
+  tokenizer: {dim: 256, depth: 9}
+  decoder: {dim: 384, depth: 12, heads: 8, head_feat: 64, cls_bridge: true}
+  vq: null
+  sigma: {max: 4.0, freqs: 8}
+
+train:
+  steps: 120000
+  batch_windows: 832
+  amp: true
+  tf32: true
+  optim: {lr: 1.5e-4, wd: 0.01, warmup: 1000, lr0_steps: 100}
+  val_interval: 500
+  fig_interval: 1000
+  save_interval: 2500
+
+log:
+  run_tag: stage1
+  wandb_project: georvq

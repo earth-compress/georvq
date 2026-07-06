@@ -1,0 +1,364 @@
+"""The pyramid trainer: one config-driven loop for every quantized variant
+(plain pyramid, rate-model, conditioned).
+
+Precision structure (deliberate): the encoder and decoder run under bf16
+autocast; quantization, the recon/commit losses and the rate term run in
+fp32 outside it. VQ state must never see reduced precision.
+"""
+from __future__ import annotations
+
+import json
+import os
+import time
+
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import numpy as np
+import torch
+
+from georvq.config import Config
+from georvq.data.pool import ChipPool, fixed_val_tokens
+from georvq.data.store import ChipStore
+from georvq.factory import build_model
+from georvq.model.codec import (monotone_tuples, sample_monotone_depths,
+                                tuple_bits)
+from georvq.model.vq import kmeans_init_rvq
+from georvq.repro import (run_metadata, save_checkpoint, seed_all,
+                          write_resolved_config)
+from georvq.train.figures import codebook_figure, cosdist_figure, rd_figure, recon_figure
+from georvq.train.validate import canonical_tuples, load_rd_ref, tname, validate
+from georvq.train.warmstart import load_partial, set_encoder_frozen
+
+
+def resolve_device(gpu):
+    if torch.cuda.is_available() and gpu is not None and gpu >= 0:
+        return torch.device(f"cuda:{gpu}")
+    return torch.device("cpu")
+
+
+def setup_data(cfg: Config, source, device):
+    """Store, split, fixed val tokens, training pool."""
+    store = ChipStore(cfg.data.store_dir)
+    train_rows, val_rows = store.split(cfg.data.val_frac,
+                                       seed=cfg.data.split_seed)
+    print(f"data: {len(store.index)} chips -> {len(train_rows)} train / "
+          f"{len(val_rows)} val", flush=True)
+    val_s = fixed_val_tokens(store, val_rows, token=cfg.model.window)
+    print(f"data: {val_s.shape[0]} fixed val tokens", flush=True)
+    p = cfg.data.pool
+    period = store.grid_period or getattr(source, "grid_period", 1)
+    pool = ChipPool(store, train_rows, p.size, device, workers=p.workers,
+                    refresh_chips_per_s=p.refresh_per_s,
+                    seed=cfg.train.seed, slot_rows=p.slot_rows,
+                    pool_device=("cpu" if p.device == "cpu" else device),
+                    cycle=p.cycle, period=period)
+    return store, train_rows, val_rows, val_s.to(device), pool
+
+
+def train(cfg: Config, gpu=0):
+    seed_all(cfg.train.seed)
+    device = resolve_device(gpu)
+    if cfg.train.tf32:
+        torch.set_float32_matmul_precision("high")
+    amp_on = cfg.train.amp and device.type == "cuda"
+
+    specs = cfg.model.tiers
+    mins = cfg.model.min_depths
+    tuples = [t for t in monotone_tuples(specs)
+              if all(L >= m for L, m in zip(t, mins))]
+    canon = canonical_tuples(specs, mins)
+    ref_fronts = [load_rd_ref(s) for s in cfg.eval.rd_refs]
+    run_dir = os.path.join(cfg.log.out_dir, cfg.log.run_tag)
+    os.makedirs(run_dir, exist_ok=True)
+    write_resolved_config(run_dir, cfg)
+    print(f"pyramid: {[str(s) for s in specs]} -> {len(tuples)} operating "
+          f"points, {tuple_bits(specs, canon['min']):.0f}.."
+          f"{tuple_bits(specs, canon['full']):.0f} bits/window", flush=True)
+
+    model = build_model(cfg, device)
+    source = model.source
+    store, train_rows, val_rows, val_s, pool = setup_data(cfg, source, device)
+    val_rows.to_parquet(os.path.join(run_dir, "val_chips.parquet"))
+
+    # location side-info (conditioner / selector)
+    needs_loc = model.conditioner is not None or model.selector is not None
+    train_loc = val_loc = None
+    if needs_loc:
+        from georvq.model.location import build_location_tables
+        train_loc, val_s, val_loc = build_location_tables(
+            cfg, store, train_rows, val_rows, device)
+
+    n_params = sum(p.numel() for p in model.parameters())
+    print(f"model: {n_params/1e6:.2f}M params", flush=True)
+    if cfg.train.init_from:
+        load_partial(model, cfg.train.init_from, device)
+    enc_frozen = cfg.train.freeze_encoder_steps > 0
+    if enc_frozen:
+        names = set_encoder_frozen(model, True)
+        print(f"froze {len(names)} encoder params for "
+              f"{cfg.train.freeze_encoder_steps} steps", flush=True)
+
+    v = cfg.model.vq
+    if not v.warmup_steps and not cfg.train.init_from:
+        # per-tier data init with >=2K vectors per codebook, drawn and
+        # encoded in batch-sized chunks (a single draw of 2*max(K) windows
+        # would materialize a giant gather-index tensor on the pool device)
+        need = [max(1, (2 * sp.codes) // sp.cells) for sp in specs]
+        samples = [[] for _ in specs]
+        got = [0] * len(specs)
+        with torch.no_grad():
+            while any(g < n for g, n in zip(got, need)):
+                s = pool.sample_batch(
+                    min(cfg.train.batch_windows, max(need)),
+                    cfg.model.window, align=cfg.data.pool.align_crops)
+                x0, _ = source.prep(s, device)
+                for i, z in enumerate(model.encode_levels(x0)):
+                    if got[i] < need[i]:
+                        samples[i].append(z)
+                        got[i] += z.shape[0]
+            for i, (rvq, sp) in enumerate(zip(model.rvqs, specs)):
+                z = torch.cat(samples[i])[:need[i]]
+                rvq.all_levels(z)
+        del samples
+    Ls_full = torch.tensor([sp.depth for sp in specs], device=device)[None]
+
+    if cfg.train.freeze_codec:        # only the selector trains
+        model.requires_grad_(False)
+        model.eval()                  # disables the VQ EMA update
+        if model.selector is not None:
+            model.selector.requires_grad_(True)
+        print("freeze-codec: codec frozen (eval, no EMA) -- only the "
+              "selector trains", flush=True)
+
+    # a fresh rate model gets its own (higher) LR so it can learn while a
+    # warm-started codec fine-tunes at the small base LR
+    rate_p = [p for n, p in model.named_parameters() if n.startswith("rate.")]
+    base_p = [p for n, p in model.named_parameters()
+              if p.requires_grad and not n.startswith("rate.")]
+    groups = [{"params": base_p, "lr": cfg.train.optim.lr}] if base_p else []
+    if rate_p and cfg.model.rate is not None:
+        groups.append({"params": rate_p, "lr": cfg.model.rate.lr})
+        print(f"optimizer: {sum(p.numel() for p in rate_p)/1e6:.2f}M "
+              f"rate-model params @ lr={cfg.model.rate.lr}", flush=True)
+    opt = torch.optim.AdamW(groups, lr=cfg.train.optim.lr,
+                            weight_decay=cfg.train.optim.wd)
+    warmup, lr0 = cfg.train.optim.warmup, cfg.train.optim.lr0_steps
+
+    def lr_fn(s):
+        if s < lr0:                   # AdamW warms its moments at lr=0 first
+            return 0.0
+        s -= lr0
+        total = max(cfg.train.steps - lr0, 1)
+        return (min(1.0, (s + 1) / warmup)
+                * 0.5 * (1 + np.cos(np.pi * min(1.0, s / total))))
+    sched = torch.optim.lr_scheduler.LambdaLR(opt, lr_fn)
+
+    use_wandb = cfg.log.wandb
+    if use_wandb:
+        import wandb
+        wandb.init(project=cfg.log.wandb_project, name=cfg.log.run_tag,
+                   config=cfg.model_dump(mode="json") | run_metadata(cfg))
+
+    select_weight = (cfg.model.conditioning.weight
+                     if cfg.model.conditioning is not None
+                     and cfg.model.conditioning.kind == "select" else 0.0)
+    commit_weight = v.commit_weight
+    batch = cfg.train.batch_windows
+    align = cfg.data.pool.align_crops
+    t0, data_ms = time.time(), 0.0
+    best_cos = -1.0
+    vs, cbt = {}, {}
+    for step in range(1, cfg.train.steps + 1):
+        if enc_frozen and step > cfg.train.freeze_encoder_steps:
+            set_encoder_frozen(model, False)
+            enc_frozen = False
+            print(f"step {step}: unfroze encoder (co-adaptation begins)",
+                  flush=True)
+        if v.reset_freeze_frac and \
+                step == int(cfg.train.steps * v.reset_freeze_frac):
+            for rvq in model.rvqs:
+                for lev in rvq.levels:
+                    lev.reset_interval = 1 << 30
+            print(f"step {step}: dead-code resets frozen", flush=True)
+        if v.ema_decay_final is not None:
+            s0, s1 = v.decay_ramp
+            f = min(1.0, max(0.0, (step - s0) / max(s1 - s0, 1)))
+            d = 1 - (1 - v.ema_decay) * \
+                ((1 - v.ema_decay_final) / (1 - v.ema_decay)) ** f
+            for rvq in model.rvqs:
+                for lev in rvq.levels:
+                    lev.decay = d
+        if v.warmup_steps and step == v.warmup_steps + 1:
+            with torch.no_grad():
+                n = max(v.kmeans_sample // batch, 1)
+                samples = [[] for _ in specs]
+                for _ in range(n):
+                    xs, _ = source.prep(
+                        pool.sample_batch(batch, cfg.model.window, align=align),
+                        device)
+                    for i, z in enumerate(model.encode_levels(xs)):
+                        samples[i].append(z.reshape(-1, z.shape[-1]))
+                for i, rvq in enumerate(model.rvqs):
+                    kmeans_init_rvq(rvq, torch.cat(samples[i]),
+                                    iters=v.kmeans_iters,
+                                    expected_batch=batch * specs[i].cells)
+            print(f"step {step}: codebooks fit via residual k-means",
+                  flush=True)
+
+        td = time.time()
+        loc = None
+        if needs_loc:
+            s, rows = pool.sample_batch(batch, cfg.model.window, align=align,
+                                        return_rows=True)
+            loc = train_loc[rows]
+        else:
+            s = pool.sample_batch(batch, cfg.model.window, align=align)
+        x, valid = source.prep(s, device)
+        data_ms = 0.9 * data_ms + 0.1 * (time.time() - td) * 1000
+        amp = torch.autocast(device.type, torch.bfloat16, enabled=amp_on)
+        select = torch.zeros((), device=device)
+        if v.warmup_steps and step <= v.warmup_steps:
+            with amp:
+                zs = model.encode_levels(x)
+                out = model.decode(zs, Ls_full.expand(x.shape[0], -1))
+            out = out.float()
+            commit = torch.zeros((), device=device)
+        else:
+            Ls = sample_monotone_depths(x.shape[0], specs, device,
+                                        mins=mins,
+                                        full_frac=cfg.model.full_frac)
+            with amp:
+                zs = model.encode_levels(x)
+            zqs, commit, select = model.quantize(zs, Ls, loc=loc)
+            with amp:
+                out = model.decode(zqs, Ls)
+            out = out.float()
+        recon_loss, m = source.recon_stats(out, x, valid)
+        loss = recon_loss + commit_weight * commit + select_weight * select
+        # rate term: entropy-model bits/px over a sub-batch (fp32, outside
+        # autocast), ramped in over rate.warmup. Shares the encoder with the
+        # recon path; the sub-batch bounds the K-way softmax memory.
+        rate_bpp = None
+        if model.rate is not None and \
+                not (v.warmup_steps and step <= v.warmup_steps):
+            r = cfg.model.rate
+            rb = min(r.batch, x.shape[0])
+            rate_bpp = model.train_rate_bits([z[:rb].float() for z in zs],
+                                             r.tau)
+            rate_w = r.weight * min(1.0, step / max(r.warmup, 1))
+            loss = loss + rate_w * rate_bpp
+        opt.zero_grad(set_to_none=True)
+        loss.backward()
+        opt.step(); sched.step()
+
+        if step % 50 == 0:
+            dt = time.time() - t0; t0 = time.time()
+            tok_s = 50 * batch / dt
+            log = {"train/loss": loss.item(),
+                   "train/commit": commit.item(),
+                   "train/select": select.item(),
+                   "train/lr": sched.get_last_lr()[0],
+                   "perf/tokens_per_s": tok_s,
+                   "perf/data_wait_ms": data_ms,
+                   "perf/pool_chips_loaded": pool.chips_loaded}
+            log.update({f"train/{k}": float(val) for k, val in m.items()})
+            if pool.cycle:
+                log["data/epochs"] = pool.epochs
+                log["data/tiles_streamed"] = pool.tiles_streamed
+                log["data/reuse_per_patch"] = pool.reuse_estimate
+            for i, rvq in enumerate(model.rvqs):
+                log[f"rvq/pyr{i}_ema_usage"] = float(rvq.ema_usage())
+            if rate_bpp is not None:
+                log["train/rate_bpp"] = rate_bpp.item()
+                log["train/rate_w"] = rate_w
+            if step % 200 == 0:
+                rstr = (f" rate={rate_bpp.item():.2f}bpp"
+                        if rate_bpp is not None else "")
+                cstr = (f" cos={m['cos'].item():.4f}" if "cos" in m else "")
+                print(f"step {step}: loss={loss.item():.5f}{cstr}{rstr} "
+                      f"tok/s={tok_s:,.0f}", flush=True)
+            if use_wandb:
+                wandb.log(log, step=step)
+
+        if step % cfg.train.val_interval == 0 or step == cfg.train.steps:
+            canon_ts = list(canon.values())
+            if step == cfg.train.steps and len(tuples) <= 64:
+                val_ts = tuples           # full enumeration at the end
+            else:
+                others = [t for t in tuples if t not in canon_ts]
+                vrng = np.random.default_rng(step)
+                k = min(max(cfg.train.val_tuples - len(canon_ts), 0),
+                        len(others))
+                val_ts = canon_ts + [others[i] for i in
+                                     vrng.choice(len(others), k,
+                                                 replace=False)]
+            canon_names = {tname(t) for t in canon.values()}
+            vs, cbt = validate(model, source, val_s, val_ts, canon_names,
+                               val_loc=val_loc)
+            if cfg.train.freeze_codec:    # keep the codec frozen (no EMA)
+                model.eval()
+            ccbt = vs.pop("_ccos", {})
+            print(f"step {step} VAL: "
+                  + " ".join(f"{k}({tname(t)})={cbt[tname(t)]:.4f}"
+                             for k, t in canon.items())
+                  + f" ceil={vs['cos_ceiling']:.4f}"
+                  + f" blockmean={vs['cos_blockmean']:.4f}"
+                  + f" ccos_full={ccbt.get(tname(canon['full']), 0):.3f}",
+                  flush=True)
+            if use_wandb:
+                scalars = {f"val/cos_{k}": cbt[tname(t)]
+                           for k, t in canon.items()}
+                scalars.update({k: val for k, val in vs.items()
+                                if k.startswith("sel_")})
+                scalars.update({f"val/ccos_{k}": ccbt[tname(t)]
+                                for k, t in canon.items()
+                                if tname(t) in ccbt})
+                scalars["val/cos_ceiling"] = vs["cos_ceiling"]
+                scalars["val/ccos_ceiling"] = vs["ccos_ceiling"]
+                scalars["val/cos_blockmean"] = vs["cos_blockmean"]
+                f1 = rd_figure(cbt, vs, specs, val_ts, step,
+                               ref_fronts=ref_fronts, px=cfg.model.window ** 2)
+                f1b = rd_figure(cbt, vs, specs, val_ts, step,
+                                ref_fronts=ref_fronts,
+                                px=cfg.model.window ** 2, dist_log=True)
+                f2 = codebook_figure(vs, specs, step)
+                scalars["figs/rd"] = wandb.Image(f1)
+                scalars["figs/rd_log"] = wandb.Image(f1b)
+                scalars["figs/codebook"] = wandb.Image(f2)
+                f4 = None
+                if "cosdist" in vs:
+                    f4 = cosdist_figure(vs["cosdist"], None, specs, step)
+                    scalars["figs/cosdist_by_level"] = wandb.Image(f4)
+                wandb.log(scalars, step=step)
+                plt.close(f1); plt.close(f1b); plt.close(f2)
+                if f4 is not None:
+                    plt.close(f4)
+                if step % cfg.train.fig_interval == 0 \
+                        or step == cfg.train.steps:
+                    rt = ([[int(x_) for x_ in t.split("-")]
+                           for t in cfg.eval.recon_tuples]
+                          if cfg.eval.recon_tuples else None)
+                    f3 = recon_figure(model, source, val_s, step, mins=mins,
+                                      tuples=rt, val_loc=val_loc)
+                    wandb.log({"figs/recon": wandb.Image(f3)}, step=step)
+                    plt.close(f3)
+
+            full_cos = cbt[tname(canon["full"])]
+            metrics = {"cos_full": full_cos,
+                       "cos_ceiling": vs["cos_ceiling"]}
+            if full_cos > best_cos:
+                best_cos = full_cos
+                save_checkpoint(os.path.join(run_dir, "model_best.pt"),
+                                model, cfg, step, metrics)
+        if step % cfg.train.save_interval == 0 or step == cfg.train.steps:
+            save_checkpoint(os.path.join(run_dir, "model.pt"), model, cfg,
+                            step, {"cos_full": best_cos})
+
+    with open(os.path.join(run_dir, "final_val.json"), "w") as f:
+        json.dump({"scalars": {k: val for k, val in vs.items()
+                               if not k.startswith("_")},
+                   "cos_by_tuple": cbt}, f, indent=1)
+    pool.shutdown()
+    print(f"done -> {run_dir}", flush=True)
+    return run_dir

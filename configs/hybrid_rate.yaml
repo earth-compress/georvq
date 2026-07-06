@@ -1,0 +1,42 @@
+# Rate-model fine-tune: frozen stage-1 encoder + fresh smaller-deeper
+# codebooks + learned entropy model with gradient codebooks.
+inherit: pyr64.yaml
+
+data:
+  pool: {size: 256, workers: 4, slot_rows: 256, refresh_per_s: 2.0, device: cuda}
+
+model:
+  tiers: ["1:256:512:10", "4:192:2048:9", "16:64:16384:8"]
+  min_depths: [6, 1, 0]
+  full_frac: 0.05
+  vq:
+    commit_weight: 0.25
+    dead_threshold: 0.01
+    ema_decay: 0.99
+    bf16_scores: true
+    grad_codebook: true
+    warmup_steps: 1000
+  rate:
+    model_dim: 256
+    blocks: 4
+    ctx_dim: 96
+    weight: 0.005
+    warmup: 4000
+    batch: 64
+    tau: 0.5
+    lr: 5.0e-4
+
+train:
+  steps: 60000
+  batch_windows: 256
+  init_from: checkpoints/stage1/model.pt
+  freeze_encoder_steps: 60000
+  optim: {lr: 2.5e-4, wd: 0.01, warmup: 500}
+  val_interval: 1000
+  fig_interval: 4000
+
+eval:
+  recon_tuples: null
+
+log:
+  run_tag: hybrid_rate
