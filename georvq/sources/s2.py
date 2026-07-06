@@ -1,0 +1,167 @@
+"""Sentinel-2 L1C source: 13 bands at three native resolutions.
+
+Bands stay at their native ground sample distance end to end — no
+resampling of the data itself:
+
+- stem: per-resolution conv stacks run at native GSD, then upsample-and-
+  fuse onto the 10m grid to form the single plane the tokenizer eats.
+- head: per-resolution patch heads decode the fine tokens back to each
+  native grid.
+- normalizer: per-tile per-band mean/std are removed before encoding and
+  re-applied after decoding; the stats travel in the packet's side channel
+  (see georvq.inference.stats_codec).
+
+Batches are dicts {"10m": (B,4,W,W), "20m": (B,6,W/2,W/2),
+"60m": (B,3,W/6,W/6)} with W = window (10m pixels, divisible by 6).
+"""
+from __future__ import annotations
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+from georvq.sources import Source
+
+BANDS_10M = ["B02", "B03", "B04", "B08"]
+BANDS_20M = ["B05", "B06", "B07", "B8A", "B11", "B12"]
+BANDS_60M = ["B01", "B09", "B10"]
+GROUPS = {"10m": (len(BANDS_10M), 1), "20m": (len(BANDS_20M), 2),
+          "60m": (len(BANDS_60M), 6)}
+MAX_VALUE = 10000.0     # stored uint16 reflectance scale
+
+
+class S2NativeStem(nn.Module):
+    """Native-resolution conv stems fused onto the 10m grid."""
+
+    def __init__(self, out_ch, width=64):
+        super().__init__()
+        w = width
+        self.enc_10m = nn.Sequential(
+            nn.Conv2d(GROUPS["10m"][0], w, 3, 1, 1), nn.GELU(),
+            nn.Conv2d(w, w, 3, 1, 1), nn.GELU())
+        self.enc_20m = nn.Sequential(
+            nn.Conv2d(GROUPS["20m"][0], w, 3, 1, 1), nn.GELU(),
+            nn.Conv2d(w, w, 3, 1, 1), nn.GELU())
+        self.enc_60m = nn.Sequential(
+            nn.Conv2d(GROUPS["60m"][0], w, 3, 1, 1), nn.GELU(),
+            nn.Conv2d(w, w, 3, 1, 1), nn.GELU())
+        self.fuse = nn.Sequential(
+            nn.Conv2d(3 * w, out_ch, 1), nn.GELU(),
+            nn.Conv2d(out_ch, out_ch, 3, 1, 1))
+
+    def forward(self, x: dict):
+        f10 = self.enc_10m(x["10m"])
+        f20 = F.interpolate(self.enc_20m(x["20m"]), scale_factor=2,
+                            mode="nearest")
+        f60 = F.interpolate(self.enc_60m(x["60m"]), scale_factor=6,
+                            mode="nearest")
+        return self.fuse(torch.cat([f10, f20, f60], 1))
+
+
+class S2MultiResHead(nn.Module):
+    """Decoder fine tokens -> one output plane per native resolution."""
+
+    def __init__(self, in_dim, grid, p, head_feat=48):
+        super().__init__()
+        self.grid, self.p = grid, p
+        self.heads = nn.ModuleDict()
+        for name, (bands, ratio) in GROUPS.items():
+            pr = max(p // ratio, 1)
+            self.heads[name] = _PatchHead(in_dim, bands, pr, grid, head_feat)
+
+    def forward(self, fine):                          # (B, g*g, in_dim)
+        return {name: h(fine) for name, h in self.heads.items()}
+
+
+class _PatchHead(nn.Module):
+    """Per-token linear patch + conv smoothing at one resolution."""
+
+    def __init__(self, dim, bands, p, grid, feat=48):
+        super().__init__()
+        self.p, self.feat, self.grid = p, feat, grid
+        self.to_patch = nn.Linear(dim, feat * p * p)
+        self.conv = nn.Sequential(
+            nn.Conv2d(feat, feat, 3, 1, 1), nn.GELU(),
+            nn.Conv2d(feat, bands, 3, 1, 1))
+
+    def forward(self, tok):
+        B, g, p, f = tok.shape[0], self.grid, self.p, self.feat
+        x = self.to_patch(tok).view(B, g, g, f, p, p)
+        x = x.permute(0, 3, 1, 4, 2, 5).reshape(B, f, g * p, g * p)
+        return self.conv(x)
+
+
+class S2Normalizer:
+    """Per-tile per-band mean/std side channel: normalize before encode,
+    restore after decode. `stats_vector` orders [means..., stds...] over
+    the 13 bands (the layout the stats codec compresses)."""
+
+    def normalize(self, x: dict):
+        stats = {}
+        out = {}
+        for name, t in x.items():
+            mu = t.mean((2, 3), keepdim=True)
+            sd = t.std((2, 3), keepdim=True).clamp_min(1e-4)
+            out[name] = (t - mu) / sd
+            stats[name] = (mu, sd)
+        return out, stats
+
+    def denormalize(self, x: dict, stats):
+        return {name: t * stats[name][1] + stats[name][0]
+                for name, t in x.items()}
+
+    @staticmethod
+    def stats_vector(stats):
+        mus = torch.cat([stats[n][0].flatten(1) for n in GROUPS], 1)
+        sds = torch.cat([stats[n][1].flatten(1) for n in GROUPS], 1)
+        return torch.cat([mus, sds], 1)               # (B, 26)
+
+
+class S2Source(Source):
+    name = "s2"
+    grid_period = 6      # crop offsets must land on all three native grids
+
+    def __init__(self, model_cfg):
+        super().__init__(model_cfg)
+        p = model_cfg.window // model_cfg.tiers[-1].grid
+        assert p % 6 == 0, \
+            ("S2 needs the fine-token patch size (window / finest grid) "
+             f"divisible by 6 so every native grid decodes exactly; got {p}")
+        self._norm = S2Normalizer()
+
+    def prep(self, raw: dict, device):
+        """Raw uint16 group dict -> normalized float dict + 10m validity."""
+        x = {}
+        for name, t in raw.items():
+            x[name] = t.to(device, non_blocking=True).float() / MAX_VALUE
+        valid = x["10m"].sum(1) > 0
+        xn, self._last_stats = self._norm.normalize(x)
+        return xn, valid
+
+    def last_stats(self):
+        return self._last_stats
+
+    def build_stem(self, model_cfg) -> nn.Module:
+        return S2NativeStem(model_cfg.bands)
+
+    def build_head(self, model_cfg, in_dim) -> nn.Module:
+        fine = model_cfg.tiers[-1]
+        return S2MultiResHead(in_dim, grid=fine.grid,
+                              p=model_cfg.window // fine.grid,
+                              head_feat=model_cfg.decoder.head_feat)
+
+    def normalizer(self, model_cfg):
+        return self._norm
+
+    def recon_stats(self, out: dict, x: dict, valid):
+        losses = {}
+        total = 0.0
+        for name in GROUPS:
+            mse = F.mse_loss(out[name], x[name])
+            losses[f"mse_{name}"] = mse
+            total = total + mse
+        losses["mse"] = total / len(GROUPS)
+        # proxy quality metric on the 10m plane (normalized space)
+        err = ((out["10m"] - x["10m"]) ** 2).mean(1)
+        losses["cos"] = 1.0 - err[valid].mean().clamp(max=1.0)
+        return total / len(GROUPS), losses

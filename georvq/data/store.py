@@ -53,18 +53,23 @@ class ChipStore:
             with open(mpath) as f:
                 self.manifest = json.load(f)
 
+        m = self.manifest
+        # multi-group stores (e.g. multi-resolution sources) keep one shard
+        # file per group: shard_XXXX_<group>.npy
+        self.groups = m.get("groups")           # [{name, bands, px}] or None
+        suffix = f"_{self.groups[0]['name']}" if self.groups else ""
         self._shards_on_disk = sorted(
             int(os.path.basename(p)[6:10])
-            for p in glob.glob(os.path.join(self.dir, "shard_*.npy")))
+            for p in glob.glob(os.path.join(self.dir, f"shard_????{suffix}.npy")))
         if not self._shards_on_disk:
-            raise FileNotFoundError(f"no shard_*.npy in {self.dir}")
+            raise FileNotFoundError(f"no shard files in {self.dir}")
 
-        m = self.manifest
         if m.get("store_version"):
             self.shard_size = m["shard_size"]
-            self.bands = m["bands"]
             self.chip_px = m["chip_px"]
             self.dtype = np.dtype(m["dtype"])
+            self.bands = (m["bands"] if not self.groups
+                          else sum(g["bands"] for g in self.groups))
         else:  # infer geometry from the first shard on disk
             probe = self.open_shard(self._shards_on_disk[0])
             self.shard_size, self.bands, self.chip_px, _ = probe.shape
@@ -81,12 +86,14 @@ class ChipStore:
                   flush=True)
         self.index = idx
 
-    def shard_path(self, sh: int) -> str:
-        return os.path.join(self.dir, f"shard_{int(sh):04d}.npy")
+    def shard_path(self, sh: int, group: str | None = None) -> str:
+        suffix = f"_{group}" if group else ""
+        return os.path.join(self.dir, f"shard_{int(sh):04d}{suffix}.npy")
 
-    def open_shard(self, sh: int):
-        """Memory-mapped (shard_size, bands, px, px) array."""
-        return np.load(self.shard_path(sh), mmap_mode="r")
+    def open_shard(self, sh: int, group: str | None = None):
+        """Memory-mapped (shard_size, bands, px, px) array (one group of a
+        multi-group store, or the whole shard of a single-group store)."""
+        return np.load(self.shard_path(sh, group), mmap_mode="r")
 
     def split(self, val_frac=0.04, seed=0, cell_deg=10.0):
         return geographic_split(self.index, val_frac, cell_deg, seed)

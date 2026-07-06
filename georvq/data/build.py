@@ -20,11 +20,18 @@ STORE_VERSION = 1
 
 
 class ShardWriter:
-    def __init__(self, out_dir, shard_size, bands, chip_px, dtype=np.int8,
-                 append=False):
+    def __init__(self, out_dir, shard_size, bands=None, chip_px=None,
+                 dtype=np.int8, append=False, groups=None):
+        """groups: {name: (bands, px)} for multi-group (multi-resolution)
+        stores — one shard file per group, shared index/slots. Single-group
+        stores pass bands/chip_px instead."""
         os.makedirs(out_dir, exist_ok=True)
         self.out_dir = out_dir
         self.shard_size = shard_size
+        self.groups = groups
+        if groups:
+            chip_px = max(px for _, px in groups.values())
+            bands = sum(b for b, _ in groups.values())
         self.bands = bands
         self.chip_px = chip_px
         self.dtype = np.dtype(dtype)
@@ -58,28 +65,44 @@ class ShardWriter:
         df.to_parquet(tmp)
         os.replace(tmp, self.idx_path)
 
+    def _paths(self, sh):
+        if self.groups:
+            return {n: os.path.join(self.out_dir, f"shard_{sh:04d}_{n}.npy")
+                    for n in self.groups}
+        return {None: os.path.join(self.out_dir, f"shard_{sh:04d}.npy")}
+
     def _open_shard(self, sh, fresh):
-        path = os.path.join(self.out_dir, f"shard_{sh:04d}.npy")
-        if fresh:
-            return np.lib.format.open_memmap(
-                path, mode="w+", dtype=self.dtype,
-                shape=(self.shard_size, self.bands, self.chip_px, self.chip_px))
-        return np.lib.format.open_memmap(path, mode="r+")
+        out = {}
+        for name, path in self._paths(sh).items():
+            if fresh:
+                b, px = (self.groups[name] if self.groups
+                         else (self.bands, self.chip_px))
+                out[name] = np.lib.format.open_memmap(
+                    path, mode="w+", dtype=self.dtype,
+                    shape=(self.shard_size, b, px, px))
+            else:
+                out[name] = np.lib.format.open_memmap(path, mode="r+")
+        return out
 
     def add(self, arr, meta: dict, log_every=50, checkpoint_shards=4,
             target=None):
+        """arr: (bands, px, px) for single-group stores, or a {group: array}
+        dict for multi-group stores."""
         sh, slot = divmod(self.n_done, self.shard_size)
         if slot == 0:
             self._shard = self._open_shard(sh, fresh=True)
         elif self._shard is None:  # resuming mid-shard
-            path = os.path.join(self.out_dir, f"shard_{sh:04d}.npy")
-            if os.path.exists(path):
+            if all(os.path.exists(p) for p in self._paths(sh).values()):
                 self._shard = self._open_shard(sh, fresh=False)
             else:   # resume shard was deleted (a consumer freed the raw):
                 self.n_done = (sh + 1) * self.shard_size   # skip to a fresh one
                 sh, slot = divmod(self.n_done, self.shard_size)
                 self._shard = self._open_shard(sh, fresh=True)
-        self._shard[slot] = arr
+        if self.groups:
+            for name in self.groups:
+                self._shard[name][slot] = arr[name]
+        else:
+            self._shard[None][slot] = arr
         self.records.append({"chip_id": self.n_done, "shard": sh,
                              "slot": slot, **meta})
         self.n_done += 1
@@ -96,7 +119,8 @@ class ShardWriter:
     def finalize(self, source: str, nodata=None, grid_period=None,
                  extra: dict | None = None) -> dict:
         if self._shard is not None:
-            self._shard.flush()
+            for s in self._shard.values():
+                s.flush()
         df = pd.DataFrame(self.records)
         self._write_idx(df)
         manifest = {
@@ -109,6 +133,9 @@ class ShardWriter:
             "nodata": nodata,
             "grid_period": grid_period,
             "n_chips": len(df),
+            **({"groups": [{"name": n, "bands": b, "px": px}
+                           for n, (b, px) in self.groups.items()]}
+               if self.groups else {}),
             **(extra or {}),
         }
         with open(os.path.join(self.out_dir, "manifest.json"), "w") as f:
