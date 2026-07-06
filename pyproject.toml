@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "georvq"
+version = "0.1.0"
+description = "Pyramidal residual-VQ compression for geospatial datasets: variable-rate matryoshka codecs with learned entropy models"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "torch>=2.1",
+    "numpy",
+    "pandas",
+    "pyarrow",
+    "pydantic>=2.5",
+    "pyyaml",
+    "matplotlib",
+    "scikit-learn",
+    "wandb",
+]
+
+[project.optional-dependencies]
+# SatCLIP location conditioning (cascade / codebook-select)
+loc = ["huggingface_hub"]
+# Real entropy-coded archives (rANS via compressai)
+archive = ["compressai"]
+# Downstream eval benchmarks (AEF extraction, ASTER GED, LUCAS/LCMAP)
+eval = ["rasterio", "h5py", "requests", "pyproj", "shapely"]
+# Rate-sweep GIF rendering
+viz = ["imageio", "pillow"]
+dev = ["pytest"]
+
+[project.scripts]
+georvq-train = "georvq.cli:train_pyramid"
+georvq-train-stage1 = "georvq.cli:train_stage1"
+
+[tool.setuptools.packages.find]
+include = ["georvq*"]
+
+[tool.pytest.ini_options]
+markers = [
+    "slow: long-running tests (training smokes)",
+    "gpu: requires a CUDA device",
+    "ringspace: requires the ring-space repo and its checkpoints/data on this machine",
+]
+testpaths = ["tests"]

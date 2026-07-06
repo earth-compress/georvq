@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+wandb/
+checkpoints/
+runs/
+logs/
+plots/
+*.pt
+*.npz
+!tests/golden/*.npz
+!tests/fixtures/*.npz
+.venv/
