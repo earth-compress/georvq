@@ -1,0 +1,31 @@
+# Predict-and-subtract cascade: a frozen location->coarse prior plus
+# trainable cross-tier predictors; codebooks quantize the residuals. The
+# encoder stays frozen for the whole run — co-adapting it against the
+# frozen prior degrades the pre-quantization ceiling late in training.
+# Requires georvq[loc] and a pretrained prior (scripts/pretrain_location_prior.py).
+inherit: pyr64.yaml
+
+model:
+  vq:
+    dead_threshold: 0.01
+    warmup_steps: 2000
+  conditioning:
+    kind: cascade
+    coarse_prior_ckpt: checkpoints/location_prior/base.pt
+    location: {encoder: satclip, standardize: true}
+    hidden: 512
+    layers: 3
+
+train:
+  steps: 60000
+  init_from: checkpoints/stage1/model.pt
+  freeze_encoder_steps: 60000
+  optim: {lr: 2.5e-4, wd: 0.01, warmup: 500}
+  val_interval: 1000
+  fig_interval: 4000
+
+eval:
+  recon_tuples: null
+
+log:
+  run_tag: cascade

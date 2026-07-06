@@ -1,0 +1,39 @@
+# Location-gated codebook subsetting on a frozen codec: the selector keeps
+# each window's top `subset_frac` codes per codebook (saving 2 bits/code at
+# subset_frac=0.25); only the selector trains, the codec stays frozen.
+# Requires georvq[loc] and a trained pyramid checkpoint.
+#
+# Research variant (unvalidated): 4x-oversized codebooks trained from
+# scratch WITH the selector, making the subsetting rate-neutral
+# (+2 bits codes, -2 bits subset). Set tiers to 4x codes, drop
+# freeze_codec/init_from, and keep vq.warmup_steps >= 500 so codebooks
+# init via k-means (the data-init path cannot handle 65k-code books).
+inherit: pyr64.yaml
+
+model:
+  conditioning:
+    kind: select
+    location: {encoder: satclip, standardize: true}
+    proj_dim: 64
+    weight: 1.0
+    sel_n: 4096
+    temp: 0.5
+    tau: 0.25
+    subset_frac: 0.25
+  vq:
+    warmup_steps: 0        # codebooks come loaded from init_from
+
+train:
+  steps: 60000
+  batch_windows: 256
+  init_from: checkpoints/pyr64/model_best.pt
+  freeze_codec: true
+  optim: {lr: 2.5e-4, wd: 0.01, warmup: 500}
+  val_interval: 1000
+  fig_interval: 4000
+
+eval:
+  recon_tuples: null
+
+log:
+  run_tag: satclip_select
