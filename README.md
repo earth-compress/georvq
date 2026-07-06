@@ -42,11 +42,5 @@ georvq-train -c configs/pyr64.yaml rate.weight=0.01 train.steps=50000
 ```
 
 See `docs/ADDING_A_SOURCE.md` for how to plug in a new data source
-(a store builder + a `Source` adapter + a YAML preset), `docs/BITSTREAM.md`
-for the packet/archive format, and `docs/LINEAGE.md` for how the checked-in
-configs map to the original research runs.
-
-## Status
-
-Ported from the `ring-space` research repo (AlphaEarth compression cycle,
-June 2026). This README is expanded as the port progresses.
+(a store builder + a `Source` adapter + a YAML preset) and
+`docs/BITSTREAM.md` for the packet/archive format.
