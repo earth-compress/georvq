@@ -1,0 +1,96 @@
+"""Chip store: the standard on-disk format every source is converted into.
+
+A store is a directory of int-typed chip shards plus provenance:
+
+    shard_XXXX.npy   memmap (shard_size, bands, chip_px, chip_px)
+    index.parquet    one row per chip: chip_id, shard, slot, lat, lon, crs,
+                     year + source-specific provenance columns
+    manifest.json    store_version, source, geometry, dtype, nodata,
+                     grid_period, dequant recipe, attribution, license
+
+Training never touches the original source files — a store builder (see
+georvq.data.build and scripts/build_store_*.py) converts each source once.
+"""
+from __future__ import annotations
+
+import glob
+import json
+import os
+
+import numpy as np
+import pandas as pd
+
+
+def geographic_split(index: pd.DataFrame, val_frac=0.04, cell_deg=10.0,
+                     seed=0):
+    """Split chips into train/val by lat/lon grid cells (no spatial leakage).
+
+    Deterministic: cells are hashed with a fixed salt; ~val_frac of cells
+    (and all chips inside them) go to val.
+    """
+    import hashlib
+    cells = (np.floor(index.lat / cell_deg).astype(int).astype(str) + "_"
+             + np.floor(index.lon / cell_deg).astype(int).astype(str))
+
+    def cell_hash(c):
+        h = hashlib.md5(f"{seed}:{c}".encode()).digest()
+        return int.from_bytes(h[:4], "little") / 2**32
+
+    is_val = np.array([cell_hash(c) < val_frac for c in cells])
+    return index[~is_val].reset_index(drop=True), \
+        index[is_val].reset_index(drop=True)
+
+
+class ChipStore:
+    """Read access to a chip store; tolerant of stores that predate the
+    versioned manifest (geometry is then inferred from the first shard)."""
+
+    def __init__(self, store_dir):
+        self.dir = str(store_dir)
+        mpath = os.path.join(self.dir, "manifest.json")
+        self.manifest = {}
+        if os.path.exists(mpath):
+            with open(mpath) as f:
+                self.manifest = json.load(f)
+
+        self._shards_on_disk = sorted(
+            int(os.path.basename(p)[6:10])
+            for p in glob.glob(os.path.join(self.dir, "shard_*.npy")))
+        if not self._shards_on_disk:
+            raise FileNotFoundError(f"no shard_*.npy in {self.dir}")
+
+        m = self.manifest
+        if m.get("store_version"):
+            self.shard_size = m["shard_size"]
+            self.bands = m["bands"]
+            self.chip_px = m["chip_px"]
+            self.dtype = np.dtype(m["dtype"])
+        else:  # infer geometry from the first shard on disk
+            probe = self.open_shard(self._shards_on_disk[0])
+            self.shard_size, self.bands, self.chip_px, _ = probe.shape
+            self.dtype = probe.dtype
+        self.nodata = m.get("nodata")
+        self.grid_period = m.get("grid_period")
+
+        idx = pd.read_parquet(os.path.join(self.dir, "index.parquet"))
+        have = set(self._shards_on_disk)
+        n0 = len(idx)
+        idx = idx[idx.shard.isin(have)].reset_index(drop=True)
+        if len(idx) < n0:
+            print(f"store: {len(idx)}/{n0} chips have raw shards on disk",
+                  flush=True)
+        self.index = idx
+
+    def shard_path(self, sh: int) -> str:
+        return os.path.join(self.dir, f"shard_{int(sh):04d}.npy")
+
+    def open_shard(self, sh: int):
+        """Memory-mapped (shard_size, bands, px, px) array."""
+        return np.load(self.shard_path(sh), mmap_mode="r")
+
+    def split(self, val_frac=0.04, seed=0, cell_deg=10.0):
+        return geographic_split(self.index, val_frac, cell_deg, seed)
+
+    def __repr__(self):
+        return (f"ChipStore({self.dir}: {len(self.index)} chips, "
+                f"{self.bands}x{self.chip_px}px {self.dtype})")

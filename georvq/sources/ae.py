@@ -26,6 +26,9 @@ def dequant(s: torch.Tensor) -> torch.Tensor:
 
 class AESource(Source):
     name = "ae"
+    # the published embeddings are ~20m data 2x-upsampled to a 10m grid, so
+    # the pixel lattice has period-2 structure (used by aligned cropping)
+    grid_period = 2
 
     def prep(self, raw, device):
         """int8 (B, 64, W, W) -> (x, valid). Keeps the first `bands`
