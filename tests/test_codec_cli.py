@@ -141,7 +141,7 @@ def test_patch_cli_roundtrip(tiny_ckpt, tmp_path):
     s = _windows()
     np.save(tmp_path / "in.npy", s)
     gvq, out = str(tmp_path / "p.gvq.npz"), str(tmp_path / "out.npy")
-    codec_patch_main(["encode", "--model", ckpt, "--raw",
+    codec_patch_main(["encode", "--model", ckpt,
                       str(tmp_path / "in.npy"), gvq])
     codec_patch_main(["decode", "--model", ckpt, gvq, out])
     recon = np.load(out)
@@ -177,7 +177,7 @@ def test_tile_cli_roundtrip(tiny_ckpt, tmp_path):
     tile[:, :6, :9] = -128
     np.save(tmp_path / "tile.npy", tile)
     gvq, out = str(tmp_path / "t.gvq.npz"), str(tmp_path / "rec.npy")
-    codec_tile_main(["encode", "--model", ckpt, "--raw",
+    codec_tile_main(["encode", "--model", ckpt,
                      str(tmp_path / "tile.npy"), gvq])
     header, _, valid = read_container(gvq)
     assert header["grid"] == [3, 3] and header["shape"] == [BANDS, H, Wd]
@@ -199,7 +199,7 @@ def test_tile_cli_onnx_backend_matches(tiny_ckpt, onnx_dir, tmp_path):
     tile = rng.integers(-127, 128, (BANDS, 2 * W, 2 * W), dtype=np.int8)
     np.save(tmp_path / "tile.npy", tile)
     gvq = str(tmp_path / "t.gvq.npz")
-    codec_tile_main(["encode", "--model", ckpt, "--raw",
+    codec_tile_main(["encode", "--model", ckpt,
                      str(tmp_path / "tile.npy"), gvq])
     a, b = str(tmp_path / "a.npy"), str(tmp_path / "b.npy")
     codec_tile_main(["decode", "--model", ckpt, gvq, a])
@@ -217,7 +217,7 @@ def test_empty_windows_skipped(tiny_ckpt, tmp_path):
     s[2] = -128                     # window 2 entirely nodata
     np.save(tmp_path / "in.npy", s)
     gvq, out = str(tmp_path / "e.gvq.npz"), str(tmp_path / "out.npy")
-    codec_patch_main(["encode", "--model", ckpt, "--raw",
+    codec_patch_main(["encode", "--model", ckpt,
                       str(tmp_path / "in.npy"), gvq])
     header, packets, valid = read_container(gvq)
     assert header["n_windows"] == 5 and header["n_total"] == 6
@@ -239,7 +239,7 @@ def test_tile_empty_windows_skipped(tiny_ckpt, tmp_path):
     tile[:, :W, :W] = -128          # top-left window entirely nodata
     np.save(tmp_path / "tile.npy", tile)
     gvq, out = str(tmp_path / "t.gvq.npz"), str(tmp_path / "rec.npy")
-    codec_tile_main(["encode", "--model", ckpt, "--raw",
+    codec_tile_main(["encode", "--model", ckpt,
                      str(tmp_path / "tile.npy"), gvq])
     header, _, _ = read_container(gvq)
     assert header["n_windows"] == 3         # 4 grid cells, 1 skipped
@@ -265,13 +265,13 @@ def test_shared_cdfs(tiny_ckpt, tmp_path):
 
     np.save(tmp_path / "in.npy", s)
     gvq, out = str(tmp_path / "s.gvq.npz"), str(tmp_path / "out.npy")
-    codec_patch_main(["encode", "--model", ckpt, "--cdfs", cdfs,
+    codec_patch_main(["encode", "--model", ckpt, "--rans", "--cdfs", cdfs,
                       str(tmp_path / "in.npy"), gvq])
     header, _, _ = read_container(gvq, cdfs_path=cdfs)
     assert "cdfs_id" in header and "cdf_flat" not in np.load(gvq)
     codec_patch_main(["decode", "--model", ckpt, "--cdfs", cdfs, gvq, out])
     ref_gvq = str(tmp_path / "e.gvq.npz")
-    codec_patch_main(["encode", "--model", ckpt, "--embed-cdfs",
+    codec_patch_main(["encode", "--model", ckpt, "--rans", "--embed-cdfs",
                       str(tmp_path / "in.npy"), ref_gvq])
     codec_patch_main(["decode", "--model", ckpt, ref_gvq,
                       str(tmp_path / "ref.npy")])
@@ -304,7 +304,7 @@ def test_tile_geotiff_exact_filetype(tiny_ckpt, tmp_path):
     with rasterio.open(src, "w", **prof) as ds:
         ds.write(tile)                        # transform.e > 0: bottom-up
     gvq, out = str(tmp_path / "t.gvq.npz"), str(tmp_path / "rec.tiff")
-    codec_tile_main(["encode", "--model", ckpt, "--raw", src, gvq])
+    codec_tile_main(["encode", "--model", ckpt, src, gvq])
     codec_tile_main(["decode", "--model", ckpt, gvq, out])
     with rasterio.open(src) as s, rasterio.open(out) as r:
         for k in ("driver", "nodata", "blockxsize", "blockysize", "tiled",
@@ -315,3 +315,21 @@ def test_tile_geotiff_exact_filetype(tiny_ckpt, tmp_path):
         rec = r.read()
     assert (rec[:, :5, :7] == -128).all()     # nodata exact, in FILE order
     assert ((rec[0] == -128) == (tile[0] == -128)).all()
+
+
+def test_parallel_rans_matches_serial(tiny_ckpt, tmp_path):
+    pytest.importorskip("compressai")
+    _, model = tiny_ckpt
+    codec = Codec(model)
+    x, _ = prep_ae_np(_windows(24))
+    packets = codec.encode(torch.from_numpy(x))
+    sig = [(sp.cells, sp.depth, sp.codes) for sp in model.specs]
+    a, b = str(tmp_path / "ser.npz"), str(tmp_path / "par.npz")
+    write_container(a, packets, sig, {"kind": "patch"}, workers=1)
+    write_container(b, packets, sig, {"kind": "patch"}, workers=4)
+    for path, workers in ((a, 4), (b, 1)):     # cross-decode both ways
+        _, back, _ = read_container(path, workers=workers)
+        assert len(back) == 24
+        for p, q in zip(packets, back):
+            for u, v in zip(p.indices, q.indices):
+                assert np.array_equal(u, v)

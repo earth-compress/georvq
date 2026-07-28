@@ -114,8 +114,13 @@ class TorchBackend:
             .to(self.device)
         return self.codec.encode(xt)
 
-    def decode(self, packets, depths=None):
-        return self.codec.decode(packets, depths).float().cpu().numpy()
+    def decode(self, packets, depths=None, int8=False):
+        out = self.codec.decode(packets, depths).float()
+        if int8:      # requant on device: 4x less transfer, no CPU sqrt
+            t = self.torch
+            out = t.clamp(t.round(t.sign(out) * t.sqrt(out.abs()) * 127.5),
+                          -127, 127).to(t.int8)
+        return out.cpu().numpy()
 
 
 class OnnxBackend:
@@ -132,8 +137,9 @@ class OnnxBackend:
     def encode(self, x):
         return self.codec.encode(x)
 
-    def decode(self, packets, depths=None):
-        return self.codec.decode(packets, depths)
+    def decode(self, packets, depths=None, int8=False):
+        out = self.codec.decode(packets, depths)
+        return requant_ae_np(out) if int8 else out
 
 
 def load_backend(args):
@@ -161,10 +167,39 @@ def _cdfs_id(path):
         return hashlib.sha256(f.read()).hexdigest()[:16]
 
 
+_MP = {}          # fork-inherited state for the rANS worker pools
+
+
+def _mp_encode(rng):
+    from georvq.inference.archive import encode_packet
+    packets, table = _MP["packets"], _MP["table"]
+    return [encode_packet(packets[i], table) for i in rng]
+
+
+def _mp_decode(rng):
+    from georvq.inference.archive import decode_packet
+    payload, offs, table = _MP["payload"], _MP["offs"], _MP["table"]
+    return [decode_packet(payload[offs[i]:offs[i + 1]], table) for i in rng]
+
+
+def _parallel_rans(fn, n, workers):
+    """Map fn over window ranges with a fork pool (compressai's coder
+    holds the GIL, so threads don't help; forked processes share the
+    inputs copy-on-write via _MP). Serial when unavailable/small."""
+    import multiprocessing as mp
+    workers = min(workers or 1, n)
+    if workers <= 1 or "fork" not in mp.get_all_start_methods():
+        return fn(range(n))
+    chunks = np.array_split(np.arange(n), workers * 4)
+    with mp.get_context("fork").Pool(workers) as pool:
+        out = pool.map(fn, [c for c in chunks if len(c)])
+    return [x for part in out for x in part]
+
+
 def write_container(path, packets, specs_sig, header, raw=False, valid=None,
-                    cdfs_path=None):
-    """Write N packets (+ header dict) as one npz. rANS-coded unless raw
-    (or compressai is missing, with a warning).
+                    cdfs_path=None, workers=None):
+    """Write N packets (+ header dict) as one npz. Indices are stored raw
+    (uncoded, npz-deflated) unless rANS coding is requested via raw=False.
 
     `cdfs_path`: shared corpus-calibrated CDF table (a release bundle's
     cdfs.npz). Coding uses it and the container stores only its id — no
@@ -199,7 +234,8 @@ def write_container(path, packets, specs_sig, header, raw=False, valid=None,
                     "cdf_lengths": np.array(table.lengths),
                     "cdf_offsets": np.array(table.offsets),
                 }
-            streams = [encode_packet(p, table) for p in packets]
+            _MP.update(packets=packets, table=table)
+            streams = _parallel_rans(_mp_encode, len(packets), workers)
             payload = {
                 **payload,
                 "n_bytes": np.array([len(s) for s in streams]),
@@ -222,7 +258,7 @@ def write_container(path, packets, specs_sig, header, raw=False, valid=None,
     return header
 
 
-def read_container(path, cdfs_path=None):
+def read_container(path, cdfs_path=None, workers=None):
     """-> (header dict, list[Packet], valid mask ndarray or None).
 
     Containers coded against a shared table (header `cdfs_id`) need
@@ -235,7 +271,7 @@ def read_container(path, cdfs_path=None):
     sig = [tuple(s) for s in header["specs_sig"]]
     n = header["n_windows"]
     if header["coded"]:
-        from georvq.inference.archive import CdfTable, decode_packet
+        from georvq.inference.archive import CdfTable
         if "cdfs_id" in header:
             if not cdfs_path or not os.path.exists(cdfs_path):
                 raise SystemExit(
@@ -257,9 +293,9 @@ def read_container(path, cdfs_path=None):
                 lengths, z["cdf_offsets"].tolist(), sig)
         raw = z["payload"].tobytes()
         offs = np.concatenate([[0], np.cumsum(z["n_bytes"])])
-        packets = [Packet(indices=decode_packet(raw[offs[i]:offs[i + 1]],
-                                                table))
-                   for i in range(n)]
+        _MP.update(payload=raw, offs=offs, table=table)
+        packets = [Packet(indices=idx)
+                   for idx in _parallel_rans(_mp_decode, n, workers)]
     else:
         stacked = [z[f"idx_t{t}"].astype(np.int64) for t in range(len(sig))]
         packets = [Packet(indices=[a[i] for a in stacked]) for i in range(n)]
@@ -307,6 +343,9 @@ def _common_args(ap):
     ap.add_argument("--cdfs", default=None,
                     help="shared CDF table (cdfs.npz); default: the one in "
                          "--model when it is a bundle/export dir")
+    ap.add_argument("--workers", dest="rans_workers", type=int, default=8,
+                    help="fork workers for rANS coding/decoding (coded "
+                         "containers only; default 8)")
 
 
 def _parse_tuple(s, specs_sig):
@@ -420,8 +459,10 @@ def codec_patch_main(argv=None):
     e.add_argument("input", help=".npy windows: int8 raw AE or float32 "
                                  "already unit-norm")
     e.add_argument("output", help="output .gvq container")
-    e.add_argument("--raw", action="store_true",
-                   help="skip rANS entropy coding (indices stored uncoded)")
+    e.add_argument("--rans", action="store_true",
+                   help="rANS entropy-code the indices (default: raw, "
+                        "npz-deflated — on AE tiles rANS is only ~0.6% "
+                        "smaller and much slower to decode)")
     e.add_argument("--embed-cdfs", action="store_true",
                    help="self-contained file: per-file CDF tables instead "
                         "of referencing the model dir's shared cdfs.npz")
@@ -456,7 +497,8 @@ def codec_patch_main(argv=None):
                                  {"kind": "patch", "window": be.window,
                                   "n_total": len(x),
                                   "nodata_fill": NODATA},
-                                 raw=args.raw, valid=valid,
+                                 raw=not args.rans, valid=valid,
+                                 workers=args.rans_workers,
                                  cdfs_path=None if args.embed_cdfs
                                  else _shared_cdfs(args, be))
         skipped = int((~keep).sum())
@@ -466,7 +508,8 @@ def codec_patch_main(argv=None):
                 os.path.getsize(args.output), t0)
     else:
         header, packets, valid = read_container(
-            args.input, cdfs_path=_shared_cdfs(args, be))
+            args.input, cdfs_path=_shared_cdfs(args, be),
+            workers=args.rans_workers)
         depths = _parse_tuple(args.tuple, be.specs_sig)
         n_total = header.get("n_total", header["n_windows"])
         dec = np.concatenate(
@@ -546,7 +589,10 @@ def _write_tile(path, a, geo, int8, fill=NODATA):
             prof["transform"] = Affine(*geo["transform"])
             if geo["crs"]:
                 prof["crs"] = geo["crs"]
-        with rasterio.open(path, "w", **prof) as ds:
+        opts = {"num_threads": "all_cpus"}
+        if prof.get("compress") == "zstd":
+            opts["zstd_level"] = 1       # same format, ~5x faster writes
+        with rasterio.open(path, "w", **prof, **opts) as ds:
             ds.write(a)
     else:
         np.save(path, a)
@@ -563,7 +609,10 @@ def codec_tile_main(argv=None):
     _common_args(e)
     e.add_argument("input", help="GeoTIFF or .npy, (64, H, W) int8")
     e.add_argument("output")
-    e.add_argument("--raw", action="store_true")
+    e.add_argument("--rans", action="store_true",
+                   help="rANS entropy-code the indices (default: raw, "
+                        "npz-deflated — on AE tiles rANS is only ~0.6% "
+                        "smaller and much slower to decode)")
     e.add_argument("--embed-cdfs", action="store_true",
                    help="self-contained file: per-file CDF tables instead "
                         "of referencing the model dir's shared cdfs.npz")
@@ -602,7 +651,8 @@ def codec_tile_main(argv=None):
             args.output, packets, be.specs_sig,
             {"kind": "tile", "window": W, "grid": [gh, gw],
              "shape": [C, H, Wd], "geo": geo, "nodata_fill": NODATA},
-            raw=args.raw, valid=(a[0] != NODATA),
+            raw=not args.rans, valid=(a[0] != NODATA),
+            workers=args.rans_workers,
             cdfs_path=None if args.embed_cdfs
             else _shared_cdfs(args, be))
         skipped = int((~keep).sum())
@@ -612,7 +662,8 @@ def codec_tile_main(argv=None):
                 os.path.getsize(args.output), t0)
     else:
         header, packets, valid = read_container(
-            args.input, cdfs_path=_shared_cdfs(args, be))
+            args.input, cdfs_path=_shared_cdfs(args, be),
+            workers=args.rans_workers)
         if header["kind"] != "tile":
             raise SystemExit(f"{args.input} is a {header['kind']} container;"
                              " use georvq-codec-patch")
@@ -633,9 +684,8 @@ def codec_tile_main(argv=None):
                   else np.full((C, gh * W, gw * W), fill, np.int8))
         kept = np.nonzero(keep)[0]
         for i in range(0, len(packets), args.batch):
-            dec = be.decode(packets[i:i + args.batch], depths)
-            if not args.float32:
-                dec = requant_ae_np(dec)
+            dec = be.decode(packets[i:i + args.batch], depths,
+                            int8=not args.float32)
             for w, slot in zip(dec, kept[i:i + args.batch]):
                 r, c = divmod(int(slot), gw)
                 canvas[:, r * W:(r + 1) * W, c * W:(c + 1) * W] = w
