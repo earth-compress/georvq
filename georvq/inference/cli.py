@@ -400,8 +400,9 @@ def _read_tile(path):
         except ImportError as e:
             raise SystemExit("GeoTIFF input needs rasterio: "
                              "pip install 'georvq[eval]'") from e
-        with rasterio.open(path) as ds:
-            a = ds.read()
+        with rasterio.Env(GDAL_NUM_THREADS="ALL_CPUS"), \
+                rasterio.open(path) as ds:
+            a = ds.read()      # threaded zstd/deflate: ~10x faster inflate
             prof = {k: v for k, v in ds.profile.items()
                     if k in _PROFILE_KEYS}
             geo = {"transform": list(ds.transform)[:6],
@@ -442,7 +443,8 @@ def _write_tile(path, a, geo, int8, fill=NODATA):
         opts = {"num_threads": "all_cpus"}
         if prof.get("compress") == "zstd":
             opts["zstd_level"] = 1       # same format, ~5x faster writes
-        with rasterio.open(path, "w", **prof, **opts) as ds:
+        with rasterio.Env(GDAL_NUM_THREADS="ALL_CPUS"), \
+                rasterio.open(path, "w", **prof, **opts) as ds:
             ds.write(a)
     else:
         np.save(path, a)
