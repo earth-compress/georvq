@@ -40,7 +40,7 @@ import time
 import numpy as np
 
 NODATA = -128
-FORMAT = "georvq-ae/1"
+FORMAT = "georvq-ae/2"
 
 
 # --------------------------------------------------------------------------
@@ -158,47 +158,76 @@ def _index_dtype(codes):
 
 
 def write_container(path, packets, specs_sig, header, valid=None):
-    """Write N packets (+ header dict) as one npz. Indices are stored as
-    the smallest sufficient uint dtype; the npz deflate layer compresses
-    them (within ~0.6% of entropy-coded on real AE data).
+    """Write N packets (+ header dict) as one npz, laid out progressively.
+
+    One zip member per (tier, level), written in the rate ladder's order —
+    all coarse levels, then mid, then fine (the empirical Pareto order:
+    within a fine band you always saturate coarse, then mid). A decode at
+    depths (L0, L1, L2) therefore touches only the members it needs, and
+    ladder tuples read a sequential prefix of the file: a wide-area
+    low-rate decode of a full tile reads a few hundred KiB of a ~60 MB
+    blob. Indices are the smallest sufficient uint dtype; the npz deflate
+    layer compresses each member (within ~0.6% of entropy-coded).
 
     `valid`: optional bool ndarray of any shape (per-pixel nodata mask,
     True = data). Stored bit-packed only when some pixels are invalid;
     decode uses it to restore the source's exact fill values."""
-    stacked = [np.stack([np.asarray(p.indices[t]) for p in packets])
-               for t in range(len(specs_sig))]
-    payload = {f"idx_t{t}": arr.astype(_index_dtype(specs_sig[t][2]))
-               for t, arr in enumerate(stacked)}
+    payload = {}
     if valid is not None and not valid.all():
         payload["mask"] = np.packbits(valid)
         header = {**header, "mask_shape": list(valid.shape)}
+    for t, (cells, depth, codes) in enumerate(specs_sig):
+        arr = np.stack([np.asarray(p.indices[t]) for p in packets]) \
+            .astype(_index_dtype(codes))                # (N, cells, depth)
+        for j in range(depth):
+            payload[f"t{t}l{j}"] = np.ascontiguousarray(arr[:, :, j])
     header = {**header, "format": FORMAT, "n_windows": len(packets),
               "specs_sig": [list(s) for s in specs_sig]}
     np.savez_compressed(path, header=json.dumps(header), **payload)
     return header
 
 
-def read_container(path):
-    """-> (header dict, list[Packet], valid mask ndarray or None)."""
+def read_container(path, depths=None):
+    """-> (header dict, list[Packet], valid mask ndarray or None).
+
+    `depths`: optional per-tier level counts — only those members are
+    read and inflated (progressive layout), and the returned packets
+    carry exactly that many levels per tier."""
     from georvq.inference.api import Packet
     z = np.load(path, allow_pickle=False)
     header = json.loads(str(z["header"]))
     if header.get("format") != FORMAT:
-        raise ValueError(f"{path}: not a {FORMAT} container")
-    if header.get("coded"):
-        raise SystemExit(
-            f"{path} is an rANS-coded container from a pre-release build; "
-            "entropy coding was removed — re-encode from the source data")
+        raise ValueError(f"{path}: not a {FORMAT} container (v2, "
+                         "progressive layout) — re-encode pre-release files")
     sig = [tuple(s) for s in header["specs_sig"]]
     n = header["n_windows"]
-    stacked = [z[f"idx_t{t}"].astype(np.int64) for t in range(len(sig))]
-    packets = [Packet(indices=[a[i] for a in stacked]) for i in range(n)]
+    depths = depths or [d for _, d, _ in sig]
+    tiers = []
+    for t, ((cells, depth, _), L) in enumerate(zip(sig, depths)):
+        if L == 0:
+            tiers.append(np.zeros((n, cells, 0), np.int64))
+            continue
+        tiers.append(np.stack([z[f"t{t}l{j}"].astype(np.int64)
+                               for j in range(L)], axis=-1))
+    packets = [Packet(indices=[a[i] for a in tiers]) for i in range(n)]
     valid = None
     if "mask" in z:
         shape = header["mask_shape"]
         valid = np.unpackbits(z["mask"], count=int(np.prod(shape))) \
             .reshape(shape).astype(bool)
     return header, packets, valid
+
+
+def container_read_bytes(path, sig, depths=None):
+    """(bytes touched for a depths-decode, total bytes) of a container."""
+    import zipfile
+    depths = depths or [d for _, d, _ in sig]
+    names = {"header.npy", "mask.npy"} | \
+        {f"t{t}l{j}.npy" for t in range(len(sig)) for j in range(depths[t])}
+    with zipfile.ZipFile(path) as zf:
+        infos = zf.infolist()
+    return (sum(i.compress_size for i in infos if i.filename in names),
+            sum(i.compress_size for i in infos))
 
 
 def nominal_bits(specs_sig, depths=None):
@@ -374,9 +403,10 @@ def codec_patch_main(argv=None):
                 header, max(len(packets), 1), be.window,
                 os.path.getsize(args.output), t0)
     else:
-        header, packets, valid = read_container(args.input)
-        _check_bitstream(header, be, args.input)
         depths = _parse_tuple(args.tuple, be.specs_sig)
+        header, packets, valid = read_container(args.input, depths=depths)
+        _check_bitstream(header, be, args.input)
+        depths = depths or [d for _, d, _ in be.specs_sig]
         n_total = header.get("n_total", header["n_windows"])
         dec = np.concatenate(
             [be.decode(packets[i:i + args.batch], depths)
@@ -390,7 +420,9 @@ def codec_patch_main(argv=None):
         elif valid is not None:      # model-space convention: zero vectors
             out = out * valid[:, None]
         np.save(args.output, out)
-        _report(f"decoded (tuple={depths or 'full'})", header, len(packets),
+        rd, tot = container_read_bytes(args.input, be.specs_sig, depths)
+        _report(f"decoded (tuple={depths}, read {rd/2**20:.2f} of "
+                f"{tot/2**20:.2f} MiB)", header, len(packets),
                 be.window, None, t0, depths)
 
 
@@ -520,12 +552,13 @@ def codec_tile_main(argv=None):
                 header, max(len(packets), 1), W,
                 os.path.getsize(args.output), t0)
     else:
-        header, packets, valid = read_container(args.input)
+        depths = _parse_tuple(args.tuple, be.specs_sig)
+        header, packets, valid = read_container(args.input, depths=depths)
         _check_bitstream(header, be, args.input)
         if header["kind"] != "tile":
             raise SystemExit(f"{args.input} is a {header['kind']} container;"
                              " use georvq-codec-patch")
-        depths = _parse_tuple(args.tuple, be.specs_sig)
+        depths = depths or [d for _, d, _ in be.specs_sig]
         C, H, Wd = header["shape"]
         gh, gw = header["grid"]
         if valid is not None:        # rebuild which windows were stored
@@ -555,7 +588,9 @@ def codec_tile_main(argv=None):
                 a[np.broadcast_to(~valid[None], a.shape)] = fill
         _write_tile(args.output, a, header.get("geo"),
                     int8=not args.float32, fill=fill)
-        _report(f"decoded {H}x{Wd} (tuple={depths or 'full'})", header,
+        rd, tot = container_read_bytes(args.input, be.specs_sig, depths)
+        _report(f"decoded {H}x{Wd} (tuple={depths}, read {rd/2**20:.2f} of "
+                f"{tot/2**20:.2f} MiB)", header,
                 len(packets), W, None, t0, depths)
 
 

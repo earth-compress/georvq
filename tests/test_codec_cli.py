@@ -282,3 +282,35 @@ def test_wrong_model_refused(tiny_ckpt, tiny_raw_cfg, tmp_path):
     with pytest.raises(SystemExit, match="bitstream"):
         codec_patch_main(["decode", "--model", other_path, gvq,
                           str(tmp_path / "out.npy")])
+
+
+def test_progressive_prefix_read(tiny_ckpt, tmp_path):
+    """Depth-limited reads load only the ladder prefix and decode
+    identically to truncating a full read."""
+    from georvq.inference.cli import container_read_bytes
+    ckpt, model = tiny_ckpt
+    codec = Codec(model)
+    s = _windows(8)
+    x, valid = prep_ae_np(s)
+    packets = codec.encode(torch.from_numpy(x))
+    sig = [(sp.cells, sp.depth, sp.codes) for sp in model.specs]
+    path = tmp_path / "p.gvq.npz"
+    write_container(path, packets, sig, {"kind": "patch"}, valid=valid)
+    # zip members exist per (tier, level), ladder-ordered
+    import zipfile
+    names = [i.filename for i in zipfile.ZipFile(path).infolist()]
+    lvl = [n for n in names if n.startswith("t")]
+    assert lvl == [f"t{t}l{j}" + ".npy" for t in range(2) for j in range(3)]
+    # prefix read: only the needed members counted
+    rd, tot = container_read_bytes(path, sig, [2, 0])
+    assert rd < tot
+    _, part, _ = read_container(path, depths=[2, 0])
+    assert part[0].indices[0].shape == (1, 2)
+    assert part[0].indices[1].shape == (16, 0)
+    _, full, _ = read_container(path)
+    for p, q in zip(part, full):
+        assert np.array_equal(p.indices[0], q.indices[0][:, :2])
+    # decoded output matches the full-read truncated decode
+    a = codec.decode(part, [2, 0])
+    b = codec.decode(full, [2, 0])
+    assert torch.allclose(a, b, atol=1e-6)
