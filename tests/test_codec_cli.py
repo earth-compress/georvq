@@ -247,3 +247,38 @@ def test_tile_empty_windows_skipped(tiny_ckpt, tmp_path):
     rec = np.load(out)
     assert (rec[:, :W, :W] == -128).all()
     assert (rec[:, W:, W:] != -128).all()
+
+
+def test_shared_cdfs(tiny_ckpt, tmp_path):
+    """Encoding against a shared corpus table stores only its id; decode
+    resolves and id-checks it, and refuses the wrong table."""
+    pytest.importorskip("compressai")
+    from georvq.inference.archive import CdfTable
+    ckpt, model = tiny_ckpt
+    codec = Codec(model)
+    s = _windows(12)
+    x, _ = prep_ae_np(s)
+    packets = codec.encode(torch.from_numpy(x))
+    stacked = [np.stack([p.indices[t] for p in packets]) for t in range(2)]
+    cdfs = str(tmp_path / "cdfs.npz")
+    CdfTable.calibrate(stacked, model.specs).save(cdfs)
+
+    np.save(tmp_path / "in.npy", s)
+    gvq, out = str(tmp_path / "s.gvq.npz"), str(tmp_path / "out.npy")
+    codec_patch_main(["encode", "--model", ckpt, "--cdfs", cdfs,
+                      str(tmp_path / "in.npy"), gvq])
+    header, _, _ = read_container(gvq, cdfs_path=cdfs)
+    assert "cdfs_id" in header and "cdf_flat" not in np.load(gvq)
+    codec_patch_main(["decode", "--model", ckpt, "--cdfs", cdfs, gvq, out])
+    ref_gvq = str(tmp_path / "e.gvq.npz")
+    codec_patch_main(["encode", "--model", ckpt, "--embed-cdfs",
+                      str(tmp_path / "in.npy"), ref_gvq])
+    codec_patch_main(["decode", "--model", ckpt, ref_gvq,
+                      str(tmp_path / "ref.npy")])
+    assert np.array_equal(np.load(out), np.load(tmp_path / "ref.npy"))
+    with pytest.raises(SystemExit):        # no table offered
+        read_container(gvq)
+    other = str(tmp_path / "other.npz")
+    CdfTable.calibrate([a[:3] for a in stacked], model.specs).save(other)
+    with pytest.raises(SystemExit):        # wrong table
+        read_container(gvq, cdfs_path=other)
