@@ -55,7 +55,7 @@ def test_prep_requant_roundtrip():
         < 0.02
 
 
-def test_container_raw_roundtrip(tiny_ckpt, tmp_path):
+def test_container_roundtrip(tiny_ckpt, tmp_path):
     _, model = tiny_ckpt
     codec = Codec(model)
     x, _ = prep_ae_np(_windows())
@@ -63,27 +63,9 @@ def test_container_raw_roundtrip(tiny_ckpt, tmp_path):
     path = tmp_path / "c.gvq.npz"
     write_container(path, packets, [(sp.cells, sp.depth, sp.codes)
                                     for sp in model.specs],
-                    {"kind": "patch", "window": W}, raw=True)
+                    {"kind": "patch", "window": W})
     header, back, _ = read_container(path)
-    assert header["coded"] is False and header["n_windows"] == 6
-    for p, q in zip(packets, back):
-        for a, b in zip(p.indices, q.indices):
-            assert np.array_equal(a, b)
-
-
-def test_container_coded_roundtrip(tiny_ckpt, tmp_path):
-    pytest.importorskip("compressai")
-    _, model = tiny_ckpt
-    codec = Codec(model)
-    x, _ = prep_ae_np(_windows(12))
-    packets = codec.encode(torch.from_numpy(x))
-    path = tmp_path / "c.gvq.npz"
-    header = write_container(path, packets,
-                             [(sp.cells, sp.depth, sp.codes)
-                              for sp in model.specs],
-                             {"kind": "patch", "window": W})
-    assert header["coded"] is True
-    _, back, _ = read_container(path)
+    assert header["n_windows"] == 6
     for p, q in zip(packets, back):
         for a, b in zip(p.indices, q.indices):
             assert np.array_equal(a, b)
@@ -97,13 +79,12 @@ def test_container_mask_roundtrip(tiny_ckpt, tmp_path):
     packets = codec.encode(torch.from_numpy(x))
     sig = [(sp.cells, sp.depth, sp.codes) for sp in model.specs]
     path = tmp_path / "m.gvq.npz"
-    write_container(path, packets, sig, {"kind": "patch"}, raw=True,
-                    valid=valid)
+    write_container(path, packets, sig, {"kind": "patch"}, valid=valid)
     header, _, valid2 = read_container(path)
     assert header["mask_shape"] == list(valid.shape)
     assert np.array_equal(valid, valid2)
     # an all-valid mask is elided entirely
-    write_container(path, packets, sig, {"kind": "patch"}, raw=True,
+    write_container(path, packets, sig, {"kind": "patch"},
                     valid=np.ones_like(valid))
     header, _, valid2 = read_container(path)
     assert valid2 is None and "mask_shape" not in header
@@ -249,41 +230,6 @@ def test_tile_empty_windows_skipped(tiny_ckpt, tmp_path):
     assert (rec[:, W:, W:] != -128).all()
 
 
-def test_shared_cdfs(tiny_ckpt, tmp_path):
-    """Encoding against a shared corpus table stores only its id; decode
-    resolves and id-checks it, and refuses the wrong table."""
-    pytest.importorskip("compressai")
-    from georvq.inference.archive import CdfTable
-    ckpt, model = tiny_ckpt
-    codec = Codec(model)
-    s = _windows(12)
-    x, _ = prep_ae_np(s)
-    packets = codec.encode(torch.from_numpy(x))
-    stacked = [np.stack([p.indices[t] for p in packets]) for t in range(2)]
-    cdfs = str(tmp_path / "cdfs.npz")
-    CdfTable.calibrate(stacked, model.specs).save(cdfs)
-
-    np.save(tmp_path / "in.npy", s)
-    gvq, out = str(tmp_path / "s.gvq.npz"), str(tmp_path / "out.npy")
-    codec_patch_main(["encode", "--model", ckpt, "--rans", "--cdfs", cdfs,
-                      str(tmp_path / "in.npy"), gvq])
-    header, _, _ = read_container(gvq, cdfs_path=cdfs)
-    assert "cdfs_id" in header and "cdf_flat" not in np.load(gvq)
-    codec_patch_main(["decode", "--model", ckpt, "--cdfs", cdfs, gvq, out])
-    ref_gvq = str(tmp_path / "e.gvq.npz")
-    codec_patch_main(["encode", "--model", ckpt, "--rans", "--embed-cdfs",
-                      str(tmp_path / "in.npy"), ref_gvq])
-    codec_patch_main(["decode", "--model", ckpt, ref_gvq,
-                      str(tmp_path / "ref.npy")])
-    assert np.array_equal(np.load(out), np.load(tmp_path / "ref.npy"))
-    with pytest.raises(SystemExit):        # no table offered
-        read_container(gvq)
-    other = str(tmp_path / "other.npz")
-    CdfTable.calibrate([a[:3] for a in stacked], model.specs).save(other)
-    with pytest.raises(SystemExit):        # wrong table
-        read_container(gvq, cdfs_path=other)
-
-
 def test_tile_geotiff_exact_filetype(tiny_ckpt, tmp_path):
     """A bottom-up GeoTIFF in the AEF source.coop layout round-trips to the
     exact same file type: driver, dtype, blocking, compression, interleave,
@@ -315,21 +261,3 @@ def test_tile_geotiff_exact_filetype(tiny_ckpt, tmp_path):
         rec = r.read()
     assert (rec[:, :5, :7] == -128).all()     # nodata exact, in FILE order
     assert ((rec[0] == -128) == (tile[0] == -128)).all()
-
-
-def test_parallel_rans_matches_serial(tiny_ckpt, tmp_path):
-    pytest.importorskip("compressai")
-    _, model = tiny_ckpt
-    codec = Codec(model)
-    x, _ = prep_ae_np(_windows(24))
-    packets = codec.encode(torch.from_numpy(x))
-    sig = [(sp.cells, sp.depth, sp.codes) for sp in model.specs]
-    a, b = str(tmp_path / "ser.npz"), str(tmp_path / "par.npz")
-    write_container(a, packets, sig, {"kind": "patch"}, workers=1)
-    write_container(b, packets, sig, {"kind": "patch"}, workers=4)
-    for path, workers in ((a, 4), (b, 1)):     # cross-decode both ways
-        _, back, _ = read_container(path, workers=workers)
-        assert len(back) == 24
-        for p, q in zip(packets, back):
-            for u, v in zip(p.indices, q.indices):
-                assert np.array_equal(u, v)
