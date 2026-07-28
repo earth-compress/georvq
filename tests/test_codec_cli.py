@@ -282,3 +282,36 @@ def test_shared_cdfs(tiny_ckpt, tmp_path):
     CdfTable.calibrate([a[:3] for a in stacked], model.specs).save(other)
     with pytest.raises(SystemExit):        # wrong table
         read_container(gvq, cdfs_path=other)
+
+
+def test_tile_geotiff_exact_filetype(tiny_ckpt, tmp_path):
+    """A bottom-up GeoTIFF in the AEF source.coop layout round-trips to the
+    exact same file type: driver, dtype, blocking, compression, interleave,
+    nodata tag, CRS, transform, and orientation."""
+    rasterio = pytest.importorskip("rasterio")
+    from rasterio.transform import Affine
+    ckpt, _ = tiny_ckpt
+    rng = np.random.default_rng(4)
+    H = Wd = 2 * W
+    tile = rng.integers(-127, 128, (BANDS, H, Wd), dtype=np.int8)
+    tile[:, :5, :7] = -128
+    src = str(tmp_path / "src.tiff")
+    prof = {"driver": "GTiff", "height": H, "width": Wd, "count": BANDS,
+            "dtype": "int8", "nodata": -128.0, "tiled": True,
+            "blockxsize": 16, "blockysize": 16, "compress": "deflate",
+            "interleave": "band", "crs": "EPSG:32755",
+            "transform": Affine(10.0, 0.0, 254240.0, 0.0, 10.0, 5740160.0)}
+    with rasterio.open(src, "w", **prof) as ds:
+        ds.write(tile)                        # transform.e > 0: bottom-up
+    gvq, out = str(tmp_path / "t.gvq.npz"), str(tmp_path / "rec.tiff")
+    codec_tile_main(["encode", "--model", ckpt, "--raw", src, gvq])
+    codec_tile_main(["decode", "--model", ckpt, gvq, out])
+    with rasterio.open(src) as s, rasterio.open(out) as r:
+        for k in ("driver", "nodata", "blockxsize", "blockysize", "tiled",
+                  "compress", "interleave", "count", "dtype",
+                  "width", "height"):
+            assert s.profile.get(k) == r.profile.get(k), k
+        assert s.crs == r.crs and s.transform == r.transform
+        rec = r.read()
+    assert (rec[:, :5, :7] == -128).all()     # nodata exact, in FILE order
+    assert ((rec[0] == -128) == (tile[0] == -128)).all()

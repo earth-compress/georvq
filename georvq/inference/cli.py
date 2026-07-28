@@ -489,8 +489,18 @@ def codec_patch_main(argv=None):
 # georvq-codec-tile
 # --------------------------------------------------------------------------
 
+_PROFILE_KEYS = ("driver", "nodata", "blockxsize", "blockysize", "tiled",
+                 "compress", "interleave")
+
+
 def _read_tile(path):
-    """-> (int8 (C, H, W), geo dict or None)."""
+    """-> (int8 (C, H, W) NORTH-UP, geo dict or None).
+
+    GeoTIFFs keep their full creation profile so decode can reproduce the
+    source file type exactly (the AEF source.coop tiles: GTiff, 1024^2
+    blocks, zstd, band-interleaved, bottom-up). Bottom-up rasters
+    (transform.e > 0) are flipped to north-up here — the orientation the
+    model was trained on — and flipped back on write."""
     if path.endswith((".tif", ".tiff")):
         try:
             import rasterio
@@ -499,24 +509,39 @@ def _read_tile(path):
                              "pip install 'georvq[eval]'") from e
         with rasterio.open(path) as ds:
             a = ds.read()
+            prof = {k: v for k, v in ds.profile.items()
+                    if k in _PROFILE_KEYS}
             geo = {"transform": list(ds.transform)[:6],
-                   "crs": str(ds.crs) if ds.crs else None}
-        return a.astype(np.int8), geo
+                   "crs": str(ds.crs) if ds.crs else None,
+                   "profile": prof,
+                   "flipped": bool(ds.transform.e > 0)}
+        a = a.astype(np.int8)
+        if geo["flipped"]:
+            a = a[:, ::-1, :]
+        return np.ascontiguousarray(a), geo
     return np.load(path).astype(np.int8), None
 
 
 def _write_tile(path, a, geo, int8, fill=NODATA):
+    """Write north-up array back out; GeoTIFF output restores the source's
+    exact profile (orientation, blocking, compression, CRS, nodata tag)."""
+    if geo and geo.get("flipped"):
+        a = np.ascontiguousarray(a[:, ::-1, :])
     if path.endswith((".tif", ".tiff")):
         try:
             import rasterio
             from rasterio.transform import Affine
         except ImportError as e:
             raise SystemExit("GeoTIFF output needs rasterio") from e
-        prof = {"driver": "GTiff", "height": a.shape[1], "width": a.shape[2],
-                "count": a.shape[0], "dtype": str(a.dtype),
-                "compress": "deflate", "tiled": True}
+        prof = dict((geo or {}).get("profile")
+                    or {"driver": "GTiff", "compress": "deflate",
+                        "tiled": True})
+        prof.update(height=a.shape[1], width=a.shape[2],
+                    count=a.shape[0], dtype=str(a.dtype))
         if int8:
             prof["nodata"] = fill
+        else:
+            prof.pop("nodata", None)     # float output: no int fill value
         if geo:
             prof["transform"] = Affine(*geo["transform"])
             if geo["crs"]:
@@ -566,10 +591,13 @@ def codec_tile_main(argv=None):
         pad[:, :H, :Wd] = a
         wins = pad.reshape(C, gh, W, gw, W).transpose(1, 3, 0, 2, 4) \
             .reshape(gh * gw, C, W, W)
-        x, wvalid = prep_ae_np(wins)
         check_fill(a[None], (a[0] != NODATA)[None])
-        keep = wvalid.any((1, 2))    # fully-nodata windows are not encoded
-        packets = _batched(be.encode, x[keep], args.batch)
+        keep = (wins[:, 0] != NODATA).any((1, 2))   # skip fully-nodata wins
+        kept = np.nonzero(keep)[0]
+        packets = []                 # prep floats one batch at a time
+        for i in range(0, len(kept), args.batch):
+            xb, _ = prep_ae_np(wins[kept[i:i + args.batch]])
+            packets += be.encode(xb)
         header = write_container(
             args.output, packets, be.specs_sig,
             {"kind": "tile", "window": W, "grid": [gh, gw],
@@ -598,21 +626,25 @@ def codec_tile_main(argv=None):
                 .reshape(gh * gw, W, W).any((1, 2))
         else:
             keep = np.ones(gh * gw, bool)
-        dec = np.concatenate(
-            [be.decode(packets[i:i + args.batch], depths)
-             for i in range(0, len(packets), args.batch)]) if packets \
-            else np.zeros((0, C, W, W), np.float32)
-        out = np.zeros((gh * gw, C, W, W), np.float32)
-        out[keep] = dec
-        stitched = out.reshape(gh, gw, C, W, W).transpose(2, 0, 3, 1, 4) \
-            .reshape(C, gh * W, gw * W)[:, :H, :Wd]
-        valid = valid[None] if valid is not None \
-            else np.ones((1, H, Wd), bool)
         fill = header.get("nodata_fill", NODATA)
-        if args.float32:
-            a = (stitched * valid).astype(np.float32)
-        else:
-            a = requant_ae_np(stitched[None], valid, fill)[0]
+        # stitch straight into one canvas, re-quantizing per batch, so a
+        # full 8192^2 source tile never needs an all-float intermediate
+        canvas = (np.zeros((C, gh * W, gw * W), np.float32) if args.float32
+                  else np.full((C, gh * W, gw * W), fill, np.int8))
+        kept = np.nonzero(keep)[0]
+        for i in range(0, len(packets), args.batch):
+            dec = be.decode(packets[i:i + args.batch], depths)
+            if not args.float32:
+                dec = requant_ae_np(dec)
+            for w, slot in zip(dec, kept[i:i + args.batch]):
+                r, c = divmod(int(slot), gw)
+                canvas[:, r * W:(r + 1) * W, c * W:(c + 1) * W] = w
+        a = canvas[:, :H, :Wd]
+        if valid is not None:        # restore the source's exact fill
+            if args.float32:
+                a = a * valid[None]
+            else:
+                a[np.broadcast_to(~valid[None], a.shape)] = fill
         _write_tile(args.output, a, header.get("geo"),
                     int8=not args.float32, fill=fill)
         _report(f"decoded {H}x{Wd} (tuple={depths or 'full'})", header,
