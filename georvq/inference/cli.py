@@ -17,6 +17,14 @@ Container: npz with a JSON header plus either raw per-tier index arrays or
 rANS-coded streams with their embedded CDF tables (`--raw` to skip entropy
 coding; coding needs compressai). Indices are stored full-depth; any
 monotone depth tuple can be chosen at decode time (`--tuple 6,4,4`).
+
+Nodata: the source's validity mask (band 0 == -128, the convention the
+model was trained with — inputs zeroed, loss masked) rides along
+bit-packed in the container whenever any pixel is invalid. Fully-nodata
+windows are never encoded (decode rebuilds them from the mask), and
+decode restores the source's exact fill value on int8 output (zero
+vectors on float output). `check_fill` warns at encode time if masked
+pixels are not pure fill, since then byte-exact restoration is impossible.
 """
 from __future__ import annotations
 
@@ -25,7 +33,6 @@ import json
 import os
 import sys
 import time
-import zlib
 
 import numpy as np
 
@@ -48,14 +55,28 @@ def prep_ae_np(s):
     return x / np.maximum(n, 1e-6), valid
 
 
-def requant_ae_np(x, valid=None):
+def requant_ae_np(x, valid=None, fill=NODATA):
     """float32 field -> int8 signed-sqrt quantization (inverse of dequant);
-    invalid pixels -> NODATA."""
+    invalid pixels -> `fill` (the source's own nodata value)."""
     s = np.rint(np.sign(x) * np.sqrt(np.abs(x)) * 127.5)
     s = np.clip(s, -127, 127).astype(np.int8)
     if valid is not None:
-        s[np.broadcast_to(~valid[:, None], s.shape)] = NODATA
+        s[np.broadcast_to(~valid[:, None], s.shape)] = fill
     return s
+
+
+def check_fill(a, valid, fill=NODATA):
+    """Verify masked pixels carry exactly `fill` in every band, so decode
+    can promise byte-exact nodata restoration. Returns True when it can."""
+    if valid.all():
+        return True
+    bad = a[np.broadcast_to(~valid[:, None], a.shape)] != fill
+    if bad.any():
+        print(f"warning: {int(bad.sum())} nodata-masked samples are not "
+              f"uniformly {fill}; decode will normalize them to {fill}",
+              file=sys.stderr)
+        return False
+    return True
 
 
 # --------------------------------------------------------------------------
@@ -124,19 +145,27 @@ def _index_dtype(codes):
     return np.uint16 if codes <= 2 ** 16 else np.uint32
 
 
-def write_container(path, packets, specs_sig, header, raw=False):
+def write_container(path, packets, specs_sig, header, raw=False, valid=None):
     """Write N packets (+ header dict) as one npz. rANS-coded with embedded
-    CDFs unless raw (or compressai is missing, with a warning)."""
+    CDFs unless raw (or compressai is missing, with a warning).
+
+    `valid`: optional bool ndarray of any shape (per-pixel nodata mask,
+    True = data). Stored bit-packed only when some pixels are invalid;
+    decode uses it to restore the source's exact fill values."""
     from georvq.inference.api import Packet  # noqa: F401  (type only)
     stacked = [np.stack([np.asarray(p.indices[t]) for p in packets])
                for t in range(len(specs_sig))]
     payload = {}
+    if valid is not None and not valid.all():
+        payload["mask"] = np.packbits(valid)
+        header = {**header, "mask_shape": list(valid.shape)}
     if not raw:
         try:
             from georvq.inference.archive import CdfTable, encode_packet
             table = CdfTable.calibrate(stacked, _SpecsView(specs_sig))
             streams = [encode_packet(p, table) for p in packets]
             payload = {
+                **payload,
                 "cdf_cdfs": np.array(
                     [np.pad(c, (0, max(table.lengths) - len(c)))
                      for c in table.cdfs], dtype=np.int64),
@@ -152,8 +181,9 @@ def write_container(path, packets, specs_sig, header, raw=False):
                   file=sys.stderr)
             raw = True
     if raw:
-        payload = {f"idx_t{t}": arr.astype(_index_dtype(specs_sig[t][2]))
-                   for t, arr in enumerate(stacked)}
+        payload = {**payload,
+                   **{f"idx_t{t}": arr.astype(_index_dtype(specs_sig[t][2]))
+                      for t, arr in enumerate(stacked)}}
         header = {**header, "coded": False}
     header = {**header, "format": FORMAT, "n_windows": len(packets),
               "specs_sig": [list(s) for s in specs_sig]}
@@ -162,7 +192,7 @@ def write_container(path, packets, specs_sig, header, raw=False):
 
 
 def read_container(path):
-    """-> (header dict, list[Packet])."""
+    """-> (header dict, list[Packet], valid mask ndarray or None)."""
     from georvq.inference.api import Packet
     z = np.load(path, allow_pickle=False)
     header = json.loads(str(z["header"]))
@@ -184,7 +214,12 @@ def read_container(path):
     else:
         stacked = [z[f"idx_t{t}"].astype(np.int64) for t in range(len(sig))]
         packets = [Packet(indices=[a[i] for a in stacked]) for i in range(n)]
-    return header, packets
+    valid = None
+    if "mask" in z:
+        shape = header["mask_shape"]
+        valid = np.unpackbits(z["mask"], count=int(np.prod(shape))) \
+            .reshape(shape).astype(bool)
+    return header, packets, valid
 
 
 class _SpecsView:
@@ -342,26 +377,43 @@ def codec_patch_main(argv=None):
     if args.cmd == "encode":
         a = _load_windows(args.input, be.window, be.bands)
         if a.dtype == np.int8:
-            x, _ = prep_ae_np(a)
+            x, valid = prep_ae_np(a)
+            check_fill(a, valid)
         else:
             x = a.astype(np.float32)
-        packets = _batched(be.encode, x, args.batch)
+            # float input: invalid pixels are the (near-)zero vectors the
+            # prep convention produces for nodata
+            valid = np.linalg.norm(x, axis=1) > 0.5
+        keep = valid.any((1, 2))     # fully-nodata windows are not encoded
+        packets = _batched(be.encode, x[keep], args.batch)
         header = write_container(args.output, packets, be.specs_sig,
-                                 {"kind": "patch", "window": be.window},
-                                 raw=args.raw)
-        _report("encoded", header, len(packets), be.window,
+                                 {"kind": "patch", "window": be.window,
+                                  "n_total": len(x),
+                                  "nodata_fill": NODATA},
+                                 raw=args.raw, valid=valid)
+        skipped = int((~keep).sum())
+        _report(f"encoded{f' ({skipped} empty windows skipped)' if skipped
+                          else ''}",
+                header, max(len(packets), 1), be.window,
                 os.path.getsize(args.output), t0)
     else:
-        header, packets = read_container(args.input)
+        header, packets, valid = read_container(args.input)
         depths = _parse_tuple(args.tuple, be.specs_sig)
-        out = np.concatenate(
+        n_total = header.get("n_total", header["n_windows"])
+        dec = np.concatenate(
             [be.decode(packets[i:i + args.batch], depths)
-             for i in range(0, len(packets), args.batch)])
+             for i in range(0, len(packets), args.batch)]) if packets             else np.zeros((0, be.bands, be.window, be.window), np.float32)
+        out = np.zeros((n_total, *dec.shape[1:]), np.float32)
+        keep = valid.any((1, 2)) if valid is not None             else np.ones(n_total, bool)
+        out[keep] = dec
+        fill = header.get("nodata_fill", NODATA)
         if args.int8:
-            out = requant_ae_np(out)
+            out = requant_ae_np(out, valid, fill)
+        elif valid is not None:      # model-space convention: zero vectors
+            out = out * valid[:, None]
         np.save(args.output, out)
         _report(f"decoded (tuple={depths or 'full'})", header, len(packets),
-                be.window, None, t0)
+                be.window, None, t0, depths)
 
 
 # --------------------------------------------------------------------------
@@ -384,7 +436,7 @@ def _read_tile(path):
     return np.load(path).astype(np.int8), None
 
 
-def _write_tile(path, a, geo, int8):
+def _write_tile(path, a, geo, int8, fill=NODATA):
     if path.endswith((".tif", ".tiff")):
         try:
             import rasterio
@@ -395,7 +447,7 @@ def _write_tile(path, a, geo, int8):
                 "count": a.shape[0], "dtype": str(a.dtype),
                 "compress": "deflate", "tiled": True}
         if int8:
-            prof["nodata"] = NODATA
+            prof["nodata"] = fill
         if geo:
             prof["transform"] = Affine(*geo["transform"])
             if geo["crs"]:
@@ -442,45 +494,52 @@ def codec_tile_main(argv=None):
         pad[:, :H, :Wd] = a
         wins = pad.reshape(C, gh, W, gw, W).transpose(1, 3, 0, 2, 4) \
             .reshape(gh * gw, C, W, W)
-        x, valid = prep_ae_np(wins)
-        packets = _batched(be.encode, x, args.batch)
-        header = {"kind": "tile", "window": W, "grid": [gh, gw],
-                  "shape": [C, H, Wd], "geo": geo}
-        if not valid.all():
-            full = np.zeros((gh * W, gw * W), bool)
-            full[:H, :Wd] = (a[0] != NODATA)
-            header["valid_zlib"] = zlib.compress(
-                np.packbits(full[:H, :Wd]).tobytes(), 9).hex()
-        header = write_container(args.output, packets, be.specs_sig,
-                                 header, raw=args.raw)
-        _report(f"encoded {H}x{Wd} ({gh}x{gw} windows)", header,
-                len(packets), W, os.path.getsize(args.output), t0)
+        x, wvalid = prep_ae_np(wins)
+        check_fill(a[None], (a[0] != NODATA)[None])
+        keep = wvalid.any((1, 2))    # fully-nodata windows are not encoded
+        packets = _batched(be.encode, x[keep], args.batch)
+        header = write_container(
+            args.output, packets, be.specs_sig,
+            {"kind": "tile", "window": W, "grid": [gh, gw],
+             "shape": [C, H, Wd], "geo": geo, "nodata_fill": NODATA},
+            raw=args.raw, valid=(a[0] != NODATA))
+        skipped = int((~keep).sum())
+        _report(f"encoded {H}x{Wd} ({gh}x{gw} windows"
+                f"{f', {skipped} empty skipped' if skipped else ''})",
+                header, max(len(packets), 1), W,
+                os.path.getsize(args.output), t0)
     else:
-        header, packets = read_container(args.input)
+        header, packets, valid = read_container(args.input)
         if header["kind"] != "tile":
             raise SystemExit(f"{args.input} is a {header['kind']} container;"
                              " use georvq-codec-patch")
         depths = _parse_tuple(args.tuple, be.specs_sig)
         C, H, Wd = header["shape"]
         gh, gw = header["grid"]
-        out = np.concatenate(
+        if valid is not None:        # rebuild which windows were stored
+            padv = np.zeros((gh * W, gw * W), bool)
+            padv[:H, :Wd] = valid
+            keep = padv.reshape(gh, W, gw, W).transpose(0, 2, 1, 3) \
+                .reshape(gh * gw, W, W).any((1, 2))
+        else:
+            keep = np.ones(gh * gw, bool)
+        dec = np.concatenate(
             [be.decode(packets[i:i + args.batch], depths)
-             for i in range(0, len(packets), args.batch)])
+             for i in range(0, len(packets), args.batch)]) if packets \
+            else np.zeros((0, C, W, W), np.float32)
+        out = np.zeros((gh * gw, C, W, W), np.float32)
+        out[keep] = dec
         stitched = out.reshape(gh, gw, C, W, W).transpose(2, 0, 3, 1, 4) \
             .reshape(C, gh * W, gw * W)[:, :H, :Wd]
-        valid = np.ones((1, H, Wd), bool)
-        if "valid_zlib" in header:
-            bits = np.frombuffer(
-                zlib.decompress(bytes.fromhex(header["valid_zlib"])),
-                np.uint8)
-            valid = np.unpackbits(bits, count=H * Wd) \
-                .reshape(1, H, Wd).astype(bool)
+        valid = valid[None] if valid is not None \
+            else np.ones((1, H, Wd), bool)
+        fill = header.get("nodata_fill", NODATA)
         if args.float32:
             a = (stitched * valid).astype(np.float32)
         else:
-            a = requant_ae_np(stitched[None], valid)[0]
+            a = requant_ae_np(stitched[None], valid, fill)[0]
         _write_tile(args.output, a, header.get("geo"),
-                    int8=not args.float32)
+                    int8=not args.float32, fill=fill)
         _report(f"decoded {H}x{Wd} (tuple={depths or 'full'})", header,
                 len(packets), W, None, t0, depths)
 

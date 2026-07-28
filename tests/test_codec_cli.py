@@ -64,7 +64,7 @@ def test_container_raw_roundtrip(tiny_ckpt, tmp_path):
     write_container(path, packets, [(sp.cells, sp.depth, sp.codes)
                                     for sp in model.specs],
                     {"kind": "patch", "window": W}, raw=True)
-    header, back = read_container(path)
+    header, back, _ = read_container(path)
     assert header["coded"] is False and header["n_windows"] == 6
     for p, q in zip(packets, back):
         for a, b in zip(p.indices, q.indices):
@@ -83,10 +83,30 @@ def test_container_coded_roundtrip(tiny_ckpt, tmp_path):
                               for sp in model.specs],
                              {"kind": "patch", "window": W})
     assert header["coded"] is True
-    _, back = read_container(path)
+    _, back, _ = read_container(path)
     for p, q in zip(packets, back):
         for a, b in zip(p.indices, q.indices):
             assert np.array_equal(a, b)
+
+
+def test_container_mask_roundtrip(tiny_ckpt, tmp_path):
+    _, model = tiny_ckpt
+    codec = Codec(model)
+    s = _windows()
+    x, valid = prep_ae_np(s)
+    packets = codec.encode(torch.from_numpy(x))
+    sig = [(sp.cells, sp.depth, sp.codes) for sp in model.specs]
+    path = tmp_path / "m.gvq.npz"
+    write_container(path, packets, sig, {"kind": "patch"}, raw=True,
+                    valid=valid)
+    header, _, valid2 = read_container(path)
+    assert header["mask_shape"] == list(valid.shape)
+    assert np.array_equal(valid, valid2)
+    # an all-valid mask is elided entirely
+    write_container(path, packets, sig, {"kind": "patch"}, raw=True,
+                    valid=np.ones_like(valid))
+    header, _, valid2 = read_container(path)
+    assert valid2 is None and "mask_shape" not in header
 
 
 @pytest.fixture()
@@ -126,15 +146,24 @@ def test_patch_cli_roundtrip(tiny_ckpt, tmp_path):
     codec_patch_main(["decode", "--model", ckpt, gvq, out])
     recon = np.load(out)
     assert recon.shape == (6, BANDS, W, W) and recon.dtype == np.float32
-    # matches the model's own full-depth reconstruction exactly
+    # matches the model's own full-depth reconstruction on valid pixels,
+    # zero vectors on nodata pixels
     codec = Codec(model)
-    x, _ = prep_ae_np(s)
+    x, valid = prep_ae_np(s)
     ref = codec.decode(codec.encode(torch.from_numpy(x))).numpy()
-    assert np.abs(recon - ref).max() < 1e-5
-    # truncated decode differs from full but stays unit-norm
+    vb = np.broadcast_to(valid[:, None], ref.shape)
+    assert np.abs(recon - ref)[vb].max() < 1e-5
+    assert (recon[~vb] == 0).all()
+    # --int8 restores the source's exact fill value at nodata pixels
+    codec_patch_main(["decode", "--model", ckpt, "--int8", gvq, out])
+    r8 = np.load(out)
+    assert r8.dtype == np.int8
+    assert (r8[0, :, :4, :4] == -128).all()
+    assert (r8[vb] != -128).all()   # requant clips data to [-127, 127]
+    # truncated decode differs from full but stays unit-norm on valid px
     codec_patch_main(["decode", "--model", ckpt, "--tuple", "1,0", gvq, out])
     low = np.load(out)
-    assert np.allclose(np.linalg.norm(low, axis=1), 1.0, atol=1e-4)
+    assert np.allclose(np.linalg.norm(low, axis=1)[valid], 1.0, atol=1e-4)
     assert np.abs(low - recon).max() > 1e-3
 
 
@@ -150,8 +179,10 @@ def test_tile_cli_roundtrip(tiny_ckpt, tmp_path):
     gvq, out = str(tmp_path / "t.gvq.npz"), str(tmp_path / "rec.npy")
     codec_tile_main(["encode", "--model", ckpt, "--raw",
                      str(tmp_path / "tile.npy"), gvq])
-    header, _ = read_container(gvq)
+    header, _, valid = read_container(gvq)
     assert header["grid"] == [3, 3] and header["shape"] == [BANDS, H, Wd]
+    assert header["nodata_fill"] == -128 and valid.shape == (H, Wd)
+    assert not valid[0, 0] and valid[10, 10]
     codec_tile_main(["decode", "--model", ckpt, gvq, out])
     rec = np.load(out)
     assert rec.shape == (BANDS, H, Wd) and rec.dtype == np.int8
@@ -176,3 +207,43 @@ def test_tile_cli_onnx_backend_matches(tiny_ckpt, onnx_dir, tmp_path):
                      gvq, b])
     ra, rb = np.load(a), np.load(b)
     assert (ra == rb).mean() > 0.999   # int8 quantization absorbs fp noise
+
+
+def test_empty_windows_skipped(tiny_ckpt, tmp_path):
+    """Fully-nodata windows are not encoded; decode rebuilds them as pure
+    fill from the mask alone."""
+    ckpt, _ = tiny_ckpt
+    s = _windows()
+    s[2] = -128                     # window 2 entirely nodata
+    np.save(tmp_path / "in.npy", s)
+    gvq, out = str(tmp_path / "e.gvq.npz"), str(tmp_path / "out.npy")
+    codec_patch_main(["encode", "--model", ckpt, "--raw",
+                      str(tmp_path / "in.npy"), gvq])
+    header, packets, valid = read_container(gvq)
+    assert header["n_windows"] == 5 and header["n_total"] == 6
+    assert not valid[2].any()
+    codec_patch_main(["decode", "--model", ckpt, "--int8", gvq, out])
+    r8 = np.load(out)
+    assert r8.shape == (6, BANDS, W, W)
+    assert (r8[2] == -128).all()            # rebuilt as pure fill
+    assert (r8[1] != -128).all()            # neighbours decoded normally
+    # float output: empty window is all-zero vectors
+    codec_patch_main(["decode", "--model", ckpt, gvq, out])
+    assert (np.load(out)[2] == 0).all()
+
+
+def test_tile_empty_windows_skipped(tiny_ckpt, tmp_path):
+    ckpt, _ = tiny_ckpt
+    rng = np.random.default_rng(2)
+    tile = rng.integers(-127, 128, (BANDS, 2 * W, 2 * W), dtype=np.int8)
+    tile[:, :W, :W] = -128          # top-left window entirely nodata
+    np.save(tmp_path / "tile.npy", tile)
+    gvq, out = str(tmp_path / "t.gvq.npz"), str(tmp_path / "rec.npy")
+    codec_tile_main(["encode", "--model", ckpt, "--raw",
+                     str(tmp_path / "tile.npy"), gvq])
+    header, _, _ = read_container(gvq)
+    assert header["n_windows"] == 3         # 4 grid cells, 1 skipped
+    codec_tile_main(["decode", "--model", ckpt, gvq, out])
+    rec = np.load(out)
+    assert (rec[:, :W, :W] == -128).all()
+    assert (rec[:, W:, W:] != -128).all()
