@@ -50,7 +50,7 @@ submodules exist. Everything is assembled from one validated `Config`
 | `georvq/train/` | `loop.py` the one trainer; `stage1.py` σ-conditioned pretrain; `validate.py`, `figures.py`, `warmstart.py` |
 | `georvq/eval/` | Held-out extraction, probes, benchmark registry, codec A/B helpers |
 | `georvq/viz/` | Panel/GIF styling and builders |
-| `georvq/inference/` | `api.py` Codec/Packet, `stats_codec.py`, `archive.py` rANS, `release.py` bundles |
+| `georvq/inference/` | `api.py` Codec/Packet, `stats_codec.py`, `archive.py` rANS, `release.py` bundles, `onnx_backend.py` ONNX export + torch-free runtime, `cli.py` codec executables |
 | `scripts/` | Thin drivers over the above (train, store builders, eval, archive, GIFs) |
 | `configs/` | Presets — each reproduces a specific historical run (see Provenance) |
 
@@ -97,6 +97,12 @@ pytest                              # + training smokes (GPU, minutes)
 python scripts/eval_run_ab.py --dataset <ds> --sanity identity   # eval harness sanity
 python scripts/eval_rate_sweep.py --dataset <ds> --ckpt <ckpt>   # Pareto-front A/B
 python scripts/build_archive.py --ckpt <ckpt> --store-dir <dir> --out <dir>
+
+# deployment executables (AlphaEarth; --backend torch|onnx, --device cpu|cuda)
+georvq-export-onnx --ckpt <ckpt|bundle> --out <onnx-dir>       # + parity verify
+georvq-codec-patch encode --model <ckpt|bundle|onnx-dir> windows.npy out.gvq.npz
+georvq-codec-tile  encode --model <...> tile.{npy,tif} out.gvq.npz
+georvq-codec-tile  decode --model <...> out.gvq.npz recon.tif --tuple 6,4,4
 ```
 
 Smoke config for cheap end-to-end checks: `configs/smoke.yaml` (synthetic

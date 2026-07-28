@@ -30,11 +30,16 @@ archive = ["compressai"]
 eval = ["rasterio", "h5py", "requests", "pyproj", "shapely"]
 # Rate-sweep GIF rendering
 viz = ["imageio", "pillow"]
+# ONNX export + torch-free CPU/GPU inference for the codec executables
+onnx = ["onnx", "onnxruntime"]
 dev = ["pytest"]
 
 [project.scripts]
 georvq-train = "georvq.cli:train_pyramid"
 georvq-train-stage1 = "georvq.cli:train_stage1"
+georvq-export-onnx = "georvq.inference.cli:export_onnx_main"
+georvq-codec-patch = "georvq.inference.cli:codec_patch_main"
+georvq-codec-tile = "georvq.inference.cli:codec_tile_main"
 
 [tool.setuptools.packages.find]
 include = ["georvq*"]
