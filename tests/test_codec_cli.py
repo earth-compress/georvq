@@ -261,3 +261,24 @@ def test_tile_geotiff_exact_filetype(tiny_ckpt, tmp_path):
         rec = r.read()
     assert (rec[:, :5, :7] == -128).all()     # nodata exact, in FILE order
     assert ((rec[0] == -128) == (tile[0] == -128)).all()
+
+
+def test_wrong_model_refused(tiny_ckpt, tiny_raw_cfg, tmp_path):
+    """A blob encoded with model A must not silently decode with a
+    same-architecture model B (different codebooks)."""
+    ckpt, _ = tiny_ckpt
+    cfg = Config.model_validate(tiny_raw_cfg)
+    torch.manual_seed(99)
+    other = build_model(cfg).eval()
+    for rvq in other.rvqs:
+        for lev in rvq.levels:
+            torch.nn.init.normal_(lev.codebook.weight, std=1.0)
+    other_path = str(tmp_path / "other.pt")
+    save_checkpoint(other_path, other, cfg, step=0)
+    np.save(tmp_path / "in.npy", _windows())
+    gvq = str(tmp_path / "p.gvq.npz")
+    codec_patch_main(["encode", "--model", ckpt,
+                      str(tmp_path / "in.npy"), gvq])
+    with pytest.raises(SystemExit, match="bitstream"):
+        codec_patch_main(["decode", "--model", other_path, gvq,
+                          str(tmp_path / "out.npy")])

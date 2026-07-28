@@ -103,6 +103,8 @@ class TorchBackend:
         self.specs_sig = [(sp.cells, sp.depth, sp.codes)
                           for sp in self.codec.specs]
         self.device = device
+        from georvq.inference.release import bitstream_id
+        self.bitstream_id = bitstream_id(self.codec.model)
 
     def encode(self, x):
         xt = self.torch.from_numpy(np.ascontiguousarray(x, np.float32)) \
@@ -126,6 +128,7 @@ class OnnxBackend:
         self.bands = self.codec.bands
         self.specs_sig = [(t["grid"] ** 2, t["depth"], t["codes"])
                           for t in self.codec.tiers]
+        self.bitstream_id = self.codec.meta.get("bitstream_id")
 
     def encode(self, x):
         return self.codec.encode(x)
@@ -219,6 +222,17 @@ def _common_args(ap):
                     help="cpu (default) or cuda[:N]")
     ap.add_argument("--threads", type=int, default=None,
                     help="onnxruntime intra-op threads (onnx backend)")
+
+
+def _check_bitstream(header, be, path):
+    """Same-architecture models with different codebooks decode each
+    other's blobs into silent garbage — refuse on id mismatch."""
+    want = header.get("bitstream_id")
+    if want and be.bitstream_id and want != be.bitstream_id:
+        raise SystemExit(
+            f"{path}: encoded against bitstream {want}, but --model has "
+            f"{be.bitstream_id} — same layout, different codebooks would "
+            "decode to garbage. Use the release bundle it was encoded with.")
 
 
 def _parse_tuple(s, specs_sig):
@@ -351,6 +365,7 @@ def codec_patch_main(argv=None):
         header = write_container(args.output, packets, be.specs_sig,
                                  {"kind": "patch", "window": be.window,
                                   "n_total": len(x),
+                                  "bitstream_id": be.bitstream_id,
                                   "nodata_fill": NODATA},
                                  valid=valid)
         skipped = int((~keep).sum())
@@ -360,6 +375,7 @@ def codec_patch_main(argv=None):
                 os.path.getsize(args.output), t0)
     else:
         header, packets, valid = read_container(args.input)
+        _check_bitstream(header, be, args.input)
         depths = _parse_tuple(args.tuple, be.specs_sig)
         n_total = header.get("n_total", header["n_windows"])
         dec = np.concatenate(
@@ -495,7 +511,8 @@ def codec_tile_main(argv=None):
         header = write_container(
             args.output, packets, be.specs_sig,
             {"kind": "tile", "window": W, "grid": [gh, gw],
-             "shape": [C, H, Wd], "geo": geo, "nodata_fill": NODATA},
+             "shape": [C, H, Wd], "geo": geo,
+             "bitstream_id": be.bitstream_id, "nodata_fill": NODATA},
             valid=(a[0] != NODATA))
         skipped = int((~keep).sum())
         _report(f"encoded {H}x{Wd} ({gh}x{gw} windows"
@@ -504,6 +521,7 @@ def codec_tile_main(argv=None):
                 os.path.getsize(args.output), t0)
     else:
         header, packets, valid = read_container(args.input)
+        _check_bitstream(header, be, args.input)
         if header["kind"] != "tile":
             raise SystemExit(f"{args.input} is a {header['kind']} container;"
                              " use georvq-codec-patch")
