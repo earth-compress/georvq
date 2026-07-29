@@ -150,6 +150,61 @@ class TorchBackend:
                           -127, 127).to(t.int8)
         return out.cpu().numpy()
 
+    def encode_and_stats(self, x, valid, ladder, coarse_residual=False):
+        """Fused encode + ladder stats: one encoder pass, cumulative
+        codebook sums built alongside assignment, then one decoder
+        forward per ladder point with dcos reduced on-device. Avoids the
+        8x re-encode + float round-trips of the generic path."""
+        from georvq.inference.api import Packet
+        t = self.torch
+        m = self.codec.model
+        with t.no_grad():
+            xt = t.from_numpy(np.ascontiguousarray(x, np.float32)) \
+                .to(self.device)
+            vt = t.from_numpy(valid).to(self.device)
+            zs = m.encode_levels(xt)
+            cums, idxs, res0 = [], [], None
+            for ti, (z, rvq) in enumerate(zip(zs, m.rvqs)):
+                residual = z.float()
+                acc = t.zeros_like(residual)
+                levels, per = [acc], []
+                for lev in rvq.levels:
+                    q, idx, _ = lev(residual)
+                    residual = residual - q
+                    acc = acc + q
+                    levels.append(acc)
+                    per.append(idx)
+                cums.append(t.stack(levels, 2))
+                idxs.append(t.stack(per, -1).cpu().numpy())
+                if ti == 0 and coarse_residual:
+                    res0 = residual
+            star_q = None
+            if res0 is not None:      # measure what decode will apply:
+                rf = res0.reshape(res0.shape[0], -1)   # the 2-bit sidecar
+                step = (STAR_SIGMA / 1.5
+                        * rf.std(dim=1, unbiased=False, keepdim=True)) \
+                    .clamp_min(1e-12)
+                star_q = (t.clamp(t.round(rf / step - 0.5) + 0.5,
+                                  -1.5, 1.5) * step).reshape(res0.shape)
+            d0 = m.specs[0].depth
+            dcos = {}
+            for pt in ladder:
+                zqs = [cums[i][:, :, L] for i, L in enumerate(pt)]
+                # decode applies the sidecar whenever coarse is at full
+                # depth — true at every ladder point; measure the same
+                if pt[0] == d0 and star_q is not None:
+                    zqs[0] = zqs[0] + star_q
+                Ls = t.tensor(list(pt), device=self.device)[None] \
+                    .expand(xt.shape[0], -1)
+                d = 1.0 - (m.decode(zqs, Ls) * xt).sum(1)
+                dcos[pt] = d[vt].clamp_min(1e-9).cpu().numpy()
+        res_np = res0.cpu().numpy() if res0 is not None else None
+        packets = [Packet(
+            indices=[a[b] for a in idxs],
+            coarse_residual=res_np[b] if res_np is not None else None)
+            for b in range(x.shape[0])]
+        return packets, dcos
+
 
 class OnnxBackend:
     def __init__(self, export_dir, device="cpu", threads=None):
@@ -233,11 +288,11 @@ class QualityStats:
         for t in self.ladder:
             s, n, mx = self.acc[t]
             name = "-".join(map(str, t))
-            full = all(L == d for L, (_, d, _) in zip(t, specs_sig))
+            starred = t[0] == specs_sig[0][1]     # coarse at full depth
             out[name] = {
                 "bits": nominal_bits(specs_sig, list(t))
-                + (star_cost if full else 0),
-                "star": bool(star_cost and full),
+                + (star_cost if starred else 0),
+                "star": bool(star_cost and starred),
                 "mean": s / max(n, 1), "p50": self._pct(t, 50),
                 "p90": self._pct(t, 90), "p99": self._pct(t, 99),
                 "max": mx,
@@ -391,6 +446,28 @@ def _parse_tuple(s, specs_sig):
         if not 0 <= L <= d:
             raise SystemExit(f"--tuple {s}: level {L} outside [0, {d}]")
     return ls
+
+
+def encode_all(be, x, valid, batch, star, want_stats):
+    """-> (packets, QualityStats|None); uses the backend's fused
+    encode+stats pass when available, else encode then generic stats."""
+    if not want_stats:
+        return _batched(lambda xb: be.encode(xb, coarse_residual=star),
+                        x, batch), None
+    ladder = quality_ladder(be.specs_sig)
+    if hasattr(be, "encode_and_stats"):
+        qs, packets = QualityStats(ladder), []
+        for i in range(0, len(x), batch):
+            pk, dcos = be.encode_and_stats(x[i:i + batch],
+                                           valid[i:i + batch], ladder,
+                                           coarse_residual=star)
+            packets += pk
+            for pt, d in dcos.items():
+                qs.add(pt, d)
+        return packets, qs
+    packets = _batched(lambda xb: be.encode(xb, coarse_residual=star),
+                       x, batch)
+    return packets, collect_stats(be, x, valid, packets, batch)
 
 
 def collect_stats(be, x, valid, packets, batch):
@@ -568,13 +645,11 @@ def codec_patch_main(argv=None):
             valid = np.linalg.norm(x, axis=1) > 0.5
         keep = valid.any((1, 2))     # fully-nodata windows are not encoded
         star = not args.no_coarse_residual
-        packets = _batched(
-            lambda xb: be.encode(xb, coarse_residual=star),
-            x[keep], args.batch)
+        packets, qs = encode_all(be, x[keep], valid[keep], args.batch,
+                                 star, not args.no_stats)
         hdr = {"kind": "patch", "window": be.window, "n_total": len(x),
                "bitstream_id": be.bitstream_id, "nodata_fill": NODATA}
-        if not args.no_stats:
-            qs = collect_stats(be, x[keep], valid[keep], packets, args.batch)
+        if qs is not None:
             hdr["quality_stats"] = qs.summary(
                 be.specs_sig, be.star_cost_bits if star else 0)
             with open(args.output + ".stats.json", "w") as f:
@@ -754,21 +829,24 @@ def codec_tile_main(argv=None):
         keep = (wins[:, 0] != NODATA).any((1, 2))   # skip fully-nodata wins
         kept = np.nonzero(keep)[0]
         star = not args.no_coarse_residual
+        want_stats = not args.no_stats
+        qs = QualityStats(quality_ladder(be.specs_sig)) if want_stats \
+            else None
         packets = []                 # prep floats one batch at a time
         for i in range(0, len(kept), args.batch):
-            xb, _ = prep_ae_np(wins[kept[i:i + args.batch]])
-            packets += be.encode(xb, coarse_residual=star)
+            xb, vb = prep_ae_np(wins[kept[i:i + args.batch]])
+            pk, dcos = encode_all(be, xb, vb, args.batch, star, want_stats)
+            packets += pk
+            if dcos is not None:
+                for pt in dcos.h:
+                    qs.h[pt] += dcos.h[pt]
+                    dst, src = qs.acc[pt], dcos.acc[pt]
+                    dst[0] += src[0]; dst[1] += src[1]
+                    dst[2] = max(dst[2], src[2])
         hdr = {"kind": "tile", "window": W, "grid": [gh, gw],
                "shape": [C, H, Wd], "geo": geo,
                "bitstream_id": be.bitstream_id, "nodata_fill": NODATA}
-        if not args.no_stats:
-            qs = QualityStats(quality_ladder(be.specs_sig))
-            for i in range(0, len(kept), args.batch):
-                xb, vb = prep_ae_np(wins[kept[i:i + args.batch]])
-                pk = packets[i:i + args.batch]
-                for t in qs.ladder:
-                    d = 1.0 - (be.decode(pk, list(t)) * xb).sum(1)
-                    qs.add(t, d[vb])
+        if qs is not None:
             hdr["quality_stats"] = qs.summary(
                 be.specs_sig, be.star_cost_bits if star else 0)
             with open(args.output + ".stats.json", "w") as f:

@@ -401,3 +401,35 @@ def test_quality_stats_and_control(tiny_ckpt, tmp_path, capsys):
     with pytest.raises(SystemExit, match="mutually exclusive"):
         codec_patch_main(["decode", "--model", ckpt, "--quality",
                           "mean<=1", "--tuple", "3,1", gvq, out])
+
+
+def test_fused_stats_match_generic(tiny_ckpt):
+    """The fused encode+stats pass produces the same packets and (near-)
+    identical stats as encode-then-decode-per-point."""
+    from georvq.inference.cli import (TorchBackend, QualityStats,
+                                      collect_stats, quality_ladder)
+    ckpt, _ = tiny_ckpt
+    be = TorchBackend(ckpt)
+    x, valid = prep_ae_np(_windows(8))
+    ladder = quality_ladder(be.specs_sig)
+    pk_f, dcos = be.encode_and_stats(x, valid, ladder, coarse_residual=True)
+    pk_g = be.encode(x, coarse_residual=True)
+    for a, b in zip(pk_f, pk_g):
+        for u, v in zip(a.indices, b.indices):
+            assert np.array_equal(u, v)
+        assert np.allclose(a.coarse_residual, b.coarse_residual, atol=1e-6)
+    # generic path must measure the 2-bit sidecar decode sees, like fused
+    from georvq.inference.cli import pack_star, unpack_star
+    res = np.stack([p.coarse_residual for p in pk_g])
+    deq = unpack_star(*pack_star(res), res.shape[1], res.shape[2])
+    for p_, r_ in zip(pk_g, deq):
+        p_.coarse_residual = r_
+    qs_f = QualityStats(ladder)
+    for pt, d in dcos.items():
+        qs_f.add(pt, d)
+    qs_g = collect_stats(be, x, valid, pk_g, 8)
+    sf = qs_f.summary(be.specs_sig, be.star_cost_bits)
+    sg = qs_g.summary(be.specs_sig, be.star_cost_bits)
+    for k in sf:
+        for m in ("mean", "p50", "p90", "p99", "max"):
+            assert abs(sf[k][m] - sg[k][m]) < 2e-3, (k, m, sf[k][m], sg[k][m])
