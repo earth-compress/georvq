@@ -10,7 +10,7 @@ import torch
 from georvq.config import Config
 from georvq.factory import build_model
 from georvq.inference.api import Codec
-from georvq.inference.cli import (codec_patch_main, codec_tile_main,
+from georvq.ae.cli import (codec_patch_main, codec_tile_main,
                                   export_onnx_main, prep_ae_np,
                                   read_container, requant_ae_np,
                                   write_container)
@@ -102,7 +102,7 @@ def onnx_dir(tiny_ckpt, tmp_path):
 def test_onnx_export_parity(tiny_ckpt, onnx_dir):
     """Same packets decode to (near-)identical pixels in both backends;
     fp32 index assignment matches torch on a spread codebook."""
-    from georvq.inference.cli import OnnxBackend, TorchBackend
+    from georvq.ae.cli import OnnxBackend, TorchBackend
     ckpt, _ = tiny_ckpt
     tb, ob = TorchBackend(ckpt), OnnxBackend(onnx_dir)
     assert json.load(open(os.path.join(onnx_dir, "meta.json")))["window"] == W
@@ -163,7 +163,7 @@ def test_tile_cli_roundtrip(tiny_ckpt, tmp_path):
     adir, out = str(tmp_path / "assets"), str(tmp_path / "rec.npy")
     codec_tile_main(["encode", "--model", ckpt,
                      str(tmp_path / "tile.npy"), adir])
-    from georvq.inference.cog import read_meta
+    from georvq.ae.cog import read_meta
     meta = read_meta(adir)
     assert meta["grid"] == [3, 3] and meta["shape"] == [BANDS, H, Wd]
     for f in ("coarse.tif", "mid.tif", "star.tif", "mask.tif",
@@ -171,7 +171,7 @@ def test_tile_cli_roundtrip(tiny_ckpt, tmp_path):
         assert os.path.exists(os.path.join(adir, f)), f
     # decoder-specific quality raster: per-window mean dcos per point
     import rasterio
-    from georvq.inference.cli import TorchBackend
+    from georvq.ae.cli import TorchBackend
     did = TorchBackend(ckpt).decoder_id
     with rasterio.open(os.path.join(adir, f"quality/{did}.tif")) as ds:
         assert ds.count == 3 and ds.descriptions[0] == "3-1"
@@ -238,7 +238,7 @@ def test_tile_empty_windows_skipped(tiny_ckpt, tmp_path):
     adir, out = str(tmp_path / "assets"), str(tmp_path / "rec.npy")
     codec_tile_main(["encode", "--model", ckpt,
                      str(tmp_path / "tile.npy"), adir])
-    from georvq.inference.cog import read_assets
+    from georvq.ae.cog import read_assets
     _, packets, kept, _ = read_assets(adir)
     assert len(packets) == 3                # 4 grid cells, 1 skipped
     codec_tile_main(["decode", "--model", ckpt, adir, out])
@@ -304,7 +304,7 @@ def test_wrong_model_refused(tiny_ckpt, tiny_raw_cfg, tmp_path):
 def test_progressive_prefix_read(tiny_ckpt, tmp_path):
     """Depth-limited reads load only the ladder prefix and decode
     identically to truncating a full read."""
-    from georvq.inference.cli import container_read_bytes
+    from georvq.ae.cli import container_read_bytes
     ckpt, model = tiny_ckpt
     codec = Codec(model)
     s = _windows(8)
@@ -336,7 +336,7 @@ def test_progressive_prefix_read(tiny_ckpt, tmp_path):
 def test_star_sidecar(tiny_ckpt, tmp_path):
     """8* coarse-residual: pack/unpack accuracy, quality lift over the
     no-sidecar decode, ignored at truncated coarse depth, off by flag."""
-    from georvq.inference.cli import pack_star, unpack_star
+    from georvq.ae.cli import pack_star, unpack_star
     rng = np.random.default_rng(0)
     r = rng.normal(0, 0.3, (8, 1, 16)).astype(np.float32)
     packed, step = pack_star(r)
@@ -377,7 +377,7 @@ def test_star_cross_backend(tiny_ckpt, onnx_dir, tmp_path):
     """ONNX encode carries the sidecar; both backends decode a starred
     container identically (same dequantized correction)."""
     ckpt, _ = tiny_ckpt
-    from georvq.inference.cli import OnnxBackend, TorchBackend
+    from georvq.ae.cli import OnnxBackend, TorchBackend
     tb, ob = TorchBackend(ckpt), OnnxBackend(onnx_dir)
     x, _ = prep_ae_np(_windows())
     po = ob.encode(x, coarse_residual=True)
@@ -395,7 +395,7 @@ def test_quality_stats_and_control(tiny_ckpt, tmp_path, capsys):
     gvq, out = str(tmp_path / "q.gvq.npz"), str(tmp_path / "out.npy")
     codec_patch_main(["encode", "--model", ckpt, str(tmp_path / "in.npy"),
                       gvq])
-    from georvq.inference.cli import _read_header
+    from georvq.ae.cli import _read_header
     stats = _read_header(gvq)["quality_stats"]
     assert os.path.exists(gvq + ".stats.json")
     assert set(stats) == {"3-1", "3-2", "3-3"}
@@ -421,7 +421,7 @@ def test_quality_stats_and_control(tiny_ckpt, tmp_path, capsys):
 def test_fused_stats_match_generic(tiny_ckpt):
     """The fused encode+stats pass produces the same packets and (near-)
     identical stats as encode-then-decode-per-point."""
-    from georvq.inference.cli import (TorchBackend, QualityStats,
+    from georvq.ae.cli import (TorchBackend, QualityStats,
                                       collect_stats, quality_ladder)
     ckpt, _ = tiny_ckpt
     be = TorchBackend(ckpt)
@@ -434,7 +434,7 @@ def test_fused_stats_match_generic(tiny_ckpt):
             assert np.array_equal(u, v)
         assert np.allclose(a.coarse_residual, b.coarse_residual, atol=1e-6)
     # generic path must measure the 2-bit sidecar decode sees, like fused
-    from georvq.inference.cli import pack_star, unpack_star
+    from georvq.ae.cli import pack_star, unpack_star
     res = np.stack([p.coarse_residual for p in pk_g])
     deq = unpack_star(*pack_star(res), res.shape[1], res.shape[2])
     for p_, r_ in zip(pk_g, deq):

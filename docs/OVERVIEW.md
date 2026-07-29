@@ -50,7 +50,8 @@ submodules exist. Everything is assembled from one validated `Config`
 | `georvq/train/` | `loop.py` the one trainer; `stage1.py` σ-conditioned pretrain; `validate.py`, `figures.py`, `warmstart.py` |
 | `georvq/eval/` | Held-out extraction, probes, benchmark registry, codec A/B helpers |
 | `georvq/viz/` | Panel/GIF styling and builders |
-| `georvq/inference/` | `api.py` Codec/Packet, `stats_codec.py`, `archive.py` rANS, `release.py` bundles, `onnx_backend.py` ONNX export + torch-free runtime, `cli.py` codec executables |
+| `georvq/inference/` | Source-agnostic deployment machinery: `api.py` Codec/Packet, `stats_codec.py`, `archive.py` rANS (research tool), `release.py` bundles + bitstream/decoder ids, `onnx_backend.py` ONNX export + torch-free runtime |
+| `georvq/ae/` | **The AlphaEarth release codec** — AE-specific policy (pixel prep, 8* sidecar, quality ladder, COG asset container, executables). See `docs/AE_RELEASE.md`; treat as the worked example of a release layer, not a template |
 | `scripts/` | Thin drivers over the above (train, store builders, eval, archive, GIFs) |
 | `configs/` | Presets — each reproduces a specific historical run (see Provenance) |
 
@@ -98,12 +99,26 @@ python scripts/eval_run_ab.py --dataset <ds> --sanity identity   # eval harness 
 python scripts/eval_rate_sweep.py --dataset <ds> --ckpt <ckpt>   # Pareto-front A/B
 python scripts/build_archive.py --ckpt <ckpt> --store-dir <dir> --out <dir>
 
-# deployment executables (AlphaEarth; --backend torch|onnx, --device cpu|cuda)
-georvq-export-onnx --ckpt <ckpt|bundle> --out <onnx-dir>       # + parity verify
-georvq-codec-patch encode --model <ckpt|bundle|onnx-dir> windows.npy out.gvq.npz
-georvq-codec-tile  encode --model <...> tile.{npy,tif} out.gvq.npz
-georvq-codec-tile  decode --model <...> out.gvq.npz recon.tif --tuple 6,4,4
+# AlphaEarth release codec (georvq/ae — see docs/AE_RELEASE.md)
+georvq-ae-tile encode --model <bundle> src.tiff out_dir/    # -> COG assets
+georvq-ae-tile decode --model <bundle> out_dir/ recon.tif --quality "p90<=0.02"
+georvq-ae-export-onnx --ckpt <bundle> --out <onnx-dir>      # torch-free decode
 ```
+
+## Who touches what
+
+- **Codec researcher** (new sources, better models): `georvq/{model,
+  data, sources, train, eval}`, `configs/`, `scripts/`,
+  `docs/ADDING_A_SOURCE.md` + `docs/FINDINGS.md`. The parity-sacred
+  rules above are yours to uphold.
+- **Release engineer** (ship a trained codec): `georvq/inference/`
+  (bundles, ids, ONNX export) plus a source-specific release layer —
+  `georvq/ae/` is the worked example (its container/policy choices are
+  AE-specific responses, measured in `docs/AE_RELEASE.md`).
+- **Data end user** (decode archive tiles): the `georvq-ae-*`
+  executables and the COG assets only — `docs/AE_RELEASE.md` is the
+  complete contract; nothing in training or `georvq/inference` concerns
+  them.
 
 Smoke config for cheap end-to-end checks: `configs/smoke.yaml` (synthetic
 store, CPU-friendly). Prefer it — or a few hundred steps with overrides —

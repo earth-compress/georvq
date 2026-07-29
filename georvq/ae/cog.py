@@ -1,4 +1,12 @@
-"""COG asset container for tile blobs: the archive format.
+"""COG asset container for AlphaEarth tile blobs — the AE archive format.
+
+This layout is a RESPONSE TO THE AEF SOURCE, not a general georvq rule:
+the source ships as 1024 px-blocked band-interleaved COGs, so the
+archive mirrors that structure 1:1 (same ground quantum at every pyramid
+level) and speaks the ecosystem the source's users already use. A
+different source (DEM, S2) should re-derive its own container from its
+own access patterns; the measurements behind these choices are in
+docs/AE_RELEASE.md.
 
 One encoded tile = a directory (or object prefix) of georeferenced COGs,
 1:1 with the source tile, all blocks aligned to the source's 1024 px
@@ -203,7 +211,7 @@ def read_assets(indir, depths=None, expect_bitstream=None):
     star = None
     if depths[0] == sig[0][1] and \
             os.path.exists(os.path.join(indir, "star.tif")):
-        from georvq.inference.cli import unpack_star
+        from georvq.ae.cli import unpack_star
         with openr("star") as ds:
             sg = ds.read()                      # (66, gh, gw)
         nb = sg.shape[0] - 2

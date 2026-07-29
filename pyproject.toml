@@ -37,9 +37,9 @@ dev = ["pytest"]
 [project.scripts]
 georvq-train = "georvq.cli:train_pyramid"
 georvq-train-stage1 = "georvq.cli:train_stage1"
-georvq-export-onnx = "georvq.inference.cli:export_onnx_main"
-georvq-codec-patch = "georvq.inference.cli:codec_patch_main"
-georvq-codec-tile = "georvq.inference.cli:codec_tile_main"
+georvq-ae-export-onnx = "georvq.ae.cli:export_onnx_main"
+georvq-ae-patch = "georvq.ae.cli:codec_patch_main"
+georvq-ae-tile = "georvq.ae.cli:codec_tile_main"
 
 [tool.setuptools.packages.find]
 include = ["georvq*"]

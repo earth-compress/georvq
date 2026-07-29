@@ -1,11 +1,17 @@
-"""Deployment executables for the AlphaEarth codec.
+"""Executables of the AlphaEarth release codec.
+
+Everything here encodes AE-RELEASE POLICY, not general georvq behavior:
+the pixel prep mirrors the AEF int8/-128 conventions, the 8* sidecar and
+quality ladder are decisions validated for this source, and the tile
+container (georvq.ae.cog) mirrors the AEF source layout. Other sources
+should design their own release layer against georvq.inference.
 
 Three console entry points (see pyproject):
 
-  georvq-export-onnx   checkpoint/bundle -> ONNX export dir (+ parity check)
-  georvq-codec-patch   encode/decode pre-cut (B, 64, W, W) windows
-  georvq-codec-tile    encode/decode a full raster: tile -> windows ->
-                       one self-contained archive file -> stitch back
+  georvq-ae-export-onnx  checkpoint/bundle -> ONNX export dir (+ parity)
+  georvq-ae-patch        DEV TOOL: pre-cut (B, 64, W, W) windows <-> npz
+  georvq-ae-tile         the release codec: source tile <-> COG asset
+                         directory (encode/decode/info)
 
 Both codecs share `--backend {torch,onnx}` and `--device {cpu,cuda}`:
 torch runs the checkpoint (CPU or CUDA), onnx runs an exported dir through
@@ -859,7 +865,7 @@ def codec_tile_main(argv=None):
     args = ap.parse_args(argv)
 
     if args.cmd == "info":
-        from georvq.inference.cog import read_meta
+        from georvq.ae.cog import read_meta
         header = read_meta(args.input)
         stats = header.pop("quality_stats", None)
         print(json.dumps(header, indent=1))
@@ -912,7 +918,7 @@ def codec_tile_main(argv=None):
         quality = None
         if qs is not None and be.decoder_id:
             quality = (be.decoder_id, qs.ladder, qs.window_means())
-        from georvq.inference.cog import write_assets
+        from georvq.ae.cog import write_assets
         sizes = write_assets(args.output, packets, kept, meta,
                              a[0] != NODATA, geo, be.specs_sig,
                              star=star_arrays, quality=quality)
@@ -924,7 +930,7 @@ def codec_tile_main(argv=None):
         if args.quality and args.tuple:
             raise SystemExit("--tuple (rate-control) and --quality "
                              "(quality-control) are mutually exclusive")
-        from georvq.inference.cog import read_assets, read_meta
+        from georvq.ae.cog import read_assets, read_meta
         if args.quality:
             depths = _resolve_quality(read_meta(args.input),
                                       args.quality, be.specs_sig)
@@ -953,7 +959,7 @@ def codec_tile_main(argv=None):
             a[np.broadcast_to(~valid[None], a.shape)] = fill
         _write_tile(args.output, a, meta.get("geo"),
                     int8=not args.float32, fill=fill)
-        from georvq.inference.cog import tier_names
+        from georvq.ae.cog import tier_names
         rd = sum(os.path.getsize(os.path.join(args.input, f"{n}.tif"))
                  * depths[i] / be.specs_sig[i][1]
                  for i, n in enumerate(tier_names(len(be.specs_sig)))
@@ -965,10 +971,10 @@ def codec_tile_main(argv=None):
                 len(packets), W, None, t0, depths)
 
 
-if __name__ == "__main__":   # python -m georvq.inference.cli <tool> ...
+if __name__ == "__main__":   # python -m georvq.ae.cli <tool> ...
     tools = {"export-onnx": export_onnx_main, "patch": codec_patch_main,
              "tile": codec_tile_main}
     if len(sys.argv) < 2 or sys.argv[1] not in tools:
-        raise SystemExit(f"usage: python -m georvq.inference.cli "
+        raise SystemExit(f"usage: python -m georvq.ae.cli "
                          f"{{{','.join(tools)}}} ...")
     tools[sys.argv.pop(1)]()
