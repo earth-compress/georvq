@@ -51,6 +51,41 @@ pip install -e .                              # core
 pip install -e ".[loc,archive,eval,viz,dev]"  # everything
 ```
 
+## Quickstart: the AlphaEarth release codec
+
+Working with the shipped AE codec (decode archive tiles, run the demos)
+takes five steps; full contract in `docs/AE_RELEASE.md`.
+
+```bash
+# 1. install (an env with torch; or use the group ring-space env)
+git clone <this repo> && cd georvq
+pip install -e ".[eval,onnx]"
+
+# 2. get the weights (NOT in git)
+#    on the group server they are already at /data/georvq-releases/ae-beta-v1
+#    elsewhere: download ae-beta-v1.tar.gz from the Drive link (ask Ali /
+#    see the release thread), then verify before use:
+sha256sum -c <<< "d535fe3c692327acbafcfd8816be9d776d4596fe02ea18e6963759fbbbf969b5  ae-beta-v1.tar.gz"
+
+# 3. extract ANYWHERE and point the env var at it
+tar xzf ae-beta-v1.tar.gz
+export GEORVQ_AE_BUNDLE=$PWD/ae-beta-v1/bundle   # add to your shell rc
+
+# 4. use it
+georvq-ae-tile info   some_tile_assets/                       # inspect a blob
+georvq-ae-tile decode --model "$GEORVQ_AE_BUNDLE" some_tile_assets/ recon.tiff \
+    --quality "p90<=0.02"                                     # or --tuple 8,8,2
+georvq-ae-tile encode --model "$GEORVQ_AE_BUNDLE" --device cuda src.tiff out/
+
+# 5. demos (pre-executed with figures — readable without any data)
+jupyter lab notebooks/demo_ae_codec.ipynb notebooks/demo_downstream_eval.ipynb
+```
+
+Notes: every CLI also accepts `--model path/...` directly (the env var
+is only the notebooks' default); decode-only use needs no GPU — pass
+`--backend onnx --model .../ae-beta-v1/onnx` for the torch-free path;
+`bundle/model.pt` is a torch pickle, so always verify the checksum.
+
 ## Train
 
 ```bash
