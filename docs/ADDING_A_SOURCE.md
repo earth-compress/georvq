@@ -57,6 +57,17 @@ Copy the closest `configs/*.yaml`, set `data.source`, `data.store_dir`,
 georvq-train -c configs/my_source.yaml --gpu 0
 ```
 
+## 4. (When shipping) a release layer
+
+Training-side, the three pieces above are everything. If the codec is to
+be *shipped*, deployment policy — container format, rate/quality
+controls, sidecars, executables — is deliberately per-source, built on
+the generic `georvq.inference` machinery. `georvq/ae/` +
+`docs/AE_RELEASE.md` are the worked example; its choices (COG assets
+mirroring the source's block quantum, a coarse-residual sidecar, an
+encode-time quality ladder) were *measured responses to that source*,
+not defaults to inherit.
+
 ## Current integration status
 
 Single-plane sources (one `(bands, px, px)` array per chip) are fully

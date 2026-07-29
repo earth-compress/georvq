@@ -68,8 +68,10 @@ heavy 0.977/0.989, 22.3k win/s (17x heavy). Parked because 0.87 (and
 thumbnail/browse product tier appears, or scale the variants up (the
 16px-head + interpolation trade was the main quality cost).
 
-**Related pending decisions** (not parked, awaiting call): coarse
-residual sidecar as default in the tile encoder; `--deblock` decode
-option (ae_deblock_deblock_big, seam -77%, fidelity +20% at full
-ladder); lite decoder family (`ae_lite_light/medium`) integration as
-`--decoder` choice + ONNX export.
+**Status of previously-pending decisions**: the coarse-residual (8*)
+sidecar SHIPPED (on by default in the AE encoder); the lite decoder
+family is parked above. Still open: a `--deblock` decode option
+(`ae_deblock_deblock_big` in the research repo: seam factor -77%,
+overall fidelity +20% at full ladder, validated against the release
+weights) — decoder-side and bitstream-free, so it can ship any time as
+a decoder variant under its own `decoder_id`.

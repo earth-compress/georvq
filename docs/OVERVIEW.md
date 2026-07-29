@@ -68,10 +68,11 @@ submodules exist. Everything is assembled from one validated `Config`
    or parameters breaks every existing checkpoint; if you must, extend
    the rename table and prove a legacy checkpoint still loads strict.
 3. **The bitstream excludes the decoder.** A packet/archive is defined by
-   tiers + codebooks + conditioning priors + stats codec + CDFs
-   (`docs/BITSTREAM.md`). Decoder-side improvements must never require
-   re-encoding; anything that changes the bitstream changes
-   `bitstream_id`.
+   tiers + codebooks + conditioning priors (+ stats codec / CDF tables
+   where used — `docs/BITSTREAM.md`). Decoder-side improvements must
+   never require re-encoding; anything that changes the bitstream
+   changes `bitstream_id`, and decoder-specific artifacts are keyed by
+   `decoder_id`.
 4. **VQ state stays fp32 under bf16 autocast.** Assignment scores may run
    bf16 (`vq.bf16_scores`); residuals, EMA buffers and codebooks must not.
 5. **Sources own all data-specific behavior.** The shared stack
@@ -91,13 +92,13 @@ pip install -e ".[loc,archive,eval,viz,dev]"
 georvq-train -c configs/pyr64.yaml --gpu 0 log.run_tag=my_run   # train
 georvq-train -c configs/pyr64.yaml train.steps=2000 ...          # any override
 
-pytest -m "not slow and not gpu"    # fast suite (~6 s) — run on every change
+pytest -m "not slow and not gpu"    # fast suite (~20 s) — run on every change
 pytest -m "not slow"                # + ringspace parity (needs the research repo)
 pytest                              # + training smokes (GPU, minutes)
 
 python scripts/eval_run_ab.py --dataset <ds> --sanity identity   # eval harness sanity
 python scripts/eval_rate_sweep.py --dataset <ds> --ckpt <ckpt>   # Pareto-front A/B
-python scripts/build_archive.py --ckpt <ckpt> --store-dir <dir> --out <dir>
+python scripts/build_archive.py --ckpt <ckpt> --store-dir <dir> --out <dir>  # research rANS archives
 
 # AlphaEarth release codec (georvq/ae — see docs/AE_RELEASE.md)
 georvq-ae-tile encode --model <bundle> src.tiff out_dir/    # -> COG assets
@@ -177,7 +178,11 @@ reproduces a result.
 - **Better decoder / post-decode enhancement (e.g. seam deblocker)** →
   free under the bitstream contract: `docs/BITSTREAM.md`.
 - **Context-adaptive entropy coding** → the achievable rate is already
-  measured (`model.entropy_level_bits`); a coder driven by the same
-  `ContextRateModel` slots behind the existing packet layout.
+  measured (`model.entropy_level_bits`; order-0 coding was measured
+  ~0.6% on AE and dropped — the win requires the context model); a coder
+  driven by the same `ContextRateModel` slots behind the packet layout.
+- **Shipping a new source** → a per-source release layer over
+  `georvq/inference`; `georvq/ae/` + `docs/AE_RELEASE.md` are the worked
+  example.
 - **Why the architecture is shaped this way** → `docs/FINDINGS.md`
   (empirical results, including the negative ones worth not repeating).
