@@ -1,4 +1,4 @@
-"""Load checkpoints from the original research codebase (ring-space).
+"""Load legacy research-format checkpoints (argv-style, pre-Config).
 
 Those checkpoints store `{"model": state_dict, "args": <flat argv dict>,
 "step": int}`. This module translates the argv dict into a georvq `Config`

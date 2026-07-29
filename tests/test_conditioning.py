@@ -9,7 +9,6 @@ from georvq.factory import build_model
 from georvq.model.conditioning import CodebookSelector, TierPredictor, ancestor_map
 from georvq.model.vq import ResidualVQ
 
-from tests.conftest import RINGSPACE_DIR
 
 
 def _specs3():
@@ -70,65 +69,6 @@ def test_cascade_zero_init_matches_plain(tiny_raw_cfg):
             per, _, _ = rvq.all_levels(z)
             m = thermometer(Ls[:, i], sp.depth)[:, None, :, None]
             assert torch.allclose(casc[i], (per * m).sum(-2), atol=1e-6)
-
-
-@pytest.mark.ringspace
-def test_cascade_parity_with_reference():
-    """TierPredictor must reproduce the original cascade quantization
-    exactly when loaded with the same weights."""
-    sys.path.insert(0, RINGSPACE_DIR)
-    sys.path.insert(0, f"{RINGSPACE_DIR}/scripts")
-    from train_ae_pyramid import cascade_quant, _fine_to_mid
-
-    specs = _specs3()
-    rvqs = _rvqs(specs)
-    sdim = 6
-    torch.manual_seed(3)
-    tp = TierPredictor(specs, loc_dim=sdim, coarse_prior=nn.Linear(sdim, 8),
-                       hidden=512, layers=3)
-    tp.eval()
-    # reference predictors share the exact same modules
-    P = nn.ModuleList([tp.coarse_prior, tp.predictors[0], tp.predictors[1]])
-    zs = _zs(specs)
-    loc = torch.randn(4, sdim)
-    Ls = torch.tensor([[2, 1, 0], [1, 1, 1], [2, 2, 2], [2, 2, 1]])
-    with torch.no_grad():
-        ref_out, ref_c, ref_idx = cascade_quant(P, rvqs, specs, zs, loc, Ls,
-                                                _fine_to_mid())
-        out, c, idx = tp.quantize(rvqs, specs, zs, loc, Ls,
-                                  return_indices=True)
-    for a, b in zip(ref_out, out):
-        assert torch.equal(a, b)
-    assert torch.equal(ref_c, c)
-    for ia, ib in zip(ref_idx, idx):
-        for a, b in zip(ia, ib):
-            assert torch.equal(a, b)
-    with torch.no_grad():
-        ref_cums, _, _ = cascade_quant(P, rvqs, specs, zs, loc, None,
-                                       _fine_to_mid(), cumulative=True)
-        cums = tp.cumsums(rvqs, specs, zs, loc)
-    for a, b in zip(ref_cums, cums):
-        assert torch.equal(a, b)
-
-
-@pytest.mark.ringspace
-def test_selector_parity_with_reference():
-    sys.path.insert(0, RINGSPACE_DIR)
-    sys.path.insert(0, f"{RINGSPACE_DIR}/scripts")
-    from train_ae_pyramid import SatclipSelector
-
-    specs = _specs3()
-    torch.manual_seed(0)
-    ref = SatclipSelector(specs, sdim=6, pdim=8)
-    torch.manual_seed(0)
-    new = CodebookSelector(specs, loc_dim=6, proj_dim=8)
-    new.load_state_dict(ref.state_dict())
-    loc = torch.randn(4, 6)
-    with torch.no_grad():
-        so, sn = ref(loc), new(loc)
-    for a, b in zip(so, sn):
-        for x, y in zip(a, b):
-            assert torch.equal(x, y)
 
 
 def test_selector_full_subset_recall(tiny_raw_cfg):

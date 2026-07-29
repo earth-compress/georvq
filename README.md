@@ -57,7 +57,7 @@ Working with the shipped AE codec (decode archive tiles, run the demos)
 takes five steps; full contract in `docs/AE_RELEASE.md`.
 
 ```bash
-# 1. install (an env with torch; or use the group ring-space env)
+# 1. install (any env with torch; on the group server one is already set up)
 git clone <this repo> && cd georvq
 pip install -e ".[eval,onnx]"
 
@@ -164,6 +164,6 @@ pytest -m "not slow and not gpu"   # fast suite
 pytest                             # everything (training smokes included)
 ```
 
-Tests marked `ringspace` verify numerical parity against the original
-research implementation and its trained checkpoints; they self-skip where
-that repo isn't present.
+The golden-checkpoint gate (`tests/test_compat.py`) verifies the released
+weights still decode bit-faithfully; it self-skips where the release
+bundle isn't present (`GEORVQ_AE_BUNDLE`).

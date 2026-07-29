@@ -2,19 +2,8 @@ import os
 
 import pytest
 
-RINGSPACE_DIR = "/home/ali/projects/ring-space"
-DIVFULL_CKPT = os.path.join(RINGSPACE_DIR, "checkpoints/ae_pyr64_divfull/model_best.pt")
-
-requires_ringspace = pytest.mark.ringspace
-
-
-def pytest_collection_modifyitems(config, items):
-    if os.path.isdir(RINGSPACE_DIR):
-        return
-    skip = pytest.mark.skip(reason="original research repo not present on this machine")
-    for item in items:
-        if "ringspace" in item.keywords:
-            item.add_marker(skip)
+RELEASE_BUNDLE = os.environ.get(
+    "GEORVQ_AE_BUNDLE", "/data/georvq-releases/ae-beta-v1/bundle")
 
 
 @pytest.fixture

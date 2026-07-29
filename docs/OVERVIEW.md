@@ -57,12 +57,13 @@ submodules exist. Everything is assembled from one validated `Config`
 
 ## Invariants — do not break casually
 
-1. **VQ numerics are parity-sacred.** The repo's value rests on trained
+1. **VQ numerics are sacred.** The repo's value rests on trained
    checkpoints decoding bit-faithfully. `model/vq.py` (and the quantize
-   paths in `codec.py`/`conditioning.py`) are covered by parity tests
-   against the original research implementation (`pytest -m ringspace`,
-   self-skipping where that repo is absent). Any change there must keep
-   those tests exact, not approximately equal.
+   paths in `codec.py`/`conditioning.py`) are guarded by the
+   golden-checkpoint gate (`tests/test_compat.py`: the released weights
+   must reproduce recorded reconstruction quality exactly, self-skipping
+   where the release bundle is absent). Any change there must keep that
+   test exact, not approximately equal.
 2. **State-dict names are load-bearing.** `compat.py` maps legacy
    checkpoint keys onto today's module names by prefix. Renaming modules
    or parameters breaks every existing checkpoint; if you must, extend
@@ -93,7 +94,6 @@ georvq-train -c configs/pyr64.yaml --gpu 0 log.run_tag=my_run   # train
 georvq-train -c configs/pyr64.yaml train.steps=2000 ...          # any override
 
 pytest -m "not slow and not gpu"    # fast suite (~20 s) — run on every change
-pytest -m "not slow"                # + ringspace parity (needs the research repo)
 pytest                              # + training smokes (GPU, minutes)
 
 python scripts/eval_run_ab.py --dataset <ds> --sanity identity   # eval harness sanity
