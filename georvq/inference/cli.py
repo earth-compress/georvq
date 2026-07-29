@@ -116,11 +116,17 @@ def unpack_star(packed, step, cells, dim):
 # --------------------------------------------------------------------------
 
 class TorchBackend:
-    """numpy-in / numpy-out adapter over the torch Codec."""
+    """numpy-in / numpy-out adapter over the torch Codec.
 
-    def __init__(self, model_path, device="cpu"):
+    Accepts raw int8 AE windows directly (prep runs on the device — the
+    numpy dequant+normalize was ~90 s/tile of CPU time) and runs its
+    forwards in bf16 on CUDA unless fp32=True (dcos impact: mean 1.8e-5,
+    two orders below the p50 reconstruction error)."""
+
+    def __init__(self, model_path, device="cpu", fp32=False):
         import torch
         self.torch = torch
+        self.bf16 = device.startswith("cuda") and not fp32
         if os.path.isdir(model_path):
             from georvq.inference.release import load_release
             self.codec = load_release(model_path, device)
@@ -137,13 +143,37 @@ class TorchBackend:
         from georvq.inference.release import bitstream_id
         self.bitstream_id = bitstream_id(self.codec.model)
 
+    def _ac(self):
+        import contextlib
+        return self.torch.autocast("cuda", dtype=self.torch.bfloat16) \
+            if self.bf16 else contextlib.nullcontext()
+
+    def _prep(self, arr):
+        """int8 (or prepped float) numpy -> (x, valid) device tensors."""
+        t = self.torch
+        a = t.from_numpy(np.ascontiguousarray(arr)).to(self.device)
+        if a.dtype == t.int8:
+            valid = a[:, 0] != NODATA
+            x = a.float().div_(127.5)
+            x = x.square().mul_(t.sign(x)) * valid.unsqueeze(1)
+            import torch.nn.functional as F
+            x = F.normalize(x, dim=1, eps=1e-6)
+        else:
+            x = a.float()
+            valid = x.norm(dim=1) > 0.5
+        return x, valid
+
     def encode(self, x, coarse_residual=False):
-        xt = self.torch.from_numpy(np.ascontiguousarray(x, np.float32)) \
-            .to(self.device)
+        # encoder + assignment stay fp32: bf16 latents flip ~24% of
+        # near-tie RVQ indices (quality-neutral but bitstream-unstable);
+        # bf16 buys its speed on the decoder forwards instead
+        xt, _ = self._prep(x)
         return self.codec.encode(xt, coarse_residual=coarse_residual)
 
     def decode(self, packets, depths=None, int8=False):
-        out = self.codec.decode(packets, depths).float()
+        with self._ac():
+            out = self.codec.decode(packets, depths)
+        out = out.float()
         if int8:      # requant on device: 4x less transfer, no CPU sqrt
             t = self.torch
             out = t.clamp(t.round(t.sign(out) * t.sqrt(out.abs()) * 127.5),
@@ -159,10 +189,8 @@ class TorchBackend:
         t = self.torch
         m = self.codec.model
         with t.no_grad():
-            xt = t.from_numpy(np.ascontiguousarray(x, np.float32)) \
-                .to(self.device)
-            vt = t.from_numpy(valid).to(self.device)
-            zs = m.encode_levels(xt)
+            xt, vt = self._prep(x)
+            zs = m.encode_levels(xt)      # fp32: indices stay bit-stable
             cums, idxs, res0 = [], [], None
             for ti, (z, rvq) in enumerate(zip(zs, m.rvqs)):
                 residual = z.float()
@@ -196,7 +224,9 @@ class TorchBackend:
                     zqs[0] = zqs[0] + star_q
                 Ls = t.tensor(list(pt), device=self.device)[None] \
                     .expand(xt.shape[0], -1)
-                d = 1.0 - (m.decode(zqs, Ls) * xt).sum(1)
+                with self._ac():
+                    out = m.decode(zqs, Ls)
+                d = 1.0 - (out.float() * xt).sum(1)
                 dcos[pt] = d[vt].clamp_min(1e-9).cpu().numpy()
         res_np = res0.cpu().numpy() if res0 is not None else None
         packets = [Packet(
@@ -234,7 +264,8 @@ def load_backend(args):
     if kind == "onnx":
         return OnnxBackend(args.model, device=args.device,
                            threads=getattr(args, "threads", None))
-    return TorchBackend(args.model, device=args.device)
+    return TorchBackend(args.model, device=args.device,
+                        fp32=getattr(args, "fp32", False))
 
 
 # --------------------------------------------------------------------------
@@ -423,6 +454,10 @@ def _common_args(ap):
                     help="cpu (default) or cuda[:N]")
     ap.add_argument("--threads", type=int, default=None,
                     help="onnxruntime intra-op threads (onnx backend)")
+    ap.add_argument("--fp32", action="store_true",
+                    help="run torch forwards in fp32 (default: bf16 on "
+                         "CUDA; changes dcos by ~2e-5, far below the "
+                         "reconstruction error)")
 
 
 def _check_bitstream(header, be, path):
@@ -448,25 +483,34 @@ def _parse_tuple(s, specs_sig):
     return ls
 
 
-def encode_all(be, x, valid, batch, star, want_stats):
-    """-> (packets, QualityStats|None); uses the backend's fused
-    encode+stats pass when available, else encode then generic stats."""
-    if not want_stats:
-        return _batched(lambda xb: be.encode(xb, coarse_residual=star),
-                        x, batch), None
-    ladder = quality_ladder(be.specs_sig)
+def encode_all(be, arr, valid, batch, star, want_stats):
+    """-> (packets, QualityStats|None). `arr` may be raw int8 windows
+    (preferred: torch preps on-device) or prepped float32. Uses the
+    backend's fused encode+stats pass when available, else encode then
+    generic stats."""
     if hasattr(be, "encode_and_stats"):
+        if not want_stats:
+            return _batched(
+                lambda ab: be.encode(ab, coarse_residual=star),
+                arr, batch), None
+        ladder = quality_ladder(be.specs_sig)
         qs, packets = QualityStats(ladder), []
-        for i in range(0, len(x), batch):
-            pk, dcos = be.encode_and_stats(x[i:i + batch],
+        for i in range(0, len(arr), batch):
+            pk, dcos = be.encode_and_stats(arr[i:i + batch],
                                            valid[i:i + batch], ladder,
                                            coarse_residual=star)
             packets += pk
             for pt, d in dcos.items():
                 qs.add(pt, d)
         return packets, qs
-    packets = _batched(lambda xb: be.encode(xb, coarse_residual=star),
-                       x, batch)
+    # generic backend: needs prepped float input
+    def _prep_b(ab):
+        return prep_ae_np(ab)[0] if ab.dtype == np.int8 else ab
+    packets = _batched(
+        lambda ab: be.encode(_prep_b(ab), coarse_residual=star), arr, batch)
+    if not want_stats:
+        return packets, None
+    x = _prep_b(arr) if arr.dtype == np.int8 else arr
     return packets, collect_stats(be, x, valid, packets, batch)
 
 
@@ -636,18 +680,19 @@ def codec_patch_main(argv=None):
     if args.cmd == "encode":
         a = _load_windows(args.input, be.window, be.bands)
         if a.dtype == np.int8:
-            x, valid = prep_ae_np(a)
+            valid = a[:, 0] != NODATA      # prep itself runs on-device
             check_fill(a, valid)
+            arr = a
         else:
-            x = a.astype(np.float32)
+            arr = a.astype(np.float32)
             # float input: invalid pixels are the (near-)zero vectors the
             # prep convention produces for nodata
-            valid = np.linalg.norm(x, axis=1) > 0.5
+            valid = np.linalg.norm(arr, axis=1) > 0.5
         keep = valid.any((1, 2))     # fully-nodata windows are not encoded
         star = not args.no_coarse_residual
-        packets, qs = encode_all(be, x[keep], valid[keep], args.batch,
+        packets, qs = encode_all(be, arr[keep], valid[keep], args.batch,
                                  star, not args.no_stats)
-        hdr = {"kind": "patch", "window": be.window, "n_total": len(x),
+        hdr = {"kind": "patch", "window": be.window, "n_total": len(arr),
                "bitstream_id": be.bitstream_id, "nodata_fill": NODATA}
         if qs is not None:
             hdr["quality_stats"] = qs.summary(
@@ -829,20 +874,9 @@ def codec_tile_main(argv=None):
         keep = (wins[:, 0] != NODATA).any((1, 2))   # skip fully-nodata wins
         kept = np.nonzero(keep)[0]
         star = not args.no_coarse_residual
-        want_stats = not args.no_stats
-        qs = QualityStats(quality_ladder(be.specs_sig)) if want_stats \
-            else None
-        packets = []                 # prep floats one batch at a time
-        for i in range(0, len(kept), args.batch):
-            xb, vb = prep_ae_np(wins[kept[i:i + args.batch]])
-            pk, dcos = encode_all(be, xb, vb, args.batch, star, want_stats)
-            packets += pk
-            if dcos is not None:
-                for pt in dcos.h:
-                    qs.h[pt] += dcos.h[pt]
-                    dst, src = qs.acc[pt], dcos.acc[pt]
-                    dst[0] += src[0]; dst[1] += src[1]
-                    dst[2] = max(dst[2], src[2])
+        wk = wins[kept]              # int8; prep runs on-device per batch
+        packets, qs = encode_all(be, wk, wk[:, 0] != NODATA, args.batch,
+                                 star, not args.no_stats)
         hdr = {"kind": "tile", "window": W, "grid": [gh, gw],
                "shape": [C, H, Wd], "geo": geo,
                "bitstream_id": be.bitstream_id, "nodata_fill": NODATA}
