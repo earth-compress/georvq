@@ -69,11 +69,14 @@ We look at a 1024 px crop through the lens of its top principal
 components — PCA is fit once on the original and reused for every
 reconstruction below, so colors are comparable throughout.""")
 
-code("""CROP = (3072, 4096)                          # row, col of a 1024px crop
+code("""CROP = (3072, 4096)          # row, col of a 1024px crop, NORTH-UP frame
 os.environ["GDAL_NUM_THREADS"] = "ALL_CPUS"
 with rasterio.open(TILE) as ds:
-    raw = ds.read(window=Window(CROP[1], CROP[0], 1024, 1024))
-    bottom_up = ds.transform.e > 0
+    bottom_up = ds.transform.e > 0           # AEF tiles store rows south-up
+    # the codec assets are north-up; convert the north-up crop row to the
+    # file's row offset so original and decoded panels show the SAME ground
+    row_off = ds.height - CROP[0] - 1024 if bottom_up else CROP[0]
+    raw = ds.read(window=Window(CROP[1], row_off, 1024, 1024))
 if bottom_up:                                # model convention: north-up
     raw = raw[:, ::-1, :]
 x0, valid0 = prep_ae_np(raw[None].astype(np.int8))
