@@ -1,6 +1,6 @@
 # Further reading: architecture + file-by-file guide
 
-A colleague-friendly tour. Shorter orientation: `docs/OVERVIEW.md`
+Shorter orientation available at: `docs/OVERVIEW.md`
 (invariants, personas). The shipped AlphaEarth codec's contract:
 `docs/AE_RELEASE.md`. Empirical design history: `docs/FINDINGS.md`.
 Live demo: `notebooks/demo_ae_codec.ipynb`.
@@ -169,7 +169,7 @@ and `docs/AE_RELEASE.md`).
 | file | what it is |
 |---|---|
 | `codec.py` | `PyramidCodec`: composition root (stem → tokenizer → RVQs → decoder), monotone depth sampling, `level_cumsums`/`eval_tuple` (encode once, decode any rate), `quantize()` as the single routing point for plain/skip-masked/cascade/gated paths. |
-| `vq.py` | **Parity-sacred.** `VectorQuantizer`/`ResidualVQ`: EMA codebooks, k-means init, dead-code resets (batch/split/fps), repulsion, bf16 assignment scores. VQ state stays fp32 under autocast. |
+| `vq.py` | `VectorQuantizer`/`ResidualVQ`: EMA codebooks, k-means init, dead-code resets (batch/split/fps), repulsion, bf16 assignment scores. VQ state stays fp32 under autocast. |
 | `tokenizer.py` | `ViTTokenizer`: conv patch embeds per tier + transformer trunk; CLS token is the coarse tier. |
 | `decoder.py` | `PyramidAttnDecoder` (AdaLN-Zero blocks over all tier tokens, depth-tuple/sigma conditioning, optional cls-bridge lineage concat) + `DenseHead` (patch projection + conv seam smoothing + optional per-pixel L2 norm). |
 | `layers.py` | Shared blocks: `AdaLNBlock`, `thermometer` depth encoding, sigma embedding. |

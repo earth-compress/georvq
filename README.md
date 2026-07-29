@@ -90,15 +90,9 @@ for multi-TB stores). Builders: `scripts/build_store_ae.py`,
 
 ## Ship
 
-```bash
-python scripts/build_archive.py --ckpt checkpoints/my_run/model_best.pt \
-    --store-dir /data/my-store --out /data/archives/my_run
-python scripts/bench_decode.py --ckpt checkpoints/my_run/model_best.pt
-```
-
 Release bundles (`georvq.inference.release`) are self-contained
-directories (weights + config + CDFs + stats basis + bitstream id) that
-decode anywhere georvq is installed:
+directories (weights + embedded config + `bitstream_id`) that decode
+anywhere georvq is installed:
 
 ```python
 from georvq.inference.release import load_release
@@ -106,12 +100,27 @@ codec = load_release("releases/my_run", device="cuda")
 xhat = codec.decode(codec.encode(x), depths=[8, 4, 2])
 ```
 
+On top of the generic machinery, each shipped source gets its own
+**release layer** with source-appropriate containers and executables.
+The AlphaEarth release (`georvq/ae/`, `docs/AE_RELEASE.md`) turns a
+2.25 GB source tile into ~58 MB of georeferenced COG assets with
+progressive rate, quality-controlled decode against encode-time
+measured error stats, and torch-free ONNX decoding:
+
+```bash
+georvq-ae-tile encode --model <bundle> src.tiff out_dir/
+georvq-ae-tile decode --model <bundle> out_dir/ recon.tiff --quality "p90<=0.02"
+```
+
 ## Docs
 
-- `docs/OVERVIEW.md` — codebase map, invariants, and working knowledge
+- `docs/OVERVIEW.md` — codebase map, invariants, personas, working knowledge
+- `docs/FURTHER_READING.md` — architecture explainer + file-by-file guide
+- `docs/AE_RELEASE.md` — the shipped AlphaEarth codec's complete contract
 - `docs/ADDING_A_SOURCE.md` — the plug-point for new datasets
-- `docs/BITSTREAM.md` — packet/archive format, decoder-upgrade contract
+- `docs/BITSTREAM.md` — what defines a bitstream; decoder-upgrade contract
 - `docs/FINDINGS.md` — the empirical results behind the design choices
+- `docs/PARKED.md` — validated-but-deferred ideas, with their evidence
 
 ## Tests
 

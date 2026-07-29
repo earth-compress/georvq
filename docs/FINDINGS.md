@@ -69,3 +69,37 @@ strong priors, not laws.
 - If a source is upsampled onto a finer grid (period-N pixel structure),
   phase-aligned cropping lets the model reproduce the high-frequency
   structure instead of averaging it.
+
+## Release engineering (AlphaEarth cycle, 2026-07)
+
+- **Entropy coding on healthy codebooks doesn't pay.** Order-0 rANS:
+  ~0.6% over npz-deflated raw indices on real tiles (fine tier at ~95%
+  of codebook entropy; deflate strips the uint16 padding to ~13.4
+  effective bits of 14) — while dominating decode time. The remaining
+  gap is cross-tier context (~-22% measured by probes), which needs the
+  learned context model, not a better static coder.
+- **The rate ladder is extremely asymmetric** (coarse 11 / mid 208 /
+  fine 3,584 bits per level): the measured Pareto front always
+  saturates coarse, then mid, then adds fine levels. Hand-picked
+  "balanced" tuples like 6-4-4 are strictly dominated.
+- **The coarse quantizer gap carries the outlier tail.** Worst-0.1%
+  pixels under full-depth decode are coarse-codebook misses (rare land
+  covers; window-scale bias), correlated 0.74 with the coarse residual
+  norm — and a 2-bit scalar-quantized residual sidecar (66 B/window,
+  per-window scale) recovers ~98% of the gap *including the tail*.
+  Mid/fine residual sidecars are worthless-to-harmful: those codebooks
+  sit at their ceiling, and downstream books were trained on quantized
+  upstream residuals (feeding them unquantized input is off-manifold).
+- **bf16 belongs on decoder forwards only.** bf16 encoder latents flip
+  ~24% of near-tie RVQ indices (quality-neutral but bitstream-unstable
+  across runs/hardware); fp32 encoder + bf16 decoder keeps indices
+  bit-stable at ~95% of the speed win.
+- **Cheap decoders hit a quality wall.** Tier-subset decoders with
+  low-res heads + bilinear upsampling (0.76M/4.25M params) run 17-28x
+  faster but land 0.006-0.1 cos below the 31M trunk at matched rate —
+  parked below the release bar (`docs/PARKED.md`).
+- **Encoder-side self-measurement is nearly free and very valuable**:
+  decoding the rate ladder during encode (fused pass: shared encode +
+  cumsums, ~2x the base encode cost) yields per-blob and per-window true
+  error stats that make quality-controlled delivery possible with no
+  predictor network.
