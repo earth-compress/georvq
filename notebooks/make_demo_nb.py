@@ -43,7 +43,7 @@ import rasterio
 from rasterio.windows import Window
 
 sys.path.insert(0, "..")                     # georvq (run from notebooks/)
-from georvq.inference.cli import TorchBackend, prep_ae_np, unpack_star
+from georvq.ae.cli import TorchBackend, prep_ae_np, unpack_star
 from georvq.inference.api import Packet
 
 # ---- config ----------------------------------------------------------
@@ -106,7 +106,7 @@ A100; add `--no-stats` for ~35 s.""")
 
 code("""t0 = time.time()
 if not os.path.exists(f"{ASSETS}/metadata.json"):
-    subprocess.run([sys.executable, "-m", "georvq.inference.cli", "tile",
+    subprocess.run([sys.executable, "-m", "georvq.ae.cli", "tile",
                     "encode", "--model", BUNDLE, "--device", DEVICE,
                     "--batch", "256", TILE, ASSETS],
                    check=True, cwd="..")
@@ -240,15 +240,16 @@ class RangeHandler(BaseHTTPRequestHandler):
         self.wfile.write(data)
         WIRE["bytes"] += len(data); WIRE["reqs"] += 1
 
-srv = ThreadingHTTPServer(("127.0.0.1", 8899), RangeHandler)
+srv = ThreadingHTTPServer(("127.0.0.1", 0), RangeHandler)   # OS-assigned port
+PORT = srv.server_address[1]
 threading.Thread(target=srv.serve_forever, daemon=True).start()
 CB = [0]
 def remote():                                # fresh prefix -> cold cache
     CB[0] += 1
-    return f"/vsicurl/http://127.0.0.1:8899/cb{CB[0]}"
+    return f"/vsicurl/http://127.0.0.1:{PORT}/cb{CB[0]}"
 GDAL_ENV = rasterio.Env(GDAL_DISABLE_READDIR_ON_OPEN="EMPTY_DIR",
                         CPL_VSIL_CURL_ALLOWED_EXTENSIONS=".tif")
-print("range server up on :8899")""")
+print(f"range server up on :{PORT}")""")
 
 code("""# --- rate control: a 1024px viewport at browse quality (8-8-0) -------
 WIRE.update(bytes=0, reqs=0)
@@ -264,7 +265,7 @@ code("""# --- quality control: cheapest point with p90 <= 0.02 ----------------
 import urllib.request
 WIRE.update(bytes=0, reqs=0)
 meta = json.loads(urllib.request.urlopen(
-    f"http://127.0.0.1:8899/cb0/metadata.json").read())
+    f"http://127.0.0.1:{PORT}/cb0/metadata.json").read())
 stats = meta["quality_stats"]
 point = min((v["bits"], k) for k, v in stats.items()
             if v["p90"] <= 0.02)[1]
