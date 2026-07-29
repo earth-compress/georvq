@@ -118,9 +118,10 @@ def export_onnx(model, out_dir, opset=17):
 # numpy RVQ (backend-shared math)
 # --------------------------------------------------------------------------
 
-def rvq_assign_np(z, books):
+def rvq_assign_np(z, books, return_residual=False):
     """z: (B, cells, dim) fp32; books: list of (K, dim) codebooks.
-    Greedy residual assignment -> (B, cells, depth) int64 indices."""
+    Greedy residual assignment -> (B, cells, depth) int64 indices
+    (+ the final residual when return_residual)."""
     residual = np.ascontiguousarray(z, dtype=np.float32)
     idxs = []
     for cb in books:
@@ -129,7 +130,8 @@ def rvq_assign_np(z, books):
         idx = d.argmin(-1)
         residual = residual - cb[idx]
         idxs.append(idx)
-    return np.stack(idxs, -1)
+    out = np.stack(idxs, -1)
+    return (out, residual) if return_residual else out
 
 
 def rvq_lookup_np(indices, books, L=None):
@@ -177,13 +179,20 @@ class OnnxCodec:
         self.dec = ort.InferenceSession(
             os.path.join(export_dir, DECODER_NAME), opts, providers=providers)
 
-    def encode(self, x) -> list[Packet]:
-        """x: (B, C, W, W) float32 prepared input -> full-depth Packets."""
+    def encode(self, x, coarse_residual=False) -> list[Packet]:
+        """x: (B, C, W, W) float32 prepared input -> full-depth Packets
+        (optionally with the tier-0 post-quantization residual, 8*)."""
         x = np.ascontiguousarray(x, dtype=np.float32)
         zs = self.enc.run(None, {"x": x})
-        stacked = [rvq_assign_np(z, books)
-                   for z, books in zip(zs, self.books)]
-        return [Packet(indices=[t[b] for t in stacked])
+        stacked, res0 = [], None
+        for t, (z, books) in enumerate(zip(zs, self.books)):
+            if t == 0 and coarse_residual:
+                idx, res0 = rvq_assign_np(z, books, return_residual=True)
+            else:
+                idx = rvq_assign_np(z, books)
+            stacked.append(idx)
+        return [Packet(indices=[t[b] for t in stacked],
+                       coarse_residual=res0[b] if res0 is not None else None)
                 for b in range(x.shape[0])]
 
     def decode(self, packets: list[Packet], depths=None):
@@ -194,6 +203,10 @@ class OnnxCodec:
         for i, (books, L) in enumerate(zip(self.books, depths)):
             idx = np.stack([np.asarray(p.indices[i]) for p in packets])
             feeds[f"zq{i}"] = rvq_lookup_np(idx, books, L)
+        if depths[0] == self.tiers[0]["depth"] \
+                and packets[0].coarse_residual is not None:
+            feeds["zq0"] = feeds["zq0"] + np.stack(
+                [p.coarse_residual for p in packets]).astype(np.float32)
         feeds["Ls"] = np.tile(np.asarray(depths, np.int64),
                               (len(packets), 1))
         return self.dec.run(None, feeds)[0]

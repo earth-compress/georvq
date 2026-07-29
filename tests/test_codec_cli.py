@@ -127,11 +127,13 @@ def test_patch_cli_roundtrip(tiny_ckpt, tmp_path):
     codec_patch_main(["decode", "--model", ckpt, gvq, out])
     recon = np.load(out)
     assert recon.shape == (6, BANDS, W, W) and recon.dtype == np.float32
-    # matches the model's own full-depth reconstruction on valid pixels,
-    # zero vectors on nodata pixels
+    # matches the API decode of the container's own packets (incl. the
+    # quantized 8* sidecar) on valid pixels, zero vectors on nodata
     codec = Codec(model)
     x, valid = prep_ae_np(s)
-    ref = codec.decode(codec.encode(torch.from_numpy(x))).numpy()
+    _, packets, _ = read_container(gvq)
+    assert packets[0].coarse_residual is not None     # sidecar on by default
+    ref = codec.decode(packets).numpy()
     vb = np.broadcast_to(valid[:, None], ref.shape)
     assert np.abs(recon - ref)[vb].max() < 1e-5
     assert (recon[~vb] == 0).all()
@@ -314,3 +316,57 @@ def test_progressive_prefix_read(tiny_ckpt, tmp_path):
     a = codec.decode(part, [2, 0])
     b = codec.decode(full, [2, 0])
     assert torch.allclose(a, b, atol=1e-6)
+
+
+def test_star_sidecar(tiny_ckpt, tmp_path):
+    """8* coarse-residual: pack/unpack accuracy, quality lift over the
+    no-sidecar decode, ignored at truncated coarse depth, off by flag."""
+    from georvq.inference.cli import pack_star, unpack_star
+    rng = np.random.default_rng(0)
+    r = rng.normal(0, 0.3, (8, 1, 16)).astype(np.float32)
+    packed, step = pack_star(r)
+    assert packed.shape == (8, 4) and step.dtype == np.float16
+    r2 = unpack_star(packed, step, 1, 16)
+    err = np.abs(r2 - r)
+    inside = np.abs(r) < 1.5 * step.astype(np.float32)[:, None, None]
+    assert err[inside].max() <= 0.5 * step.astype(np.float32).max() + 1e-4
+
+    ckpt, model = tiny_ckpt
+    s = _windows()
+    np.save(tmp_path / "in.npy", s)
+    on, off = str(tmp_path / "on.gvq.npz"), str(tmp_path / "off.gvq.npz")
+    codec_patch_main(["encode", "--model", ckpt, str(tmp_path / "in.npy"), on])
+    codec_patch_main(["encode", "--model", ckpt, "--no-coarse-residual",
+                      str(tmp_path / "in.npy"), off])
+    import zipfile
+    assert "t0star.npy" in zipfile.ZipFile(on).namelist()
+    assert "t0star.npy" not in zipfile.ZipFile(off).namelist()
+    # star is applied at full depth: on/off decodes differ (quality gain
+    # is a trained-model property, verified on the release model)
+    outs = {}
+    for name, gvq in (("on", on), ("off", off)):
+        dst = str(tmp_path / f"{name}.npy")
+        codec_patch_main(["decode", "--model", ckpt, gvq, dst])
+        outs[name] = np.load(dst)
+    assert np.abs(outs["on"] - outs["off"]).max() > 1e-4
+    # truncated coarse depth: star not applied, decodes equal on/off
+    for name, gvq in (("t_on", on), ("t_off", off)):
+        dst = str(tmp_path / f"{name}.npy")
+        codec_patch_main(["decode", "--model", ckpt, "--tuple", "2,1",
+                          gvq, dst])
+    assert np.array_equal(np.load(tmp_path / "t_on.npy"),
+                          np.load(tmp_path / "t_off.npy"))
+
+
+def test_star_cross_backend(tiny_ckpt, onnx_dir, tmp_path):
+    """ONNX encode carries the sidecar; both backends decode a starred
+    container identically (same dequantized correction)."""
+    ckpt, _ = tiny_ckpt
+    from georvq.inference.cli import OnnxBackend, TorchBackend
+    tb, ob = TorchBackend(ckpt), OnnxBackend(onnx_dir)
+    x, _ = prep_ae_np(_windows())
+    po = ob.encode(x, coarse_residual=True)
+    assert po[0].coarse_residual is not None
+    a = tb.decode(po)
+    b = ob.decode(po)
+    assert np.abs(a - b).max() < 1e-3

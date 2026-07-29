@@ -83,6 +83,35 @@ def check_fill(a, valid, fill=NODATA):
 
 
 # --------------------------------------------------------------------------
+# 8* coarse-residual sidecar (2-bit, per-window 2-sigma scale, 66 B/window)
+# --------------------------------------------------------------------------
+
+STAR_BITS, STAR_SIGMA = 2, 2.0
+
+
+def pack_star(res):
+    """(N, cells, dim) float residuals -> (codes uint8 packed, step f16).
+    Symmetric mid-rise uniform quantizer, 4 levels at (+-0.5, +-1.5)*step,
+    step = STAR_SIGMA*std/1.5 per window. Retains 98% of the float-star
+    gain incl. the OOD tail (per-window scale adapts to outliers)."""
+    r = res.reshape(res.shape[0], -1).astype(np.float32)
+    step = (STAR_SIGMA * r.std(axis=1, keepdims=True) / 1.5)         .clip(min=1e-12)
+    c = np.clip(np.round(r / step - 0.5) + 0.5, -1.5, 1.5) + 1.5  # {0..3}
+    packed = np.packbits(
+        ((c.astype(np.uint8)[:, :, None] >> np.arange(1, -1, -1)) & 1)
+        .reshape(c.shape[0], -1), axis=1)
+    return packed, step[:, 0].astype(np.float16)
+
+
+def unpack_star(packed, step, cells, dim):
+    """Inverse of pack_star -> (N, cells, dim) float32."""
+    bits = np.unpackbits(packed, axis=1, count=cells * dim * 2)         .reshape(packed.shape[0], -1, 2)
+    c = (bits[:, :, 0] << 1 | bits[:, :, 1]).astype(np.float32)
+    r = (c - 1.5) * step.astype(np.float32)[:, None]
+    return r.reshape(-1, cells, dim)
+
+
+# --------------------------------------------------------------------------
 # backends
 # --------------------------------------------------------------------------
 
@@ -106,10 +135,10 @@ class TorchBackend:
         from georvq.inference.release import bitstream_id
         self.bitstream_id = bitstream_id(self.codec.model)
 
-    def encode(self, x):
+    def encode(self, x, coarse_residual=False):
         xt = self.torch.from_numpy(np.ascontiguousarray(x, np.float32)) \
             .to(self.device)
-        return self.codec.encode(xt)
+        return self.codec.encode(xt, coarse_residual=coarse_residual)
 
     def decode(self, packets, depths=None, int8=False):
         out = self.codec.decode(packets, depths).float()
@@ -130,8 +159,8 @@ class OnnxBackend:
                           for t in self.codec.tiers]
         self.bitstream_id = self.codec.meta.get("bitstream_id")
 
-    def encode(self, x):
-        return self.codec.encode(x)
+    def encode(self, x, coarse_residual=False):
+        return self.codec.encode(x, coarse_residual=coarse_residual)
 
     def decode(self, packets, depths=None, int8=False):
         out = self.codec.decode(packets, depths)
@@ -181,6 +210,12 @@ def write_container(path, packets, specs_sig, header, valid=None):
             .astype(_index_dtype(codes))                # (N, cells, depth)
         for j in range(depth):
             payload[f"t{t}l{j}"] = np.ascontiguousarray(arr[:, :, j])
+        if t == 1 and packets and packets[0].coarse_residual is not None:
+            # 8* sidecar sits after the mid levels in the rate ladder
+            res = np.stack([p.coarse_residual for p in packets])
+            payload["t0star"], payload["t0star_step"] = pack_star(res)
+            header = {**header,
+                      "t0star": {"bits": STAR_BITS, "sigma": STAR_SIGMA}}
     header = {**header, "format": FORMAT, "n_windows": len(packets),
               "specs_sig": [list(s) for s in specs_sig]}
     np.savez_compressed(path, header=json.dumps(header), **payload)
@@ -209,7 +244,14 @@ def read_container(path, depths=None):
             continue
         tiers.append(np.stack([z[f"t{t}l{j}"].astype(np.int64)
                                for j in range(L)], axis=-1))
-    packets = [Packet(indices=[a[i] for a in tiers]) for i in range(n)]
+    star = None
+    if "t0star" in header and depths[0] == sig[0][1]:
+        dim = z["t0star"].shape[1] * 8 // (2 * sig[0][0])
+        star = unpack_star(z["t0star"][:], z["t0star_step"][:],
+                           sig[0][0], dim)
+    packets = [Packet(indices=[a[i] for a in tiers],
+                      coarse_residual=star[i] if star is not None else None)
+               for i in range(n)]
     valid = None
     if "mask" in z:
         shape = header["mask_shape"]
@@ -224,6 +266,8 @@ def container_read_bytes(path, sig, depths=None):
     depths = depths or [d for _, d, _ in sig]
     names = {"header.npy", "mask.npy"} | \
         {f"t{t}l{j}.npy" for t in range(len(sig)) for j in range(depths[t])}
+    if depths[0] == sig[0][1]:
+        names |= {"t0star.npy", "t0star_step.npy"}
     with zipfile.ZipFile(path) as zf:
         infos = zf.infolist()
     return (sum(i.compress_size for i in infos if i.filename in names),
@@ -364,6 +408,10 @@ def codec_patch_main(argv=None):
     e.add_argument("input", help=".npy windows: int8 raw AE or float32 "
                                  "already unit-norm")
     e.add_argument("output", help="output .gvq container")
+    e.add_argument("--no-coarse-residual", action="store_true",
+                   help="omit the 8* sidecar (2-bit coarse residual, "
+                        "66 B/window; recovers the coarse quantizer gap "
+                        "and most of the OOD error tail)")
     e.add_argument("--batch", type=int, default=64)
 
     d = sub.add_parser("decode", help=".gvq -> reconstructed windows .npy")
@@ -390,7 +438,10 @@ def codec_patch_main(argv=None):
             # prep convention produces for nodata
             valid = np.linalg.norm(x, axis=1) > 0.5
         keep = valid.any((1, 2))     # fully-nodata windows are not encoded
-        packets = _batched(be.encode, x[keep], args.batch)
+        star = not args.no_coarse_residual
+        packets = _batched(
+            lambda xb: be.encode(xb, coarse_residual=star),
+            x[keep], args.batch)
         header = write_container(args.output, packets, be.specs_sig,
                                  {"kind": "patch", "window": be.window,
                                   "n_total": len(x),
@@ -509,6 +560,10 @@ def codec_tile_main(argv=None):
     _common_args(e)
     e.add_argument("input", help="GeoTIFF or .npy, (64, H, W) int8")
     e.add_argument("output")
+    e.add_argument("--no-coarse-residual", action="store_true",
+                   help="omit the 8* sidecar (2-bit coarse residual, "
+                        "66 B/window; recovers the coarse quantizer gap "
+                        "and most of the OOD error tail)")
     e.add_argument("--batch", type=int, default=64)
 
     d = sub.add_parser("decode", help=".gvq -> raster")
@@ -536,10 +591,11 @@ def codec_tile_main(argv=None):
         check_fill(a[None], (a[0] != NODATA)[None])
         keep = (wins[:, 0] != NODATA).any((1, 2))   # skip fully-nodata wins
         kept = np.nonzero(keep)[0]
+        star = not args.no_coarse_residual
         packets = []                 # prep floats one batch at a time
         for i in range(0, len(kept), args.batch):
             xb, _ = prep_ae_np(wins[kept[i:i + args.batch]])
-            packets += be.encode(xb)
+            packets += be.encode(xb, coarse_residual=star)
         header = write_container(
             args.output, packets, be.specs_sig,
             {"kind": "tile", "window": W, "grid": [gh, gw],

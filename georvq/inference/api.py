@@ -24,6 +24,11 @@ class Packet:
     indices: list  # per tier: (cells, depth) int64 ndarray
     loc: Optional[np.ndarray] = None      # location embedding (conditioned models)
     stats: Optional[bytes] = None         # packed normalization stats
+    coarse_residual: Optional[np.ndarray] = None  # 8*: (cells, dim) float
+    # residual of the coarse tier after its full RVQ depth. Optional
+    # refinement ("8*"): decoders add it to the coarse tokens when the
+    # coarse tier is decoded at full depth; it recovers the coarse
+    # quantizer gap, which measurably carries the OOD error tail.
 
 
 def load_codec(ckpt_path, device="cpu"):
@@ -51,12 +56,19 @@ class Codec:
     # ---- encode ----
 
     @torch.no_grad()
-    def encode(self, x, loc=None) -> list[Packet]:
+    def encode(self, x, loc=None, coarse_residual=False) -> list[Packet]:
         """x: (B, C, W, W) prepared model-space input -> one Packet per
-        window, at full depth (truncate at decode time for lower rates)."""
+        window, at full depth (truncate at decode time for lower rates).
+        coarse_residual: also carry the tier-0 post-quantization residual
+        (the 8* refinement; plain models only)."""
         m = self.model
         zs = m.encode_levels(x)
         B = x.shape[0]
+        if coarse_residual and (m.selector is not None
+                                or m.conditioner is not None):
+            raise NotImplementedError(
+                "coarse_residual is supported for plain codecs only")
+        res0 = None
         if m.selector is not None:
             scores = m.selector(loc)
             idxs = [m.rvqs[i].all_levels_gated(z.float(), scores[i],
@@ -67,7 +79,7 @@ class Codec:
                 m.rvqs, self.specs, [z.float() for z in zs], loc)
         else:
             idxs = []
-            for z, rvq in zip(zs, m.rvqs):
+            for t, (z, rvq) in enumerate(zip(zs, m.rvqs)):
                 residual = z.float()
                 per = []
                 for lev in rvq.levels:
@@ -75,12 +87,15 @@ class Codec:
                     residual = residual - q
                     per.append(idx)
                 idxs.append(per)
+                if t == 0 and coarse_residual:
+                    res0 = residual.cpu().numpy()
         # idxs: per tier, list of depth (B, cells) tensors -> (B, cells, depth)
         stacked = [torch.stack(per, -1).cpu().numpy() for per in idxs]
         loc_np = (loc.cpu().numpy() if isinstance(loc, torch.Tensor)
                   else loc) if loc is not None else None
         return [Packet(indices=[t[b] for t in stacked],
-                       loc=loc_np[b] if loc_np is not None else None)
+                       loc=loc_np[b] if loc_np is not None else None,
+                       coarse_residual=res0[b] if res0 is not None else None)
                 for b in range(B)]
 
     # ---- decode ----
@@ -114,6 +129,12 @@ class Codec:
             return m.decode(zqs, Ls)
         for rvq, tier_idx, L in zip(m.rvqs, idx, depths):
             zqs.append(self._lookup(rvq, tier_idx, L))
+        # 8*: add the coarse residual when the coarse tier is at full depth
+        if depths[0] == self.specs[0].depth \
+                and packets[0].coarse_residual is not None:
+            star = torch.from_numpy(
+                np.stack([p.coarse_residual for p in packets])).to(dev)
+            zqs[0] = zqs[0] + star
         Ls = torch.tensor(depths, device=dev)[None].expand(B, -1)
         return m.decode(zqs, Ls)
 
