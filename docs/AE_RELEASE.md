@@ -71,11 +71,24 @@ for the same read).
   recovers the coarse quantizer gap and most of the OOD error tail
   (worst-0.1% pixel median 0.035 -> 0.009) for +1.5% rate.
 
-**Getting the model**: weights are deliberately not in git. On the
-group server the release lives at `/data/georvq-releases/ae-beta-v1/`
-(`bundle/` for torch, `onnx/` for torch-free; notebooks and examples
-default to it, override with `GEORVQ_AE_BUNDLE`). Remote distribution
-(HF Hub registry keyed by bitstream_id) is planned.
+**Getting the model**: weights are deliberately not in git.
+
+- *On the group server*: `/data/georvq-releases/ae-beta-v1/`
+  (`bundle/` for torch, `onnx/` for torch-free). Notebooks and examples
+  default to it; override with `GEORVQ_AE_BUNDLE`.
+- *Elsewhere*: download `ae-beta-v1.tar.gz` (524 MB) — link in the repo
+  README / from Ali — then:
+
+  ```bash
+  sha256sum -c <<< "d535fe3c692327acbafcfd8816be9d776d4596fe02ea18e6963759fbbbf969b5  ae-beta-v1.tar.gz"
+  tar xzf ae-beta-v1.tar.gz && export GEORVQ_AE_BUNDLE=$PWD/ae-beta-v1/bundle
+  ```
+
+  Verify the checksum before use — `bundle/model.pt` is a torch pickle
+  (arbitrary code on load); the `onnx/` directory is the no-torch,
+  no-pickle alternative and is all that decoding requires.
+- Proper remote distribution (HF Hub registry keyed by bitstream_id) is
+  the planned replacement for the download link.
 
 ```bash
 georvq-ae-tile encode --model <bundle> --device cuda src.tiff out_dir/
