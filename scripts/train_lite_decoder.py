@@ -9,9 +9,8 @@ only — docs/BITSTREAM.md):
   medium  tiers 0+1          head at 16px -> bilinear x4  -> 64px
 
 Each dropped tier drops the head resolution 4x; the pixel result comes
-from interpolation + per-pixel renorm. Inputs are pre-encoded window
-indices (the deblock cache: scripts/cache_ae_windows.py in ring-space,
-encoded with the released ae_pyr64_divfull weights), so the encoder
+from interpolation + per-pixel renorm. Inputs come from a pre-encoded
+window-index cache (encoded with the released weights), so the encoder
 never runs — codebook lookup + tiny decoder per step.
 
 Usage:

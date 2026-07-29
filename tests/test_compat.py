@@ -1,26 +1,26 @@
-"""Legacy-checkpoint gate: the flagship trained model must load strict and
-reproduce its recorded reconstruction quality exactly."""
+"""Golden-checkpoint gate: the released model must load strict and
+reproduce its recorded reconstruction quality exactly (bit-faithful
+decode is the repo's core promise)."""
 import os
 
 import numpy as np
 import pytest
 import torch
 
-from tests.conftest import DIVFULL_CKPT
-
-pytestmark = pytest.mark.ringspace
+from tests.conftest import RELEASE_BUNDLE
 
 GOLDEN = os.path.join(os.path.dirname(__file__), "golden/divfull_val_tokens.npz")
 
 
-def test_divfull_loads_and_reproduces():
-    if not os.path.exists(DIVFULL_CKPT):
-        pytest.skip("flagship checkpoint not on this machine")
-    from georvq.compat import from_legacy_checkpoint
+def test_release_loads_and_reproduces():
+    ckpt = os.path.join(RELEASE_BUNDLE, "model.pt")
+    if not os.path.exists(ckpt):
+        pytest.skip("release weights not present (set GEORVQ_AE_BUNDLE)")
+    from georvq.factory import from_checkpoint
     from georvq.metrics import masked_recon_stats
-    from georvq.sources.ae import NODATA
 
-    model, cfg = from_legacy_checkpoint(DIVFULL_CKPT, device="cpu")
+    model = from_checkpoint(ckpt, "cpu")
+    cfg = model.full_config
     assert cfg.model.window == 64 and len(cfg.model.tiers) == 3
     # reference cosines were recorded with fp32 assignment
     for rvq in model.rvqs:

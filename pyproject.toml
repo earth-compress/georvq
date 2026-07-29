@@ -48,6 +48,5 @@ include = ["georvq*"]
 markers = [
     "slow: long-running tests (training smokes)",
     "gpu: requires a CUDA device",
-    "ringspace: requires the ring-space repo and its checkpoints/data on this machine",
 ]
 testpaths = ["tests"]

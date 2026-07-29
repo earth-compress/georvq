@@ -10,8 +10,9 @@ provenance, and practical gotchas.
 - Verify changes with `pytest -m "not slow and not gpu"` (~20 s). Prefer
   `configs/smoke.yaml` or a few-hundred-step override run over long
   training runs.
-- Never edit `georvq/model/vq.py` numerics without keeping the
-  `-m ringspace` parity tests exact.
+- Never edit `georvq/model/vq.py` numerics: trained checkpoints must
+  decode bit-faithfully forever (the golden-checkpoint gate in
+  `tests/test_compat.py` must stay exact).
 - Configs are pydantic-validated (`extra="forbid"`); anything affecting a
   run belongs in the `Config` schema.
 - `georvq/ae/` is the AlphaEarth *release layer* (source-specific
