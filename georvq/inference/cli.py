@@ -812,14 +812,15 @@ def _write_tile(path, a, geo, int8, fill=NODATA):
 def codec_tile_main(argv=None):
     ap = argparse.ArgumentParser(
         description="Tile-wise AlphaEarth codec: a full raster (GeoTIFF or "
-                    ".npy, (64, H, W) int8) is tiled into windows, encoded "
-                    "into one .gvq archive, and stitched back on decode.")
+                    ".npy, (64, H, W) int8) is encoded into a directory of "
+                    "georeferenced COG assets (per-tier index rasters, "
+                    "1024px-aligned blocks) and stitched back on decode.")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    e = sub.add_parser("encode", help="raster -> .gvq")
+    e = sub.add_parser("encode", help="raster -> COG asset directory")
     _common_args(e)
     e.add_argument("input", help="GeoTIFF or .npy, (64, H, W) int8")
-    e.add_argument("output")
+    e.add_argument("output", help="output asset directory")
     e.add_argument("--no-coarse-residual", action="store_true",
                    help="omit the 8* sidecar (2-bit coarse residual, "
                         "66 B/window; recovers the coarse quantizer gap "
@@ -829,23 +830,25 @@ def codec_tile_main(argv=None):
                         "dcos summaries in the header + .stats.json)")
     e.add_argument("--batch", type=int, default=64)
 
-    d = sub.add_parser("decode", help=".gvq -> raster")
+    d = sub.add_parser("decode", help="COG asset directory -> raster")
     _common_args(d)
-    d.add_argument("input")
+    d.add_argument("input", help="asset directory (from encode)")
     d.add_argument("output", help=".npy or .tif")
     d.add_argument("--tuple", default=None,
                    help="rate-control decode: depth tuple (default: full)")
     _quality_arg(d)
 
-    i = sub.add_parser("info", help="print a blob's header + quality stats")
-    i.add_argument("input")
+    i = sub.add_parser("info", help="print a tile's metadata + quality "
+                                    "stats")
+    i.add_argument("input", help="asset directory")
     d.add_argument("--float32", action="store_true",
                    help="write float32 unit-norm instead of AE int8")
     d.add_argument("--batch", type=int, default=64)
     args = ap.parse_args(argv)
 
     if args.cmd == "info":
-        header = _read_header(args.input)
+        from georvq.inference.cog import read_meta
+        header = read_meta(args.input)
         stats = header.pop("quality_stats", None)
         print(json.dumps(header, indent=1))
         if stats:
@@ -877,51 +880,51 @@ def codec_tile_main(argv=None):
         wk = wins[kept]              # int8; prep runs on-device per batch
         packets, qs = encode_all(be, wk, wk[:, 0] != NODATA, args.batch,
                                  star, not args.no_stats)
-        hdr = {"kind": "tile", "window": W, "grid": [gh, gw],
-               "shape": [C, H, Wd], "geo": geo,
-               "bitstream_id": be.bitstream_id, "nodata_fill": NODATA}
+        if geo is None:              # .npy input: identity georeferencing
+            geo = {"transform": [1, 0, 0, 0, 1, 0], "crs": None,
+                   "profile": None, "flipped": False}
+        geo = {**geo, "src_height": H}
+        meta = {"kind": "tile", "window": W, "grid": [gh, gw],
+                "shape": [C, H, Wd], "geo": geo,
+                "bitstream_id": be.bitstream_id, "nodata_fill": NODATA,
+                "specs_sig": [list(x) for x in be.specs_sig],
+                "star": {"bits": STAR_BITS, "sigma": STAR_SIGMA}
+                if star else None}
         if qs is not None:
-            hdr["quality_stats"] = qs.summary(
+            meta["quality_stats"] = qs.summary(
                 be.specs_sig, be.star_cost_bits if star else 0)
-            with open(args.output + ".stats.json", "w") as f:
-                json.dump(hdr["quality_stats"], f, indent=1)
-        header = write_container(args.output, packets, be.specs_sig, hdr,
-                                 valid=(a[0] != NODATA))
+        star_arrays = None
+        if star:
+            res = np.stack([p.coarse_residual for p in packets])
+            star_arrays = pack_star(res)
+        from georvq.inference.cog import write_assets
+        sizes = write_assets(args.output, packets, kept, meta,
+                             a[0] != NODATA, geo, be.specs_sig,
+                             star=star_arrays)
         skipped = int((~keep).sum())
         _report(f"encoded {H}x{Wd} ({gh}x{gw} windows"
                 f"{f', {skipped} empty skipped' if skipped else ''})",
-                header, max(len(packets), 1), W,
-                os.path.getsize(args.output), t0)
+                meta, max(len(packets), 1), W, sum(sizes.values()), t0)
     else:
         if args.quality and args.tuple:
             raise SystemExit("--tuple (rate-control) and --quality "
                              "(quality-control) are mutually exclusive")
+        from georvq.inference.cog import read_assets, read_meta
         if args.quality:
-            depths = _resolve_quality(_read_header(args.input),
+            depths = _resolve_quality(read_meta(args.input),
                                       args.quality, be.specs_sig)
         else:
             depths = _parse_tuple(args.tuple, be.specs_sig)
-        header, packets, valid = read_container(args.input, depths=depths)
-        _check_bitstream(header, be, args.input)
-        if header["kind"] != "tile":
-            raise SystemExit(f"{args.input} is a {header['kind']} container;"
-                             " use georvq-codec-patch")
+        meta, packets, kept, valid = read_assets(
+            args.input, depths=depths, expect_bitstream=be.bitstream_id)
         depths = depths or [d for _, d, _ in be.specs_sig]
-        C, H, Wd = header["shape"]
-        gh, gw = header["grid"]
-        if valid is not None:        # rebuild which windows were stored
-            padv = np.zeros((gh * W, gw * W), bool)
-            padv[:H, :Wd] = valid
-            keep = padv.reshape(gh, W, gw, W).transpose(0, 2, 1, 3) \
-                .reshape(gh * gw, W, W).any((1, 2))
-        else:
-            keep = np.ones(gh * gw, bool)
-        fill = header.get("nodata_fill", NODATA)
+        C, H, Wd = meta["shape"]
+        gh, gw = meta["grid"]
+        fill = meta.get("nodata_fill", NODATA)
         # stitch straight into one canvas, re-quantizing per batch, so a
         # full 8192^2 source tile never needs an all-float intermediate
         canvas = (np.zeros((C, gh * W, gw * W), np.float32) if args.float32
                   else np.full((C, gh * W, gw * W), fill, np.int8))
-        kept = np.nonzero(keep)[0]
         for i in range(0, len(packets), args.batch):
             dec = be.decode(packets[i:i + args.batch], depths,
                             int8=not args.float32)
@@ -929,16 +932,21 @@ def codec_tile_main(argv=None):
                 r, c = divmod(int(slot), gw)
                 canvas[:, r * W:(r + 1) * W, c * W:(c + 1) * W] = w
         a = canvas[:, :H, :Wd]
-        if valid is not None:        # restore the source's exact fill
-            if args.float32:
-                a = a * valid[None]
-            else:
-                a[np.broadcast_to(~valid[None], a.shape)] = fill
-        _write_tile(args.output, a, header.get("geo"),
+        if args.float32:             # restore the source's exact fill
+            a = a * valid[None]
+        else:
+            a[np.broadcast_to(~valid[None], a.shape)] = fill
+        _write_tile(args.output, a, meta.get("geo"),
                     int8=not args.float32, fill=fill)
-        rd, tot = container_read_bytes(args.input, be.specs_sig, depths)
-        _report(f"decoded {H}x{Wd} (tuple={depths}, read {rd/2**20:.2f} of "
-                f"{tot/2**20:.2f} MiB)", header,
+        from georvq.inference.cog import tier_names
+        rd = sum(os.path.getsize(os.path.join(args.input, f"{n}.tif"))
+                 * depths[i] / be.specs_sig[i][1]
+                 for i, n in enumerate(tier_names(len(be.specs_sig)))
+                 if depths[i] > 0)
+        tot = sum(os.path.getsize(os.path.join(args.input, f))
+                  for f in os.listdir(args.input))
+        _report(f"decoded {H}x{Wd} (tuple={depths}, ~{rd/2**20:.2f} of "
+                f"{tot/2**20:.2f} MiB)", meta,
                 len(packets), W, None, t0, depths)
 
 

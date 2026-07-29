@@ -151,43 +151,47 @@ def test_patch_cli_roundtrip(tiny_ckpt, tmp_path):
 
 
 def test_tile_cli_roundtrip(tiny_ckpt, tmp_path):
-    """A non-multiple-of-W raster pads, encodes, decodes, and unpads back
-    to shape, with nodata pixels restored exactly."""
+    """A non-multiple-of-W raster pads, encodes to COG assets, decodes,
+    and unpads back to shape, with nodata pixels restored exactly."""
+    pytest.importorskip("rasterio")
     ckpt, _ = tiny_ckpt
     rng = np.random.default_rng(0)
     H, Wd = 3 * W - 5, 2 * W + 3
     tile = rng.integers(-127, 128, (BANDS, H, Wd), dtype=np.int8)
     tile[:, :6, :9] = -128
     np.save(tmp_path / "tile.npy", tile)
-    gvq, out = str(tmp_path / "t.gvq.npz"), str(tmp_path / "rec.npy")
+    adir, out = str(tmp_path / "assets"), str(tmp_path / "rec.npy")
     codec_tile_main(["encode", "--model", ckpt,
-                     str(tmp_path / "tile.npy"), gvq])
-    header, _, valid = read_container(gvq)
-    assert header["grid"] == [3, 3] and header["shape"] == [BANDS, H, Wd]
-    assert header["nodata_fill"] == -128 and valid.shape == (H, Wd)
-    assert not valid[0, 0] and valid[10, 10]
-    codec_tile_main(["decode", "--model", ckpt, gvq, out])
+                     str(tmp_path / "tile.npy"), adir])
+    from georvq.inference.cog import read_meta
+    meta = read_meta(adir)
+    assert meta["grid"] == [3, 3] and meta["shape"] == [BANDS, H, Wd]
+    for f in ("coarse.tif", "mid.tif", "star.tif", "mask.tif",
+              "metadata.json"):
+        assert os.path.exists(os.path.join(adir, f)), f
+    codec_tile_main(["decode", "--model", ckpt, adir, out])
     rec = np.load(out)
     assert rec.shape == (BANDS, H, Wd) and rec.dtype == np.int8
     assert (rec[:, :6, :9] == -128).all()          # nodata restored
     assert (rec[0, 6:, 9:] != -128).all()
-    codec_tile_main(["decode", "--model", ckpt, "--float32", gvq, out])
+    codec_tile_main(["decode", "--model", ckpt, "--float32", adir, out])
     assert np.load(out).dtype == np.float32
 
 
 def test_tile_cli_onnx_backend_matches(tiny_ckpt, onnx_dir, tmp_path):
-    """A file encoded by torch decodes identically under the onnx backend."""
+    """Assets encoded by torch decode identically under the onnx backend."""
+    pytest.importorskip("rasterio")
     ckpt, _ = tiny_ckpt
     rng = np.random.default_rng(1)
     tile = rng.integers(-127, 128, (BANDS, 2 * W, 2 * W), dtype=np.int8)
     np.save(tmp_path / "tile.npy", tile)
-    gvq = str(tmp_path / "t.gvq.npz")
+    adir = str(tmp_path / "assets")
     codec_tile_main(["encode", "--model", ckpt,
-                     str(tmp_path / "tile.npy"), gvq])
+                     str(tmp_path / "tile.npy"), adir])
     a, b = str(tmp_path / "a.npy"), str(tmp_path / "b.npy")
-    codec_tile_main(["decode", "--model", ckpt, gvq, a])
+    codec_tile_main(["decode", "--model", ckpt, adir, a])
     codec_tile_main(["decode", "--model", onnx_dir, "--backend", "onnx",
-                     gvq, b])
+                     adir, b])
     ra, rb = np.load(a), np.load(b)
     assert (ra == rb).mean() > 0.999   # int8 quantization absorbs fp noise
 
@@ -216,17 +220,19 @@ def test_empty_windows_skipped(tiny_ckpt, tmp_path):
 
 
 def test_tile_empty_windows_skipped(tiny_ckpt, tmp_path):
+    pytest.importorskip("rasterio")
     ckpt, _ = tiny_ckpt
     rng = np.random.default_rng(2)
     tile = rng.integers(-127, 128, (BANDS, 2 * W, 2 * W), dtype=np.int8)
     tile[:, :W, :W] = -128          # top-left window entirely nodata
     np.save(tmp_path / "tile.npy", tile)
-    gvq, out = str(tmp_path / "t.gvq.npz"), str(tmp_path / "rec.npy")
+    adir, out = str(tmp_path / "assets"), str(tmp_path / "rec.npy")
     codec_tile_main(["encode", "--model", ckpt,
-                     str(tmp_path / "tile.npy"), gvq])
-    header, _, _ = read_container(gvq)
-    assert header["n_windows"] == 3         # 4 grid cells, 1 skipped
-    codec_tile_main(["decode", "--model", ckpt, gvq, out])
+                     str(tmp_path / "tile.npy"), adir])
+    from georvq.inference.cog import read_assets
+    _, packets, kept, _ = read_assets(adir)
+    assert len(packets) == 3                # 4 grid cells, 1 skipped
+    codec_tile_main(["decode", "--model", ckpt, adir, out])
     rec = np.load(out)
     assert (rec[:, :W, :W] == -128).all()
     assert (rec[:, W:, W:] != -128).all()
