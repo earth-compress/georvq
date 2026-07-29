@@ -61,11 +61,17 @@ def _northup_transform(geo, cellpx):
     return Affine(a * cellpx, b, x0, d, e * cellpx, y_top)
 
 
+QUALITY_SCALE = 1e-5     # uint16 quality bands: value * SCALE = mean dcos
+
+
 def write_assets(outdir, packets, keep, meta, valid, geo, specs_sig,
-                 star=None):
+                 star=None, quality=None):
     """packets: kept windows' Packets. keep: their slot indices in the
     (gh*gw) window grid. valid: (H, W) bool. star: (codes, step) packed
-    sidecar arrays or None. Returns per-asset sizes."""
+    sidecar arrays or None. quality: (decoder_id, ladder, win_means) —
+    per-window mean dcos per ladder point, written as a DECODER-SPECIFIC
+    asset quality/<decoder_id>.tif (other decoders — deblocked, lite —
+    publish alongside rather than overwrite). Returns per-asset sizes."""
     rasterio = _rasterio()
     os.makedirs(outdir, exist_ok=True)
     gh, gw = meta["grid"]
@@ -113,6 +119,28 @@ def write_assets(outdir, packets, keep, meta, valid, geo, specs_sig,
         sizes["star"] = write("star", sg, W)
     sizes["mask"] = write("mask",
                           valid.astype(np.uint8)[:, :, None], 1)
+    if quality is not None:
+        did, ladder, wm = quality
+        names = ["-".join(map(str, t)) for t in ladder]
+        q = np.zeros((gh, gw, len(ladder)), np.uint16)
+        for bi, t in enumerate(ladder):
+            v = np.clip(np.round(wm[t] / QUALITY_SCALE), 0, 65535)
+            plane = np.zeros(gh * gw, np.uint16)
+            plane[keep] = v.astype(np.uint16)
+            q[:, :, bi] = plane.reshape(gh, gw)
+        os.makedirs(os.path.join(outdir, "quality"), exist_ok=True)
+        sizes[f"quality/{did}"] = write(f"quality/{did}", q, W)
+        # band names + scale ride in the asset itself
+        rio = _rasterio()
+        with rio.open(os.path.join(outdir, f"quality/{did}.tif"),
+                      "r+") as ds:
+            ds.update_tags(QUALITY_SCALE=QUALITY_SCALE, DECODER_ID=did,
+                           NOTE="per-window mean dcos per ladder point")
+            for bi, n in enumerate(names):
+                ds.set_band_description(bi + 1, n)
+        meta = {**meta, "quality_rasters":
+                {**meta.get("quality_rasters", {}),
+                 did: {"points": names, "scale": QUALITY_SCALE}}}
     with open(os.path.join(outdir, META_NAME), "w") as f:
         json.dump(meta, f, indent=1)
     return sizes

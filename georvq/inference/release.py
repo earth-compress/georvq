@@ -44,6 +44,19 @@ def bitstream_id(model, stats_pca=None, cdfs_path=None) -> str:
     return h.hexdigest()[:16]
 
 
+def decoder_id(model) -> str:
+    """Identity of the decoder half (bitstream_id deliberately excludes
+    it): hashes the decoder's parameters. Decoder-specific artifacts
+    (e.g. per-window quality rasters) are keyed by this, so upgraded or
+    variant decoders publish alongside rather than overwriting."""
+    h = hashlib.sha256()
+    sd = model.decoder.state_dict()
+    for k in sorted(sd):
+        h.update(k.encode())
+        h.update(sd[k].detach().cpu().numpy().tobytes())
+    return h.hexdigest()[:16]
+
+
 def save_release(out_dir, model, cfg, step=0, cdfs_path=None,
                  stats_pca=None, notes=""):
     os.makedirs(out_dir, exist_ok=True)

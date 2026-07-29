@@ -169,6 +169,15 @@ def test_tile_cli_roundtrip(tiny_ckpt, tmp_path):
     for f in ("coarse.tif", "mid.tif", "star.tif", "mask.tif",
               "metadata.json"):
         assert os.path.exists(os.path.join(adir, f)), f
+    # decoder-specific quality raster: per-window mean dcos per point
+    import rasterio
+    from georvq.inference.cli import TorchBackend
+    did = TorchBackend(ckpt).decoder_id
+    with rasterio.open(os.path.join(adir, f"quality/{did}.tif")) as ds:
+        assert ds.count == 3 and ds.descriptions[0] == "3-1"
+        qv = ds.read() * float(ds.tags()["QUALITY_SCALE"])
+        assert (qv >= 0).all() and qv.max() < 2.0
+        assert qv[0].mean() >= qv[2].mean() - 1e-6   # deeper -> better
     codec_tile_main(["decode", "--model", ckpt, adir, out])
     rec = np.load(out)
     assert rec.shape == (BANDS, H, Wd) and rec.dtype == np.int8
@@ -431,8 +440,8 @@ def test_fused_stats_match_generic(tiny_ckpt):
     for p_, r_ in zip(pk_g, deq):
         p_.coarse_residual = r_
     qs_f = QualityStats(ladder)
-    for pt, d in dcos.items():
-        qs_f.add(pt, d)
+    for pt, (d, wm) in dcos.items():
+        qs_f.add(pt, d, win_mean=wm)
     qs_g = collect_stats(be, x, valid, pk_g, 8)
     sf = qs_f.summary(be.specs_sig, be.star_cost_bits)
     sg = qs_g.summary(be.specs_sig, be.star_cost_bits)

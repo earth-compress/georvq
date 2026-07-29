@@ -140,8 +140,9 @@ class TorchBackend:
         self.device = device
         sp0 = self.codec.specs[0]
         self.star_cost_bits = sp0.cells * sp0.dim * STAR_BITS + 16
-        from georvq.inference.release import bitstream_id
+        from georvq.inference.release import bitstream_id, decoder_id
         self.bitstream_id = bitstream_id(self.codec.model)
+        self.decoder_id = decoder_id(self.codec.model)
 
     def _ac(self):
         import contextlib
@@ -227,7 +228,9 @@ class TorchBackend:
                 with self._ac():
                     out = m.decode(zqs, Ls)
                 d = 1.0 - (out.float() * xt).sum(1)
-                dcos[pt] = d[vt].clamp_min(1e-9).cpu().numpy()
+                wm = (d * vt).sum((1, 2)) / vt.sum((1, 2)).clamp_min(1)
+                dcos[pt] = (d[vt].clamp_min(1e-9).cpu().numpy(),
+                            wm.cpu().numpy())
         res_np = res0.cpu().numpy() if res0 is not None else None
         packets = [Packet(
             indices=[a[b] for a in idxs],
@@ -245,6 +248,7 @@ class OnnxBackend:
         self.specs_sig = [(t["grid"] ** 2, t["depth"], t["codes"])
                           for t in self.codec.tiers]
         self.bitstream_id = self.codec.meta.get("bitstream_id")
+        self.decoder_id = self.codec.meta.get("decoder_id")
         t0 = self.codec.tiers[0]
         self.star_cost_bits = t0["grid"] ** 2 * t0["dim"] * STAR_BITS + 16
 
@@ -298,12 +302,19 @@ class QualityStats:
         self.ladder = ladder
         self.h = {t: np.zeros(len(self.EDGES) - 1, np.int64) for t in ladder}
         self.acc = {t: [0.0, 0, 0.0] for t in ladder}   # sum, n, max
+        self.win = {t: [] for t in ladder}   # per-window mean dcos chunks
 
-    def add(self, t, d):
+    def add(self, t, d, win_mean=None):
         d = np.clip(d, 1e-8, 2.0)
         self.h[t] += np.histogram(d, bins=self.EDGES)[0]
         a = self.acc[t]
         a[0] += float(d.sum()); a[1] += d.size; a[2] = max(a[2], float(d.max()))
+        if win_mean is not None:
+            self.win[t].append(win_mean)
+
+    def window_means(self):
+        """per ladder point: (n_windows,) mean dcos, encode order."""
+        return {t: np.concatenate(v) for t, v in self.win.items() if v}
 
     def _pct(self, t, q):
         c = np.cumsum(self.h[t])
@@ -500,8 +511,8 @@ def encode_all(be, arr, valid, batch, star, want_stats):
                                            valid[i:i + batch], ladder,
                                            coarse_residual=star)
             packets += pk
-            for pt, d in dcos.items():
-                qs.add(pt, d)
+            for pt, (d, wm) in dcos.items():
+                qs.add(pt, d, win_mean=wm)
         return packets, qs
     # generic backend: needs prepped float input
     def _prep_b(ab):
@@ -525,7 +536,8 @@ def collect_stats(be, x, valid, packets, batch):
         for t in qs.ladder:
             out = be.decode(pk, list(t))
             d = 1.0 - (out * xb).sum(1)
-            qs.add(t, d[vb])
+            wm = (d * vb).sum((1, 2)) / np.maximum(vb.sum((1, 2)), 1)
+            qs.add(t, d[vb], win_mean=wm)
     return qs
 
 
@@ -897,10 +909,13 @@ def codec_tile_main(argv=None):
         if star:
             res = np.stack([p.coarse_residual for p in packets])
             star_arrays = pack_star(res)
+        quality = None
+        if qs is not None and be.decoder_id:
+            quality = (be.decoder_id, qs.ladder, qs.window_means())
         from georvq.inference.cog import write_assets
         sizes = write_assets(args.output, packets, kept, meta,
                              a[0] != NODATA, geo, be.specs_sig,
-                             star=star_arrays)
+                             star=star_arrays, quality=quality)
         skipped = int((~keep).sum())
         _report(f"encoded {H}x{Wd} ({gh}x{gw} windows"
                 f"{f', {skipped} empty skipped' if skipped else ''})",

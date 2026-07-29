@@ -98,7 +98,7 @@ def export_onnx(model, out_dir, opset=17):
              for j, lev in enumerate(rvq.levels)}
     np.savez(os.path.join(out_dir, CODEBOOKS_NAME), **books)
 
-    from georvq.inference.release import bitstream_id
+    from georvq.inference.release import bitstream_id, decoder_id
     meta = {
         "format": "georvq-onnx/1",
         "window": model.window,
@@ -107,6 +107,7 @@ def export_onnx(model, out_dir, opset=17):
                    "depth": sp.depth} for sp in specs],
         "norm_latents": bool(getattr(model, "norm_latents", False)),
         "bitstream_id": bitstream_id(model),
+        "decoder_id": decoder_id(model),
         "opset": opset,
     }
     with open(os.path.join(out_dir, META_NAME), "w") as f:
