@@ -370,3 +370,34 @@ def test_star_cross_backend(tiny_ckpt, onnx_dir, tmp_path):
     a = tb.decode(po)
     b = ob.decode(po)
     assert np.abs(a - b).max() < 1e-3
+
+
+def test_quality_stats_and_control(tiny_ckpt, tmp_path, capsys):
+    """Encode-time stats land in header + sidecar json; --quality picks the
+    cheapest satisfying ladder point; unsatisfiable bounds fail clearly."""
+    ckpt, _ = tiny_ckpt
+    np.save(tmp_path / "in.npy", _windows())
+    gvq, out = str(tmp_path / "q.gvq.npz"), str(tmp_path / "out.npy")
+    codec_patch_main(["encode", "--model", ckpt, str(tmp_path / "in.npy"),
+                      gvq])
+    from georvq.inference.cli import _read_header
+    stats = _read_header(gvq)["quality_stats"]
+    assert os.path.exists(gvq + ".stats.json")
+    assert set(stats) == {"3-1", "3-2", "3-3"}
+    for v in stats.values():
+        assert 0 < v["p50"] <= v["p90"] <= v["p99"] <= 2.0
+        assert v["mean"] > 0 and v["max"] >= v["p99"]
+    assert stats["3-3"]["star"] is True          # sidecar priced at full depth
+    # monotone: deeper is better, costlier
+    assert stats["3-1"]["mean"] >= stats["3-3"]["mean"]
+    assert stats["3-1"]["bits"] < stats["3-3"]["bits"]
+    # quality-control decode: loose bound -> cheapest point
+    codec_patch_main(["decode", "--model", ckpt, "--quality", "mean<=2.0",
+                      gvq, out])
+    assert "-> 3-1" in capsys.readouterr().out
+    with pytest.raises(SystemExit, match="best available"):
+        codec_patch_main(["decode", "--model", ckpt, "--quality",
+                          "max<=1e-9", gvq, out])
+    with pytest.raises(SystemExit, match="mutually exclusive"):
+        codec_patch_main(["decode", "--model", ckpt, "--quality",
+                          "mean<=1", "--tuple", "3,1", gvq, out])

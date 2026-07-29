@@ -132,6 +132,8 @@ class TorchBackend:
         self.specs_sig = [(sp.cells, sp.depth, sp.codes)
                           for sp in self.codec.specs]
         self.device = device
+        sp0 = self.codec.specs[0]
+        self.star_cost_bits = sp0.cells * sp0.dim * STAR_BITS + 16
         from georvq.inference.release import bitstream_id
         self.bitstream_id = bitstream_id(self.codec.model)
 
@@ -158,6 +160,8 @@ class OnnxBackend:
         self.specs_sig = [(t["grid"] ** 2, t["depth"], t["codes"])
                           for t in self.codec.tiers]
         self.bitstream_id = self.codec.meta.get("bitstream_id")
+        t0 = self.codec.tiers[0]
+        self.star_cost_bits = t0["grid"] ** 2 * t0["dim"] * STAR_BITS + 16
 
     def encode(self, x, coarse_residual=False):
         return self.codec.encode(x, coarse_residual=coarse_residual)
@@ -176,6 +180,75 @@ def load_backend(args):
         return OnnxBackend(args.model, device=args.device,
                            threads=getattr(args, "threads", None))
     return TorchBackend(args.model, device=args.device)
+
+
+# --------------------------------------------------------------------------
+# quality ladder + encode-time error stats
+# --------------------------------------------------------------------------
+
+def quality_ladder(specs_sig):
+    """The rate ladder stats are recorded at: max coarse, mid {1,2,4,..,D},
+    then fine {1,2,4,..,D} at full mid — the measured Pareto family."""
+    def steps(d):
+        out, v = [], 1
+        while v < d:
+            out.append(v); v *= 2
+        return out + [d]
+    d = [t[1] for t in specs_sig]
+    pts = [tuple([d[0], L] + [0] * (len(d) - 2)) for L in steps(d[1])]
+    for t in range(2, len(d)):
+        base = [d[i] for i in range(t)]
+        pts += [tuple(base + [L] + [0] * (len(d) - t - 1))
+                for L in steps(d[t])]
+    return pts
+
+
+class QualityStats:
+    """Streaming per-ladder-point stats of per-pixel dcos (1 - cos):
+    exact mean/max, percentiles via a fine log histogram."""
+    EDGES = np.logspace(-8, 0.31, 385)
+
+    def __init__(self, ladder):
+        self.ladder = ladder
+        self.h = {t: np.zeros(len(self.EDGES) - 1, np.int64) for t in ladder}
+        self.acc = {t: [0.0, 0, 0.0] for t in ladder}   # sum, n, max
+
+    def add(self, t, d):
+        d = np.clip(d, 1e-8, 2.0)
+        self.h[t] += np.histogram(d, bins=self.EDGES)[0]
+        a = self.acc[t]
+        a[0] += float(d.sum()); a[1] += d.size; a[2] = max(a[2], float(d.max()))
+
+    def _pct(self, t, q):
+        c = np.cumsum(self.h[t])
+        if c[-1] == 0:
+            return 0.0
+        i = int(np.searchsorted(c, q / 100.0 * c[-1]))
+        return float(self.EDGES[min(i + 1, len(self.EDGES) - 1)])
+
+    def summary(self, specs_sig, star_cost=0):
+        """star_cost: bits of the sidecar (0 if absent); it is applied —
+        and therefore measured — only at the full-depth point."""
+        out = {}
+        for t in self.ladder:
+            s, n, mx = self.acc[t]
+            name = "-".join(map(str, t))
+            full = all(L == d for L, (_, d, _) in zip(t, specs_sig))
+            out[name] = {
+                "bits": nominal_bits(specs_sig, list(t))
+                + (star_cost if full else 0),
+                "star": bool(star_cost and full),
+                "mean": s / max(n, 1), "p50": self._pct(t, 50),
+                "p90": self._pct(t, 90), "p99": self._pct(t, 99),
+                "max": mx,
+            }
+        return out
+
+
+def pick_quality(stats, metric, bound):
+    """Cheapest recorded ladder point whose `metric` <= bound, or None."""
+    ok = [(v["bits"], k) for k, v in stats.items() if v[metric] <= bound]
+    return min(ok)[1] if ok else None
 
 
 # --------------------------------------------------------------------------
@@ -320,6 +393,57 @@ def _parse_tuple(s, specs_sig):
     return ls
 
 
+def collect_stats(be, x, valid, packets, batch):
+    """Decode every ladder point and accumulate true per-pixel dcos —
+    the encoder is the one party that ever holds the original, so error
+    metadata must be minted here."""
+    qs = QualityStats(quality_ladder(be.specs_sig))
+    for i in range(0, len(x), batch):
+        xb, vb = x[i:i + batch], valid[i:i + batch]
+        pk = packets[i:i + batch]
+        for t in qs.ladder:
+            out = be.decode(pk, list(t))
+            d = 1.0 - (out * xb).sum(1)
+            qs.add(t, d[vb])
+    return qs
+
+
+def _read_header(path):
+    z = np.load(path, allow_pickle=False)
+    return json.loads(str(z["header"]))
+
+
+def _quality_arg(sub):
+    sub.add_argument("--quality", default=None, metavar="STAT<=X",
+                     help="quality-control decode: cheapest recorded ladder "
+                          "point with STAT (mean|p50|p90|p99|max of pixel "
+                          "dcos) <= X, e.g. --quality p90<=0.006; needs "
+                          "encode-time stats in the blob")
+
+
+def _resolve_quality(header, spec_arg, specs_sig):
+    import re
+    m = re.fullmatch(r"(mean|p50|p90|p99|max)<=([0-9.eE+-]+)", spec_arg)
+    if not m:
+        raise SystemExit(f"--quality {spec_arg}: expected STAT<=X with "
+                         "STAT in mean|p50|p90|p99|max")
+    stats = header.get("quality_stats")
+    if not stats:
+        raise SystemExit("this blob carries no quality stats; re-encode "
+                         "with stats or use --tuple")
+    name = pick_quality(stats, m.group(1), float(m.group(2)))
+    if name is None:
+        best = min(stats.items(), key=lambda kv: kv[1][m.group(1)])
+        raise SystemExit(
+            f"no ladder point reaches {spec_arg}; best available is "
+            f"{best[0]} with {m.group(1)}={best[1][m.group(1)]:.4g}")
+    depths = [int(v) for v in name.split("-")]
+    print(f"quality {spec_arg} -> {name} "
+          f"({stats[name]['bits']:.0f} bits/window, "
+          f"{m.group(1)}={stats[name][m.group(1)]:.4g})")
+    return depths
+
+
 def _batched(fn, arr, batch):
     outs = [fn(arr[i:i + batch]) for i in range(0, len(arr), batch)]
     if isinstance(outs[0], list):
@@ -412,6 +536,9 @@ def codec_patch_main(argv=None):
                    help="omit the 8* sidecar (2-bit coarse residual, "
                         "66 B/window; recovers the coarse quantizer gap "
                         "and most of the OOD error tail)")
+    e.add_argument("--no-stats", action="store_true",
+                   help="skip encode-time quality stats (per-ladder-point "
+                        "dcos summaries in the header + .stats.json)")
     e.add_argument("--batch", type=int, default=64)
 
     d = sub.add_parser("decode", help=".gvq -> reconstructed windows .npy")
@@ -419,7 +546,9 @@ def codec_patch_main(argv=None):
     d.add_argument("input", help=".gvq container")
     d.add_argument("output", help="output .npy")
     d.add_argument("--tuple", default=None,
-                   help="decode depth tuple, e.g. 6,4,4 (default: full)")
+                   help="rate-control decode: depth tuple, e.g. 8,8,2 "
+                        "(default: full)")
+    _quality_arg(d)
     d.add_argument("--int8", action="store_true",
                    help="re-quantize output to AE int8 (signed-sqrt)")
     d.add_argument("--batch", type=int, default=64)
@@ -442,11 +571,15 @@ def codec_patch_main(argv=None):
         packets = _batched(
             lambda xb: be.encode(xb, coarse_residual=star),
             x[keep], args.batch)
-        header = write_container(args.output, packets, be.specs_sig,
-                                 {"kind": "patch", "window": be.window,
-                                  "n_total": len(x),
-                                  "bitstream_id": be.bitstream_id,
-                                  "nodata_fill": NODATA},
+        hdr = {"kind": "patch", "window": be.window, "n_total": len(x),
+               "bitstream_id": be.bitstream_id, "nodata_fill": NODATA}
+        if not args.no_stats:
+            qs = collect_stats(be, x[keep], valid[keep], packets, args.batch)
+            hdr["quality_stats"] = qs.summary(
+                be.specs_sig, be.star_cost_bits if star else 0)
+            with open(args.output + ".stats.json", "w") as f:
+                json.dump(hdr["quality_stats"], f, indent=1)
+        header = write_container(args.output, packets, be.specs_sig, hdr,
                                  valid=valid)
         skipped = int((~keep).sum())
         _report(f"encoded{f' ({skipped} empty windows skipped)' if skipped
@@ -454,7 +587,14 @@ def codec_patch_main(argv=None):
                 header, max(len(packets), 1), be.window,
                 os.path.getsize(args.output), t0)
     else:
-        depths = _parse_tuple(args.tuple, be.specs_sig)
+        if args.quality and args.tuple:
+            raise SystemExit("--tuple (rate-control) and --quality "
+                             "(quality-control) are mutually exclusive")
+        if args.quality:
+            depths = _resolve_quality(_read_header(args.input),
+                                      args.quality, be.specs_sig)
+        else:
+            depths = _parse_tuple(args.tuple, be.specs_sig)
         header, packets, valid = read_container(args.input, depths=depths)
         _check_bitstream(header, be, args.input)
         depths = depths or [d for _, d, _ in be.specs_sig]
@@ -564,17 +704,39 @@ def codec_tile_main(argv=None):
                    help="omit the 8* sidecar (2-bit coarse residual, "
                         "66 B/window; recovers the coarse quantizer gap "
                         "and most of the OOD error tail)")
+    e.add_argument("--no-stats", action="store_true",
+                   help="skip encode-time quality stats (per-ladder-point "
+                        "dcos summaries in the header + .stats.json)")
     e.add_argument("--batch", type=int, default=64)
 
     d = sub.add_parser("decode", help=".gvq -> raster")
     _common_args(d)
     d.add_argument("input")
     d.add_argument("output", help=".npy or .tif")
-    d.add_argument("--tuple", default=None)
+    d.add_argument("--tuple", default=None,
+                   help="rate-control decode: depth tuple (default: full)")
+    _quality_arg(d)
+
+    i = sub.add_parser("info", help="print a blob's header + quality stats")
+    i.add_argument("input")
     d.add_argument("--float32", action="store_true",
                    help="write float32 unit-norm instead of AE int8")
     d.add_argument("--batch", type=int, default=64)
     args = ap.parse_args(argv)
+
+    if args.cmd == "info":
+        header = _read_header(args.input)
+        stats = header.pop("quality_stats", None)
+        print(json.dumps(header, indent=1))
+        if stats:
+            print(f"{'point':>8s} {'bits/win':>9s} {'mean':>9s} {'p50':>9s} "
+                  f"{'p90':>9s} {'p99':>9s} {'max':>9s}")
+            for k, v in stats.items():
+                print(f"{k + ('*' if v.get('star') else ''):>8s} "
+                      f"{v['bits']:9.0f} " + " ".join(
+                          f"{v[m]:9.2e}" for m in
+                          ("mean", "p50", "p90", "p99", "max")))
+        return
 
     be = load_backend(args)
     W = be.window
@@ -596,19 +758,37 @@ def codec_tile_main(argv=None):
         for i in range(0, len(kept), args.batch):
             xb, _ = prep_ae_np(wins[kept[i:i + args.batch]])
             packets += be.encode(xb, coarse_residual=star)
-        header = write_container(
-            args.output, packets, be.specs_sig,
-            {"kind": "tile", "window": W, "grid": [gh, gw],
-             "shape": [C, H, Wd], "geo": geo,
-             "bitstream_id": be.bitstream_id, "nodata_fill": NODATA},
-            valid=(a[0] != NODATA))
+        hdr = {"kind": "tile", "window": W, "grid": [gh, gw],
+               "shape": [C, H, Wd], "geo": geo,
+               "bitstream_id": be.bitstream_id, "nodata_fill": NODATA}
+        if not args.no_stats:
+            qs = QualityStats(quality_ladder(be.specs_sig))
+            for i in range(0, len(kept), args.batch):
+                xb, vb = prep_ae_np(wins[kept[i:i + args.batch]])
+                pk = packets[i:i + args.batch]
+                for t in qs.ladder:
+                    d = 1.0 - (be.decode(pk, list(t)) * xb).sum(1)
+                    qs.add(t, d[vb])
+            hdr["quality_stats"] = qs.summary(
+                be.specs_sig, be.star_cost_bits if star else 0)
+            with open(args.output + ".stats.json", "w") as f:
+                json.dump(hdr["quality_stats"], f, indent=1)
+        header = write_container(args.output, packets, be.specs_sig, hdr,
+                                 valid=(a[0] != NODATA))
         skipped = int((~keep).sum())
         _report(f"encoded {H}x{Wd} ({gh}x{gw} windows"
                 f"{f', {skipped} empty skipped' if skipped else ''})",
                 header, max(len(packets), 1), W,
                 os.path.getsize(args.output), t0)
     else:
-        depths = _parse_tuple(args.tuple, be.specs_sig)
+        if args.quality and args.tuple:
+            raise SystemExit("--tuple (rate-control) and --quality "
+                             "(quality-control) are mutually exclusive")
+        if args.quality:
+            depths = _resolve_quality(_read_header(args.input),
+                                      args.quality, be.specs_sig)
+        else:
+            depths = _parse_tuple(args.tuple, be.specs_sig)
         header, packets, valid = read_container(args.input, depths=depths)
         _check_bitstream(header, be, args.input)
         if header["kind"] != "tile":

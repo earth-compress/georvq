@@ -53,6 +53,21 @@ pairs with the progressive container's prefix reads.
   66 B/window at 2 bits), so the predictor should be conditioned on
   sidecar presence or trained against sidecar-on decodes.
 
+## Lite decoder family (light/medium)
+
+*Parked 2026-07-28: quality below the release bar (Ali). Single deep
+decoder ships in the beta.*
+
+Trained variants on the frozen divfull bitstream
+(`scripts/train_lite_decoder.py`; ckpts `checkpoints/ae_lite_{light,
+medium}` in the release worktree): light 0.76M params, tier-0 only,
+4px head + x16 bilinear — val cos 0.873 @ 88 bits, 36.6k win/s GPU;
+medium 4.25M, tiers 0+1, 16px head — 0.971 @ 296 b / 0.983 @ 1752 b vs
+heavy 0.977/0.989, 22.3k win/s (17x heavy). Parked because 0.87 (and
+-0.006 for medium) is not shippable quality; revisit if a
+thumbnail/browse product tier appears, or scale the variants up (the
+16px-head + interpolation trade was the main quality cost).
+
 **Related pending decisions** (not parked, awaiting call): coarse
 residual sidecar as default in the tile encoder; `--deblock` decode
 option (ae_deblock_deblock_big, seam -77%, fidelity +20% at full
