@@ -9,133 +9,232 @@ Live demo: `notebooks/demo_ae_codec.ipynb`.
 
 ## Part 1 — The model
 
-georvq compresses geospatial rasters with a **pyramidal residual-VQ
-autoencoder**: a ViT encoder summarizes each fixed-size window into a
-small pyramid of latent grids, each grid is quantized by a stack of
-residual codebooks, and an attention decoder turns any *prefix* of
-those codes back into pixels. One trained model serves an entire
-rate–distortion curve.
+### 1.1 The one-paragraph version
 
-Numbers below are the shipped AlphaEarth release (`ae_pyr64_divfull`):
-64 px windows over 64-band unit-norm embedding pixels.
+georvq is a *learned* image compressor for geospatial data. A classical
+codec like JPEG applies one fixed mathematical recipe to everything;
+georvq instead trains a neural network on the kind of data it will
+compress, so the network learns what real landscapes tend to look like
+and can describe them in far fewer bits. Each map tile is cut into
+small windows; an **encoder** network boils each window down to a
+handful of vectors; those vectors are snapped to entries in learned
+lookup tables (**codebooks**), so that only small integer IDs need to
+be stored; and a **decoder** network turns the IDs back into pixels.
+Crucially, the IDs are ordered most-important-first, so one stored
+file can be decoded at many quality levels — read a small prefix for a
+rough preview, or all of it for a near-perfect reconstruction.
 
-### 1.1 End-to-end dataflow
+All concrete numbers below describe the shipped AlphaEarth release
+(`ae_pyr64_divfull`), which works on 64×64-pixel windows where each
+pixel is a 64-band unit-length embedding vector.
 
-```
-          one 64x64 px window, 64 bands (prepped, unit-norm pixels)
-                                 |
-                        source stem (AE: identity)
-                                 |
-                     ViTTokenizer (dim 256, 9 blocks)
-          CLS token ---+---------+---------+
-                       |         |         |
-              tier 0   |  tier 1 |  tier 2 |         "the pyramid"
-             (coarse)  |  (mid)  |  (fine) |
-            1 x 1 cell | 4 x 4   | 16 x 16 |   <- cells per window
-              256-d    | 192-d   |  64-d   |   <- latent dim per cell
-                       |         |         |
-                 ResidualVQ  ResidualVQ  ResidualVQ      8 levels each
-                 K = 2048    K = 8192    K = 16384       (codebook size)
-                       |         |         |
-                     [ code indices = the bitstream ]
-                       |         |         |
-              PyramidAttnDecoder (dim 384, 12 AdaLN blocks;
-              full self-attention over all 1 + 16 + 256 tokens,
-              conditioned on how many levels each tier received)
-                                 |
-               DenseHead: fine tokens -> 4 px patches -> conv
-               smoothing -> 64-band plane -> per-pixel L2 norm
-                                 |
-                     reconstructed 64x64 window
-```
-
-Why a pyramid: coarse content (land-cover identity of the whole
-window) is cheap to describe and shared across many pixels; fine
-texture is expensive and local. Giving each scale its own latent grid
-and codebooks lets the rate go where the information is. The decoder
-sees all tiers at once (full attention), so coarse tokens provide
-context that makes the fine codes cheaper to use.
-
-### 1.2 Residual VQ in one picture
-
-Each tier's cell vector is quantized by a *stack* of codebooks, each
-encoding what the previous levels missed:
+### 1.2 The pipeline, end to end
 
 ```
-   z ────────────────► nearest code in book 1 ──► q1
-   z - q1 ───────────► nearest code in book 2 ──► q2
-   z - q1 - q2 ──────► nearest code in book 3 ──► q3
-        ...                     ...                     (8 levels)
-
-   reconstruction at depth L  =  q1 + q2 + ... + qL
+             one 64×64-pixel window (64 bands per pixel)
+                               │
+                               ▼
+                 ┌───────────────────────────┐
+                 │        ViT encoder        │  a vision transformer that
+                 │      (ViTTokenizer)       │  reads the whole window at
+                 └─────────────┬─────────────┘  once (9 blocks, width 256)
+                               │
+                               │  summarizes it at three scales:
+            ┌──────────────────┼──────────────────┐
+            ▼                  ▼                  ▼
+      ┌───────────┐      ┌───────────┐      ┌───────────┐
+      │  COARSE   │      │    MID    │      │   FINE    │
+      │ 1×1 cell  │      │ 4×4 cells │      │16×16 cells│  ← grid over the window
+      │   256-d   │      │   192-d   │      │   64-d    │  ← numbers per cell
+      └─────┬─────┘      └─────┬─────┘      └─────┬─────┘
+            │  "the whole      │  "this          │  "this 4×4-px
+            │   window is      │   quadrant-ish   │   patch has this
+            │   farmland"      │   area is..."    │   texture"
+            ▼                  ▼                  ▼
+      residual VQ        residual VQ        residual VQ      8 codebooks
+      2,048 entries      8,192 entries      16,384 entries   per tier (§1.3)
+            │                  │                  │
+            └──────────────────┼──────────────────┘
+                               ▼
+             ╔═══════════════════════════════════════╗
+             ║  the bitstream: one integer ID per    ║
+             ║  cell per codebook — this is all      ║
+             ║  that ever gets written to disk       ║
+             ╚═══════════════════════════════════════╝
+                               │
+                               ▼
+                 ┌───────────────────────────┐
+                 │    attention decoder      │  all 1+16+256 cells attend to
+                 │   (PyramidAttnDecoder)    │  each other (12 blocks, width
+                 └─────────────┬─────────────┘  384); it is also *told* how
+                               │                many codebook levels of each
+                               ▼                tier it actually received
+                 ┌───────────────────────────┐
+                 │        DenseHead          │  each fine cell → a 4×4-px
+                 └─────────────┬─────────────┘  patch; a small conv smooths
+                               │                the seams; pixels re-scaled
+                               ▼                to unit length
+              reconstructed 64×64-pixel window
 ```
 
-Each level is one integer per cell (11/13/14 bits for the three
-tiers). The series converges geometrically for in-distribution
-content; the size of late increments is itself a usable signal of how
-well the quantizer is coping (we use it as an error predictor).
+Two design choices carry most of the weight here:
 
-Codebooks are trained by EMA with health machinery (k-means init,
-dead-code resets, decay ramps) — that's most of `model/vq.py` and it is
-**parity-sacred**: the repo's value is that trained checkpoints decode
-bit-faithfully forever.
+**Why three scales?** Because information in imagery is not spread
+evenly across scales. "This window is mostly farmland" is one fact
+shared by 4,096 pixels — describing it once at the coarse tier is
+almost free. Fine texture is the opposite: local, unpredictable, and
+expensive. Giving each scale its own grid and its own codebooks lets
+the bit budget flow to where the information actually is.
 
-### 1.3 Matryoshka: one model, every rate
+**Why does the decoder see everything at once?** The decoder's
+attention spans all three tiers, so the fine cells are always
+interpreted *in context*. A fine code doesn't have to spell out "dark
+green, vegetation-like" from scratch — the coarse tier already
+established that — so the same fine codebook entry can mean subtly
+different things in different surroundings. That context-sharing is a
+big part of why so few bits suffice.
 
-During training each window is decoded at a *random monotone depth
-tuple* (L0, L1, L2) — e.g. (8,4,0) — and the decoder is conditioned on
-the tuple (a thermometer code feeding AdaLN). So at inference, indices
-are stored at full depth and any prefix decodes well:
+### 1.3 Codebooks, and quantizing by successive approximation
+
+A **codebook** is a learned lookup table: a list of, say, 2,048
+prototype vectors that between them cover the kinds of cell summaries
+the encoder actually produces. To store a cell you don't store its
+numbers — you find the closest prototype and store its index. 2,048
+entries means 11 bits, no matter how many dimensions the vector has.
+
+One lookup alone is too crude, so georvq quantizes in rounds — like a
+game of "warmer/colder", or writing a number digit by digit. Each
+round has its *own* codebook, trained specifically on whatever the
+previous rounds failed to capture:
 
 ```
-  bits/window:  88        1,752        5,336                 30,952
-                |           |            |                      |
-  tuple:      8-1-0  ...  8-8-0  ...   8-8-1   ...   8-8-8 + 8* sidecar
-  val cos:    0.977       0.990        0.994                  0.998
-                |___________|____________|______________________|
-                     the measured Pareto ladder: max coarse ->
-                     fill mid -> add fine levels one at a time
+   target vector z
+        │
+        ▼
+   book 1: closest of its 2,048 entries ─► q₁      a rough first guess
+        │
+        ▼   what's still missing:  z − q₁
+   book 2: closest entry to that  ─► q₂            a correction
+        │
+        ▼   still missing:  z − q₁ − q₂
+   book 3: closest entry to that  ─► q₃            a finer correction
+        │
+       ...                                          (8 rounds in total)
+
+   stored on disk:   8 small integers per cell
+   reconstruction:   q₁ + q₂ + ... + qL  — and you may stop at any L
 ```
 
-Level costs are wildly asymmetric — coarse 11 b, mid 208 b, fine
-3,584 b per window — which is why the efficient ladder saturates the
-cheap tiers first (measured, not assumed: a full tuple sweep on the
-val set; e.g. 6-4-4 is strictly dominated).
+This is **residual vector quantization** (residual VQ, or RVQ). Each
+round costs one integer per cell — 11, 13, or 14 bits for the three
+tiers. The corrections shrink rapidly round over round on typical
+content, and the size of the *late* corrections turns out to be a
+useful health signal: if round 7 is still making big moves, the
+quantizer is struggling with this window, and we use exactly that as
+an error predictor.
 
-**The 8\* sidecar**: even at depth 8 the coarse tier leaves a small
-residual, and that residual carries most of the *outlier* error (rare
-land covers the 2048-code book can't cover; window-scale misses that
-finer tiers can't absorb). Shipping it as a 2-bit scalar-quantized
-vector (66 B/window) cuts the 99.9th-percentile pixel error ~3x for
-+1.5% rate. Mid/fine residuals measured worthless (their codebooks sit
-at their ceiling — and are 4.6x cheaper than scalar-quantized vectors
-at equal quality, which is the codebooks earning their keep).
+The codebooks themselves are learned during training (by exponential
+moving averages, with machinery to keep every entry earning its keep —
+k-means initialization, resets for entries that fall out of use).
+That's most of `model/vq.py`, and it is **parity-sacred**: the entire
+value of the repo is that a trained checkpoint decodes bit-identically
+forever, so these numerics must never drift.
 
-### 1.4 Optional submodules (not in the AE release)
+### 1.4 One model, every compression level
 
-Variants are the *presence of submodules*, never runtime flags:
-`TierPredictor` (cross-tier predict-and-subtract; cascade),
-`CodebookSelector` (location-gated codebook subsets),
-`PyramidRateModel` (learned entropy model). All exist, all trained,
-none shipped for AE — `docs/FINDINGS.md` records why.
+Most codecs make you pick a quality setting at *encode* time. georvq
+is trained so the choice can wait until *decode* time — nesting
+qualities inside one bitstream the way matryoshka dolls nest.
 
-### 1.5 Deployment shape (AE release)
+The trick is in training: for every window, the decoder is handed a
+randomly chosen number of quantization rounds per tier — maybe all 8
+coarse rounds, 4 mid, and no fine at all — and is explicitly told what
+it got (the depth tuple conditions the network). Having practiced at
+every budget, it degrades gracefully instead of falling apart when
+codes are missing. At encode time everything is stored at full depth
+once; readers then decode whatever prefix suits them:
+
+```
+  reconstruction quality (cosine similarity, held-out data)
+
+  0.998 ┤                                              ● 8-8-8 + sidecar
+  0.994 ┤                    ● 8-8-1
+  0.990 ┤        ● 8-8-0
+  0.977 ┤ ● 8-0-0
+        └──┬─────────┬─────────┬─────────────────────────┬──
+           88      1,752     5,336                    30,952
+                                                bits per window
+
+  "8-8-1" = all 8 coarse rounds, all 8 mid, 1 fine.
+```
+
+The tiers have wildly different price tags — one round costs 11 bits
+at the coarse tier, 208 at mid (13 bits × 16 cells), 3,584 at fine
+(14 bits × 256 cells). So the efficient path up the quality ladder is:
+saturate coarse first, then fill mid, then add fine rounds one at a
+time. That ordering is measured, not assumed — a full sweep of depth
+combinations on the validation set confirms it (e.g. 6-4-4 is strictly
+worse than same-cost alternatives).
+
+### 1.5 The 8\* sidecar: catching the outliers
+
+Even after all 8 rounds, the coarse tier's approximation isn't quite
+exact — and that last sliver of error is concentrated in *unusual*
+windows: rare land covers the 2,048-entry codebook never learned well,
+whole-window effects the finer tiers can't make up for. Since averages
+were already fine and only the outliers hurt, the release ships that
+final coarse leftover directly, crudely rounded to 2 bits per number
+(66 bytes per window). Cost: +1.5% file size. Benefit: the worst
+pixel errors (99.9th percentile) drop about 3×.
+
+The same trick was tested on the mid and fine tiers and found
+worthless — their codebooks already capture everything they're going
+to, and they do it ~4.6× cheaper than the crude-rounding approach at
+equal quality. Which is a nice sanity check that the codebooks are
+earning their keep.
+
+### 1.6 Optional submodules (not in the AE release)
+
+Model variants are expressed as the *presence of submodules*, never as
+runtime flags: `TierPredictor` (predicts one tier from another and
+codes only the surprise; "cascade"), `CodebookSelector` (restricts
+codebook entries by geographic location), `PyramidRateModel` (a
+learned model of which codes are likely, for entropy coding). All
+exist and all were trained; none made the AlphaEarth release —
+`docs/FINDINGS.md` records what each one bought and why it was left
+out.
+
+### 1.7 What actually lands on disk (AE release)
+
+The unit of deployment is a satellite image tile, and the compressed
+form is itself a set of ordinary georeferenced rasters — the code IDs
+are just pixel values, so standard geospatial tooling (GDAL) can read
+any region of any tier without touching the rest:
 
 ```
    source COG tile (8192 px, 2.25 GB)
-        └─ encode (GPU, ~76 s incl. self-measured quality stats)
-             ├─ coarse.tif   128x128x8   uint16   ─┐  indices as
-             ├─ mid.tif      512x512x8   uint16    ├─ georeferenced
-             ├─ fine.tif    2048x2048x8  uint16   ─┘  COG rasters
-             ├─ star.tif     8* sidecar  (66 B/window)
-             ├─ mask.tif     validity (exact nodata restore)
-             ├─ quality/<decoder_id>.tif  measured err/window/rate-point
-             └─ metadata.json             stats, ids, source profile
-   total ~58 MB; bands = RVQ levels -> rate control = band selection;
-   blocks mirror the source's 1024 px quantum -> ranged reads via
-   plain GDAL. Two ids guard correctness: bitstream_id (codebooks;
-   wrong model refused) and decoder_id (keys quality rasters).
+        │
+        ▼  encode (GPU, ~76 s — includes measuring its own quality)
+        │
+        ├─ coarse.tif    128×128, 8 bands  ─┐   the code IDs, one band
+        ├─ mid.tif       512×512, 8 bands   ├─  per quantization round,
+        ├─ fine.tif    2048×2048, 8 bands  ─┘   as georeferenced COGs
+        ├─ star.tif      the 8* sidecar (66 B/window)
+        ├─ mask.tif      validity mask (nodata restored exactly)
+        ├─ quality/<decoder_id>.tif   measured error per window,
+        │                             per quality level
+        └─ metadata.json              stats, identity hashes, profile
+
+   total: ~58 MB  (vs 2.25 GB source)
 ```
+
+Because bands are quantization rounds, rate control at read time is
+just band selection; and because the internal block layout mirrors the
+source's 1024-px blocks, ranged partial reads work with plain GDAL.
+Two identity hashes guard correctness: `bitstream_id` (the codebooks —
+a mismatched model refuses to decode rather than decode wrongly) and
+`decoder_id` (the decoder weights — keys the quality rasters, which
+are decoder-specific).
 
 ---
 
