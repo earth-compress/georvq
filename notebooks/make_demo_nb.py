@@ -50,8 +50,9 @@ from georvq.inference.api import Packet
 TILE = "/data/AE-samples/tiles_full/2019/55S/xx9gre8yvyf4ii6o4-0000000000-0000008192.tiff"
 TILE_S3 = ("s3://us-west-2.opendata.source.coop/tge-labs/aef/v1/annual/"
            "2019/xx9gre8yvyf4ii6o4-0000000000-0000008192.tiff")
-BUNDLE = "/home/ali/projects/georvq/checkpoints/ae_release_beta/bundle"
-ASSETS = "/tmp/ae_demo_assets"               # encode output
+BUNDLE = os.environ.get("GEORVQ_AE_BUNDLE",
+                        "/data/georvq-releases/ae-beta-v1/bundle")
+ASSETS = f"/tmp/ae_demo_assets_{os.environ.get('USER', 'shared')}"
 DEVICE = "cuda:1"
 
 if not os.path.exists(TILE):                 # download if not mirrored

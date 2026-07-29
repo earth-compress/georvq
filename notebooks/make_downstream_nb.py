@@ -60,7 +60,8 @@ from georvq.eval.extract import dequant_np, l2norm_np
 from georvq.eval.probes import run_probes
 from georvq.model.codec import tuple_bits
 
-BUNDLE = "/home/ali/projects/georvq/checkpoints/ae_release_beta/bundle/model.pt"
+BUNDLE = os.environ.get("GEORVQ_AE_BUNDLE",
+                        "/data/georvq-releases/ae-beta-v1/bundle") + "/model.pt"
 EVAL_ROOT = "/data/AE-samples/eval"
 DEVICE = "cuda:1"
 LADDER = [[8,1,0],[8,8,0],[8,8,1],[8,8,2],[8,8,4],[8,8,8]]

@@ -71,6 +71,12 @@ for the same read).
   recovers the coarse quantizer gap and most of the OOD error tail
   (worst-0.1% pixel median 0.035 -> 0.009) for +1.5% rate.
 
+**Getting the model**: weights are deliberately not in git. On the
+group server the release lives at `/data/georvq-releases/ae-beta-v1/`
+(`bundle/` for torch, `onnx/` for torch-free; notebooks and examples
+default to it, override with `GEORVQ_AE_BUNDLE`). Remote distribution
+(HF Hub registry keyed by bitstream_id) is planned.
+
 ```bash
 georvq-ae-tile encode --model <bundle> --device cuda src.tiff out_dir/
 georvq-ae-tile info   out_dir/
