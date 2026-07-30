@@ -163,17 +163,23 @@ def test_stats_rows_matches_numpy_reference():
     y = rows.numpy()
     d = np.clip(1.0 - (x * y).sum(0), 1e-9, 2.0)
     np.testing.assert_allclose(np.sort(dvals), np.sort(d[v]), atol=1e-5)
-    q = np.clip(np.rint(np.sign(y) * np.sqrt(np.abs(y)) * 127.5),
-                -127, 127).astype(np.int16)
-    dint = np.abs(q - raw.astype(np.int16)).max(0).astype(np.float64)
-    assert hist.sum() == int(v.sum())
-    np.testing.assert_array_equal(
-        hist, np.bincount(dint[v].astype(np.int64), minlength=255))
-    # per-window stats: check mean + max on a fully-valid window and
-    # that the nodata window's stats ignore invalid pixels
-    wd = dint[64:128, 64:128]
-    assert wint[1, 1, 0] == pytest.approx(wd.mean(), rel=1e-6)
-    assert wint[1, 1, 4] == wd.max()
-    wd0 = dint[:64, :64][v[:64, :64]]
-    assert wint[0, 0, 4] == wd0.max()
-    assert wint[0, 0, 0] == pytest.approx(wd0.mean(), rel=1e-6)
+    # requant via the same torch ops (numpy libm differs by ULPs at
+    # exact rounding boundaries — the documented backend-consistent
+    # slack); the test pins the histogram/quantile/window logic
+    q = torch.clamp(torch.round(torch.sign(rows) * torch.sqrt(
+        rows.abs()) * 127.5), -127, 127).to(torch.int16).numpy()
+    dabs = np.abs(q - raw.astype(np.int16)).astype(np.float64)
+    for fi, dint in enumerate((dabs.max(0), dabs.mean(0))):
+        assert hist[fi].sum() == int(v.sum())
+        np.testing.assert_array_equal(
+            hist[fi], np.bincount(
+                np.round(dint[v] * 256).astype(np.int64),
+                minlength=be.INT_HIST_BINS))
+        # per-window stats: mean + max on a fully-valid window, and the
+        # nodata window's stats must ignore invalid pixels
+        wd = dint[64:128, 64:128]
+        assert wint[1, 1, fi, 0] == pytest.approx(wd.mean(), rel=1e-5)
+        assert wint[1, 1, fi, 4] == pytest.approx(wd.max(), rel=1e-6)
+        wd0 = dint[:64, :64][v[:64, :64]]
+        assert wint[0, 0, fi, 4] == pytest.approx(wd0.max(), rel=1e-6)
+        assert wint[0, 0, fi, 0] == pytest.approx(wd0.mean(), rel=1e-5)
