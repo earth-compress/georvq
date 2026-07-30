@@ -226,13 +226,15 @@ class TorchBackend:
     def dcos_rows(self, rows, raw):
         """Per-pixel dcos of reconstructed rows vs raw source rows, on
         the device (the numpy version of this loop is the CPU bottleneck
-        of restat, as it was of encode). rows: (C, h, w) float32; raw:
-        (C, h, w) int8 -> (valid-pixel dcos flat, (h/W, w/W) per-window
-        mean dcos), numpy."""
+        of restat, as it was of encode). rows: (C, h, w) float32 numpy
+        or an already-on-device tensor (the fused path); raw: (C, h, w)
+        int8 -> (valid-pixel dcos flat, (h/W, w/W) per-window mean
+        dcos), numpy."""
         t = self.torch
         with t.no_grad():
             x, v = self._prep(raw[None])
-            y = t.from_numpy(np.ascontiguousarray(rows))[None] \
+            y = rows[None] if t.is_tensor(rows) else \
+                t.from_numpy(np.ascontiguousarray(rows))[None] \
                 .to(self.device)
             d = (1.0 - (x * y).sum(1))[0].clamp_(1e-9, 2.0)
             v = v[0]
@@ -241,6 +243,12 @@ class TorchBackend:
             dw = (d * v).reshape(h // W, W, w // W, W).sum((1, 3))
             vw = v.reshape(h // W, W, w // W, W).sum((1, 3)).clamp_min(1)
             return d[v].cpu().numpy(), (dw / vw).cpu().numpy()
+
+    def requant_dev(self, out):
+        """Device tensor -> int8 numpy (AE signed-sqrt), requant on GPU."""
+        t = self.torch
+        return t.clamp(t.round(t.sign(out) * t.sqrt(out.abs()) * 127.5),
+                       -127, 127).to(t.int8).cpu().numpy()
 
     def encode(self, x, coarse_residual=False):
         # encoder + assignment stay fp32: bf16 latents flip ~24% of
@@ -834,58 +842,85 @@ _PROFILE_KEYS = ("driver", "nodata", "blockxsize", "blockysize", "tiled",
                  "compress", "interleave")
 
 
-def _tile_rows(be, packets, kept, meta, depths, batch, deblock,
-               int8=False):
-    """Stream a tile decode as canonical frame rows: yields
-    (y0_px, y1_px, (C, y1-y0, gw*W) rows). With deblock=True each frame
-    is deblocked from its core plus the one-window halo (clipped at tile
-    bounds) and hard-cropped — the canonical recipe, so any consumer of
-    these rows gets the scheduler-independent result. Halo windows are
-    re-decoded per frame row (1.25x at the 512 recipe) so a full source
-    tile never needs an all-float intermediate."""
+def _tile_rows(be, packets, kept, meta, depths, batch, deblock):
+    """Stream a tile decode as float32 numpy window rows — the
+    torch-free twin of _tile_rows_t below, kept for generic backends
+    (which never deblock: the deblock decoder is torch-only, so
+    deblock=True is rejected here)."""
+    if deblock:
+        raise SystemExit("deblock decoding needs the torch backend")
     W, C = be.window, meta["shape"][0]
     gh, gw = meta["grid"]
-    fr = (be.deblock_recipe["frame"] // W) if deblock else 16
-    hw = (be.deblock_recipe["halo"] // W) if deblock else 0
     slot = {int(s): p for s, p in zip(kept, packets)}
-    for r0 in range(0, gh, fr):
-        r1 = min(r0 + fr, gh)
-        ri0, ri1 = max(0, r0 - hw), min(gh, r1 + hw)
-        slab = np.zeros((C, (ri1 - ri0) * W, gw * W), np.float32)
-        todo = [(r, c) for r in range(ri0, ri1) for c in range(gw)
+    for r0 in range(0, gh, 16):
+        r1 = min(r0 + 16, gh)
+        slab = np.zeros((C, (r1 - r0) * W, gw * W), np.float32)
+        todo = [(r, c) for r in range(r0, r1) for c in range(gw)
                 if r * gw + c in slot]
         for i in range(0, len(todo), batch):
             dec = be.decode([slot[r * gw + c]
                              for r, c in todo[i:i + batch]], depths)
             for w, (r, c) in zip(dec, todo[i:i + batch]):
-                slab[:, (r - ri0) * W:(r - ri0 + 1) * W,
+                slab[:, (r - r0) * W:(r - r0 + 1) * W,
                      c * W:(c + 1) * W] = w
-        if not deblock:
-            yield r0 * W, r1 * W, slab
-            continue
-        rows = np.empty((C, (r1 - r0) * W, gw * W),
-                        np.int8 if int8 else np.float32)
-        # group same-width supports and run them as one batch (pure
-        # throughput: the net is per-sample) — a row is 4-5 GB of
-        # activations at FRAME_BATCH=4, safe for small GPUs
-        spans = []
-        for c0 in range(0, gw, fr):
-            c1 = min(c0 + fr, gw)
-            spans.append((c0, c1, max(0, c0 - hw), min(gw, c1 + hw)))
-        by_width = {}
-        for s in spans:
-            by_width.setdefault(s[3] - s[2], []).append(s)
-        for width, group in by_width.items():
-            for i in range(0, len(group), _FRAME_BATCH):
-                chunk = group[i:i + _FRAME_BATCH]
-                x = np.stack([slab[:, :, ci0 * W:ci1 * W]
-                              for _, _, ci0, ci1 in chunk])
-                y = be.deblock_frame(x, depths, int8=int8)
-                for yk, (c0, c1, ci0, ci1) in zip(y, chunk):
-                    rows[:, :, c0 * W:c1 * W] = \
-                        yk[:, (r0 - ri0) * W:(r1 - ri0) * W,
-                           (c0 - ci0) * W:(c1 - ci0) * W]
-        yield r0 * W, r1 * W, rows
+        yield r0 * W, r1 * W, slab
+
+
+def _tile_rows_t(be, packets, kept, meta, depths, batch, deblock):
+    """Torch-native _tile_rows: mosaicking, deblocking and (via
+    dcos_rows) stats all stay on the device; yields (y0_px, y1_px,
+    (C, y1-y0, gw*W) float32 device tensor). The numpy twin above
+    serves torch-free backends; this is the fast path — the numpy
+    version's CPU slab round-trips (~40 GB/ladder point) made restat
+    8x slower than the fused encode pass. Peak device memory ~9 GB at
+    the 512 recipe (slab + rows + deblock batch)."""
+    t = be.torch
+    W, C = be.window, meta["shape"][0]
+    gh, gw = meta["grid"]
+    fr = (be.deblock_recipe["frame"] // W) if deblock else 16
+    hw = (be.deblock_recipe["halo"] // W) if deblock else 0
+    slot = {int(s): p for s, p in zip(kept, packets)}
+    dev = be.device
+    with t.no_grad():
+        for r0 in range(0, gh, fr):
+            r1 = min(r0 + fr, gh)
+            ri0, ri1 = max(0, r0 - hw), min(gh, r1 + hw)
+            slab = t.zeros(C, (ri1 - ri0) * W, gw * W, device=dev)
+            todo = [(r, c) for r in range(ri0, ri1) for c in range(gw)
+                    if r * gw + c in slot]
+            for i in range(0, len(todo), batch):
+                chunk = todo[i:i + batch]
+                with be._ac():
+                    dec = be.codec.decode(
+                        [slot[r * gw + c] for r, c in chunk], depths)
+                dec = dec.float()
+                for w_, (r, c) in zip(dec, chunk):
+                    slab[:, (r - ri0) * W:(r - ri0 + 1) * W,
+                         c * W:(c + 1) * W] = w_
+            if not deblock:
+                yield r0 * W, r1 * W, slab
+                continue
+            rows = t.empty(C, (r1 - r0) * W, gw * W, device=dev)
+            spans = []
+            for c0 in range(0, gw, fr):
+                c1 = min(c0 + fr, gw)
+                spans.append((c0, c1, max(0, c0 - hw), min(gw, c1 + hw)))
+            by_width = {}
+            for s in spans:
+                by_width.setdefault(s[3] - s[2], []).append(s)
+            for group in by_width.values():
+                for i in range(0, len(group), _FRAME_BATCH):
+                    chunk = group[i:i + _FRAME_BATCH]
+                    x = t.stack([slab[:, :, ci0 * W:ci1 * W]
+                                 for _, _, ci0, ci1 in chunk])
+                    Ls = t.tensor(list(depths), device=dev)[None] \
+                        .expand(len(chunk), -1)
+                    y = be.deblock_net(x, Ls)
+                    for yk, (c0, c1, ci0, ci1) in zip(y, chunk):
+                        rows[:, :, c0 * W:c1 * W] = \
+                            yk[:, (r0 - ri0) * W:(r1 - ri0) * W,
+                               (c0 - ci0) * W:(c1 - ci0) * W]
+            yield r0 * W, r1 * W, rows
 
 
 def _decoder_stats(meta, be, decoder):
@@ -1119,10 +1154,10 @@ def codec_tile_main(argv=None):
         canvas = (np.zeros((C, gh * W, gw * W), np.float32) if args.float32
                   else np.full((C, gh * W, gw * W), fill, np.int8))
         if deblock:
-            for y0, y1, rows in _tile_rows(be, packets, kept, meta,
-                                           depths, args.batch, True,
-                                           int8=not args.float32):
-                canvas[:, y0:y1] = rows
+            for y0, y1, rows in _tile_rows_t(be, packets, kept, meta,
+                                             depths, args.batch, True):
+                canvas[:, y0:y1] = (rows.cpu().numpy() if args.float32
+                                    else be.requant_dev(rows))
         else:
             for i in range(0, len(packets), args.batch):
                 dec = be.decode(packets[i:i + args.batch], depths,
@@ -1171,12 +1206,14 @@ def codec_tile_main(argv=None):
         pad[:, :H, :Wd] = a
         ladder = quality_ladder(be.specs_sig)
         qs = QualityStats(ladder)
+        fused = hasattr(be, "dcos_rows")         # torch: all-device path
+        row_iter = _tile_rows_t if fused else _tile_rows
         for pt in ladder:
             tp = time.time()
-            for y0, y1, rows in _tile_rows(be, packets, kept, meta,
-                                           list(pt), args.batch, deblock):
+            for y0, y1, rows in row_iter(be, packets, kept, meta,
+                                         list(pt), args.batch, deblock):
                 nh = (y1 - y0) // W
-                if hasattr(be, "dcos_rows"):     # device path
+                if fused:
                     dvals, wmg = be.dcos_rows(rows, pad[:, y0:y1])
                 else:
                     x, vrow = prep_ae_np(pad[None, :, y0:y1])
