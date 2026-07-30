@@ -50,6 +50,9 @@ train:
 
 eval:
   recon_tuples: ["8-1-0", "8-8-0", "8-8-2", "8-8-8"]
+  rd_refs:
+    - "/data/tessera-samples/baselines/tessera_vq.json|tessera_vq|tessera-vq per-chip VQ"
+    - "/data/tessera-samples/baselines/tessera_vq.json|tessera_vq_rvq|tessera-vq 2-stage RVQ"
 
 log:
   run_tag: tessera_probe
