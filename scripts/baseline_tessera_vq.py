@@ -21,7 +21,9 @@ import numpy as np
 from georvq.data.store import ChipStore, geographic_split
 
 VQ_KS = [4, 16, 64, 256, 1024, 4096]
-RVQ_KS = [(16, 16), (64, 64), (256, 256), (1024, 1024)]
+# (20, 256) is the VQTessera client's default serving configuration at
+# t=512 — "tessera-vq as deployed"
+RVQ_KS = [(16, 16), (20, 256), (64, 64), (256, 256), (1024, 1024)]
 
 
 def unit_field(chip):
