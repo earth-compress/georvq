@@ -72,6 +72,59 @@ def _northup_transform(geo, cellpx):
 QUALITY_SCALE = 1e-5     # uint16 quality bands: value * SCALE = mean dcos
 
 
+def _write_cog(outdir, name, arr, cellpx, geo, bitstream_id):
+    """One asset COG: arr (h, w, bands), cellpx ground px per cell."""
+    rasterio = _rasterio()
+    blockcells = max(16, GROUND_BLOCK // cellpx)
+    prof = {"driver": "GTiff", "height": arr.shape[0],
+            "width": arr.shape[1], "count": arr.shape[2],
+            "dtype": str(arr.dtype),
+            "compress": "deflate", "interleave": "band",
+            "transform": _northup_transform(geo, cellpx)}
+    if min(arr.shape[:2]) >= blockcells:   # tiny rasters: strips
+        prof.update(tiled=True, blockxsize=blockcells,
+                    blockysize=blockcells)
+    if geo.get("crs"):
+        prof["crs"] = geo["crs"]
+    path = os.path.join(outdir, f"{name}.tif")
+    with rasterio.Env(GDAL_NUM_THREADS="ALL_CPUS"), \
+            rasterio.open(path, "w", **prof) as ds:
+        ds.write(arr.transpose(2, 0, 1))
+        ds.update_tags(BITSTREAM_ID=bitstream_id,
+                       GEORVQ_ROLE=name,
+                       NOTE="RVQ code indices - never interpolate")
+    return os.path.getsize(path)
+
+
+def write_quality(outdir, meta, geo, did, ladder, win_means, keep):
+    """The decoder-specific quality asset quality/<decoder_id>.tif —
+    per-window mean dcos per ladder point — plus its entry in the meta
+    dict (returned updated; caller persists metadata.json). Callable at
+    encode time or by a later `restat` pass (variant decoders publish
+    alongside rather than overwrite)."""
+    gh, gw = meta["grid"]
+    names = ["-".join(map(str, t)) for t in ladder]
+    q = np.zeros((gh, gw, len(ladder)), np.uint16)
+    for bi, t in enumerate(ladder):
+        v = np.clip(np.round(win_means[t] / QUALITY_SCALE), 0, 65535)
+        plane = np.zeros(gh * gw, np.uint16)
+        plane[keep] = v.astype(np.uint16)
+        q[:, :, bi] = plane.reshape(gh, gw)
+    os.makedirs(os.path.join(outdir, "quality"), exist_ok=True)
+    size = _write_cog(outdir, f"quality/{did}", q, meta["window"], geo,
+                      meta["bitstream_id"])
+    rio = _rasterio()
+    with rio.open(os.path.join(outdir, f"quality/{did}.tif"), "r+") as ds:
+        ds.update_tags(QUALITY_SCALE=QUALITY_SCALE, DECODER_ID=did,
+                       NOTE="per-window mean dcos per ladder point")
+        for bi, n in enumerate(names):
+            ds.set_band_description(bi + 1, n)
+    meta = {**meta, "quality_rasters":
+            {**meta.get("quality_rasters", {}),
+             did: {"points": names, "scale": QUALITY_SCALE}}}
+    return meta, size
+
+
 def write_assets(outdir, packets, keep, meta, valid, geo, specs_sig,
                  star=None, quality=None):
     """packets: kept windows' Packets. keep: their slot indices in the
@@ -80,31 +133,13 @@ def write_assets(outdir, packets, keep, meta, valid, geo, specs_sig,
     per-window mean dcos per ladder point, written as a DECODER-SPECIFIC
     asset quality/<decoder_id>.tif (other decoders — deblocked, lite —
     publish alongside rather than overwrite). Returns per-asset sizes."""
-    rasterio = _rasterio()
     os.makedirs(outdir, exist_ok=True)
     gh, gw = meta["grid"]
     W = meta["window"]
 
     def write(name, arr, cellpx):
-        blockcells = max(16, GROUND_BLOCK // cellpx)
-        prof = {"driver": "GTiff", "height": arr.shape[0],
-                "width": arr.shape[1], "count": arr.shape[2],
-                "dtype": str(arr.dtype),
-                "compress": "deflate", "interleave": "band",
-                "transform": _northup_transform(geo, cellpx)}
-        if min(arr.shape[:2]) >= blockcells:   # tiny rasters: strips
-            prof.update(tiled=True, blockxsize=blockcells,
-                        blockysize=blockcells)
-        if geo.get("crs"):
-            prof["crs"] = geo["crs"]
-        path = os.path.join(outdir, f"{name}.tif")
-        with rasterio.Env(GDAL_NUM_THREADS="ALL_CPUS"), \
-                rasterio.open(path, "w", **prof) as ds:
-            ds.write(arr.transpose(2, 0, 1))
-            ds.update_tags(BITSTREAM_ID=meta["bitstream_id"],
-                           GEORVQ_ROLE=name,
-                           NOTE="RVQ code indices - never interpolate")
-        return os.path.getsize(path)
+        return _write_cog(outdir, name, arr, cellpx, geo,
+                          meta["bitstream_id"])
 
     sizes = {}
     for ti, name in enumerate(tier_names(len(specs_sig))):
@@ -129,29 +164,16 @@ def write_assets(outdir, packets, keep, meta, valid, geo, specs_sig,
                           valid.astype(np.uint8)[:, :, None], 1)
     if quality is not None:
         did, ladder, wm = quality
-        names = ["-".join(map(str, t)) for t in ladder]
-        q = np.zeros((gh, gw, len(ladder)), np.uint16)
-        for bi, t in enumerate(ladder):
-            v = np.clip(np.round(wm[t] / QUALITY_SCALE), 0, 65535)
-            plane = np.zeros(gh * gw, np.uint16)
-            plane[keep] = v.astype(np.uint16)
-            q[:, :, bi] = plane.reshape(gh, gw)
-        os.makedirs(os.path.join(outdir, "quality"), exist_ok=True)
-        sizes[f"quality/{did}"] = write(f"quality/{did}", q, W)
-        # band names + scale ride in the asset itself
-        rio = _rasterio()
-        with rio.open(os.path.join(outdir, f"quality/{did}.tif"),
-                      "r+") as ds:
-            ds.update_tags(QUALITY_SCALE=QUALITY_SCALE, DECODER_ID=did,
-                           NOTE="per-window mean dcos per ladder point")
-            for bi, n in enumerate(names):
-                ds.set_band_description(bi + 1, n)
-        meta = {**meta, "quality_rasters":
-                {**meta.get("quality_rasters", {}),
-                 did: {"points": names, "scale": QUALITY_SCALE}}}
+        meta, sizes[f"quality/{did}"] = write_quality(
+            outdir, meta, geo, did, ladder, wm, keep)
     with open(os.path.join(outdir, META_NAME), "w") as f:
         json.dump(meta, f, indent=1)
     return sizes
+
+
+def update_meta(indir, meta):
+    with open(os.path.join(indir, META_NAME), "w") as f:
+        json.dump(meta, f, indent=1)
 
 
 def read_meta(indir):

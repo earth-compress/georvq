@@ -44,16 +44,24 @@ def bitstream_id(model, stats_pca=None, cdfs_path=None) -> str:
     return h.hexdigest()[:16]
 
 
-def decoder_id(model) -> str:
+def decoder_id(model, extra_state=None, recipe=None) -> str:
     """Identity of the decoder half (bitstream_id deliberately excludes
     it): hashes the decoder's parameters. Decoder-specific artifacts
     (e.g. per-window quality rasters) are keyed by this, so upgraded or
-    variant decoders publish alongside rather than overwriting."""
+    variant decoders publish alongside rather than overwriting.
+
+    Variant decoders pass `extra_state` (the post-processor's state
+    dict) and `recipe` (its canonical application constants, a small
+    JSON-able dict): both DEFINE the output field, so both are part of
+    the identity — changing either mints a new decoder_id."""
     h = hashlib.sha256()
-    sd = model.decoder.state_dict()
-    for k in sorted(sd):
-        h.update(k.encode())
-        h.update(sd[k].detach().cpu().numpy().tobytes())
+    for sd in (model.decoder.state_dict(),) + \
+            ((extra_state,) if extra_state is not None else ()):
+        for k in sorted(sd):
+            h.update(k.encode())
+            h.update(sd[k].detach().cpu().numpy().tobytes())
+    if recipe is not None:
+        h.update(json.dumps(recipe, sort_keys=True).encode())
     return h.hexdigest()[:16]
 
 
