@@ -70,8 +70,7 @@ thumbnail/browse product tier appears, or scale the variants up (the
 
 **Status of previously-pending decisions**: the coarse-residual (8*)
 sidecar SHIPPED (on by default in the AE encoder); the lite decoder
-family is parked above. Still open: a `--deblock` decode option
-(`ae_deblock_deblock_big` in the research repo: seam factor -77%,
-overall fidelity +20% at full ladder, validated against the release
-weights) — decoder-side and bitstream-free, so it can ship any time as
-a decoder variant under its own `decoder_id`.
+family is parked above. The deblocker SHIPPED 2026-07-30 as the second
+AE decoder (`georvq-ae-tile decode --decoder deblock`, canonical
+512+64-halo recipe — see docs/AE_RELEASE.md *Decoders* and
+`georvq/ae/deblock.py`).
