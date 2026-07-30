@@ -43,6 +43,11 @@ train:
 
 eval:
   recon_tuples: ["8-1-0", "8-8-0", "8-8-2", "8-8-8"]
+  # scripts/baseline_tessera_vq.py writes this overlay (per-chip k-means VQ
+  # and 2-stage RVQ from github.com/sk818/tessera-vq, fair-rate accounting)
+  rd_refs:
+    - "/data/tessera-samples/baselines/tessera_vq.json|tessera_vq|tessera-vq per-chip VQ"
+    - "/data/tessera-samples/baselines/tessera_vq.json|tessera_vq_rvq|tessera-vq 2-stage RVQ"
 
 log:
   run_tag: tessera_pyr64
