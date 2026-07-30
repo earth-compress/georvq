@@ -1,0 +1,23 @@
+# Unquantized representational-ceiling probe on Tessera: stage-1
+# sigma-conditioned AE (no VQ), for the data-scaling sweep over
+# data.limit_chips (512, 1024, 2048, ...). The sigma=0 reconstruction is
+# the ceiling. Same optim recipe as the DEM stage-1 runs. One run per
+# limit, e.g.:
+#
+#   georvq-train-stage1 -c configs/tessera_stage1_probe.yaml --gpu 1 \
+#       data.limit_chips=1024 log.run_tag=tessera_ceil_1024
+inherit: tessera_pyr64_probe.yaml
+
+model:
+  vq: null
+  sigma: {max: 4.0, freqs: 8}
+
+train:
+  steps: 40000
+  optim: {lr: 1.5e-4, wd: 0.01, warmup: 1000, lr0_steps: 100}
+  val_interval: 500
+  fig_interval: 5000
+  save_interval: 5000
+
+log:
+  run_tag: tessera_ceil
