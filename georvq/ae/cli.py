@@ -47,6 +47,7 @@ import numpy as np
 
 NODATA = -128
 FORMAT = "georvq-ae/2"
+_FRAME_BATCH = 4      # deblock frames per forward (~1.25 GB VRAM each)
 
 
 # --------------------------------------------------------------------------
@@ -202,19 +203,25 @@ class TorchBackend:
             recipe=entry["recipe"])
 
     def deblock_frame(self, mosaic, depths, int8=False):
-        """One canonical frame support: (C, h, w) float32 blocky mosaic
-        -> deblocked, fp32 (the deblocker is small; bf16 buys nothing).
-        int8: requant on device (4x less transfer, no CPU sqrt)."""
+        """Canonical frame supports, (C, h, w) or batched (B, C, h, w)
+        float32 blocky mosaics -> deblocked, fp32 (results are
+        per-sample: GroupNorm + convs don't couple the batch, so
+        batching is a pure throughput optimization). int8: requant on
+        device (4x less transfer, no CPU sqrt)."""
         t = self.torch
+        single = mosaic.ndim == 3
         with t.no_grad():
-            x = t.from_numpy(np.ascontiguousarray(mosaic))[None] \
-                .to(self.device)
-            Ls = t.tensor(list(depths), device=self.device)[None]
-            out = self.deblock_net(x, Ls)[0]
+            x = t.from_numpy(np.ascontiguousarray(mosaic)).to(self.device)
+            if single:
+                x = x[None]
+            Ls = t.tensor(list(depths), device=self.device)[None] \
+                .expand(x.shape[0], -1)
+            out = self.deblock_net(x, Ls)
             if int8:
                 out = t.clamp(t.round(t.sign(out) * t.sqrt(out.abs())
                                       * 127.5), -127, 127).to(t.int8)
-            return out.cpu().numpy()
+            out = out.cpu().numpy()
+            return out[0] if single else out
 
     def dcos_rows(self, rows, raw):
         """Per-pixel dcos of reconstructed rows vs raw source rows, on
@@ -858,14 +865,26 @@ def _tile_rows(be, packets, kept, meta, depths, batch, deblock,
             continue
         rows = np.empty((C, (r1 - r0) * W, gw * W),
                         np.int8 if int8 else np.float32)
+        # group same-width supports and run them as one batch (pure
+        # throughput: the net is per-sample) — a row is 4-5 GB of
+        # activations at FRAME_BATCH=4, safe for small GPUs
+        spans = []
         for c0 in range(0, gw, fr):
             c1 = min(c0 + fr, gw)
-            ci0, ci1 = max(0, c0 - hw), min(gw, c1 + hw)
-            y = be.deblock_frame(slab[:, :, ci0 * W:ci1 * W], depths,
-                                 int8=int8)
-            rows[:, :, c0 * W:c1 * W] = \
-                y[:, (r0 - ri0) * W:(r1 - ri0) * W,
-                  (c0 - ci0) * W:(c1 - ci0) * W]
+            spans.append((c0, c1, max(0, c0 - hw), min(gw, c1 + hw)))
+        by_width = {}
+        for s in spans:
+            by_width.setdefault(s[3] - s[2], []).append(s)
+        for width, group in by_width.items():
+            for i in range(0, len(group), _FRAME_BATCH):
+                chunk = group[i:i + _FRAME_BATCH]
+                x = np.stack([slab[:, :, ci0 * W:ci1 * W]
+                              for _, _, ci0, ci1 in chunk])
+                y = be.deblock_frame(x, depths, int8=int8)
+                for yk, (c0, c1, ci0, ci1) in zip(y, chunk):
+                    rows[:, :, c0 * W:c1 * W] = \
+                        yk[:, (r0 - ri0) * W:(r1 - ri0) * W,
+                           (c0 - ci0) * W:(c1 - ci0) * W]
         yield r0 * W, r1 * W, rows
 
 
