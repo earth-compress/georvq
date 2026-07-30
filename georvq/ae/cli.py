@@ -250,16 +250,20 @@ class TorchBackend:
         return t.clamp(t.round(t.sign(out) * t.sqrt(out.abs()) * 127.5),
                        -127, 127).to(t.int8).cpu().numpy()
 
+    INT_HIST_BINS = 65280      # int metrics histogrammed at 1/256 step
+
     def stats_rows(self, rows, raw):
-        """dcos_rows plus the int-domain secondary metric: per-pixel
-        **max |recon_int8 - src_int8| over bands** (L-inf, quantizer
-        steps) — what an int8-tile consumer actually experiences, with
-        an error-bound flavor the angular dcos doesn't have.
+        """dcos_rows plus the int-domain secondary metrics, two per
+        pixel: **max |recon_int8 - src_int8| over bands** (L-inf,
+        worst-band guarantee flavor) and **mean |...| over bands**
+        (average per-band error) — what an int8-tile consumer actually
+        experiences, in quantizer steps.
 
         rows: (C, h, w) float32 (tensor or numpy); raw: (C, h, w) int8.
         -> (valid dcos flat, (h/W, w/W) win mean dcos,
-            (255,) exact int-step histogram over valid pixels,
-            (h/W, w/W, 5) win int stats [mean, p50, p90, p99, max])"""
+            (2, INT_HIST_BINS) histograms of [max, avg] at 1/256 step,
+            (h/W, w/W, 2, 5) win stats [mean, p50, p90, p99, max]
+            per family)"""
         t = self.torch
         W = self.window
         with t.no_grad():
@@ -275,22 +279,27 @@ class TorchBackend:
                 .to(self.device).to(t.int16)
             q = t.clamp(t.round(t.sign(y) * t.sqrt(y.abs()) * 127.5),
                         -127, 127).to(t.int16)
-            dint = (q - a).abs().amax(0).float()
-            hist = t.bincount(dint[v].to(t.int64).clamp(0, 254),
-                              minlength=255)
-            dint = t.where(v, dint, t.full_like(dint, float("nan")))
-            dwin = dint.reshape(h // W, W, w // W, W) \
-                .permute(0, 2, 1, 3).reshape(-1, W * W)
-            qq = t.nanquantile(
-                dwin, t.tensor([0.5, 0.9, 0.99], device=dwin.device),
-                dim=1)
-            wmax = t.where(t.isnan(dwin), dwin.new_tensor(-1.0),
-                           dwin).amax(1)
-            win_int = t.stack([dwin.nanmean(1), qq[0], qq[1], qq[2],
-                               wmax], 1)
+            dabs = (q - a).abs().float()
+            hists, wins = [], []
+            for dint in (dabs.amax(0), dabs.mean(0)):
+                hists.append(t.bincount(
+                    (dint[v] * 256).round().to(t.int64)
+                    .clamp(0, self.INT_HIST_BINS - 1),
+                    minlength=self.INT_HIST_BINS))
+                dm = t.where(v, dint, t.full_like(dint, float("nan")))
+                dwin = dm.reshape(h // W, W, w // W, W) \
+                    .permute(0, 2, 1, 3).reshape(-1, W * W)
+                qq = t.nanquantile(
+                    dwin, t.tensor([0.5, 0.9, 0.99], device=dwin.device),
+                    dim=1)
+                wmax = t.where(t.isnan(dwin), dwin.new_tensor(-1.0),
+                               dwin).amax(1)
+                wins.append(t.stack([dwin.nanmean(1), qq[0], qq[1],
+                                     qq[2], wmax], 1))
             return (d[v].cpu().numpy(), (dw / vw).cpu().numpy(),
-                    hist.cpu().numpy(),
-                    win_int.cpu().numpy().reshape(h // W, w // W, 5))
+                    t.stack(hists).cpu().numpy(),
+                    t.stack(wins, 1).cpu().numpy()
+                    .reshape(h // W, w // W, 2, 5))
 
     def encode(self, x, coarse_residual=False):
         # encoder + assignment stay fp32: bf16 latents flip ~24% of
@@ -1107,16 +1116,19 @@ def codec_tile_main(argv=None):
                       f"{v['bits']:9.0f} " + " ".join(
                           f"{v[m]:9.2e}" for m in
                           ("mean", "p50", "p90", "p99", "max")))
-            if any("int" in v for v in stats.values()):
-                print(f"{'':>8s} {'int steps':>9s} " + " ".join(
+            for fam, label in (("int_max", "int max"),
+                               ("int_avg", "int avg")):
+                if not any(fam in v for v in stats.values()):
+                    continue
+                print(f"{'':>8s} {label:>9s} " + " ".join(
                     f"{m:>9s}" for m in ("mean", "p50", "p90", "p99",
                                          "max")))
                 for k, v in stats.items():
-                    if "int" in v:
-                        i = v["int"]
-                        print(f"{k:>8s} {'':>9s} {i['mean']:9.2f} "
-                              + " ".join(f"{i[m]:9d}" for m in
-                                         ("p50", "p90", "p99", "max")))
+                    if fam in v:
+                        i = v[fam]
+                        print(f"{k:>8s} {'':>9s} " + " ".join(
+                            f"{i[m]:9.4g}" for m in
+                            ("mean", "p50", "p90", "p99", "max")))
 
         header = read_meta(args.input)
         stats = header.pop("quality_stats", None)
@@ -1260,7 +1272,8 @@ def codec_tile_main(argv=None):
         qs = QualityStats(ladder)
         fused = hasattr(be, "stats_rows")        # torch: all-device path
         row_iter = _tile_rows_t if fused else _tile_rows
-        int_hist = {pt: np.zeros(255, np.int64) for pt in ladder}
+        int_hist = {pt: np.zeros((2, TorchBackend.INT_HIST_BINS),
+                                 np.int64) for pt in ladder}
         int_win = {pt: [] for pt in ladder}
         for pt in ladder:
             tp = time.time()
@@ -1274,7 +1287,7 @@ def codec_tile_main(argv=None):
                     dvals, wmg, ih, wint = be.stats_rows(
                         rows, pad[:, y0:y1])
                     int_hist[pt] += ih
-                    int_win[pt].append(wint.reshape(-1, 5)[slots])
+                    int_win[pt].append(wint.reshape(-1, 2, 5)[slots])
                 else:                # generic backend: dcos only
                     x, vrow = prep_ae_np(pad[None, :, y0:y1])
                     x, vrow = x[0], vrow[0]
@@ -1290,14 +1303,20 @@ def codec_tile_main(argv=None):
         win_int = None
         if fused:                    # exact int-step summary per point
             win_int = {pt: np.concatenate(v) for pt, v in int_win.items()}
+            steps = np.arange(TorchBackend.INT_HIST_BINS) / 256.0
             for pt in ladder:
-                h_, n_ = int_hist[pt], int_hist[pt].sum()
-                cum = np.cumsum(h_)
-                pct = lambda p: int(np.searchsorted(cum, p * n_))
-                stats["-".join(map(str, pt))]["int"] = {
-                    "mean": float((h_ * np.arange(255)).sum() / max(n_, 1)),
-                    "p50": pct(.5), "p90": pct(.9), "p99": pct(.99),
-                    "max": int(np.nonzero(h_)[0].max()) if n_ else 0}
+                for fi, fam in enumerate(("int_max", "int_avg")):
+                    h_ = int_hist[pt][fi]
+                    n_ = h_.sum()
+                    cum = np.cumsum(h_)
+                    pct = lambda p: float(
+                        steps[min(np.searchsorted(cum, p * n_),
+                                  len(steps) - 1)])
+                    stats["-".join(map(str, pt))][fam] = {
+                        "mean": float((h_ * steps).sum() / max(n_, 1)),
+                        "p50": pct(.5), "p90": pct(.9), "p99": pct(.99),
+                        "max": float(steps[np.nonzero(h_)[0].max()])
+                        if n_ else 0.0}
         entry = {"name": args.decoder, "quality_stats": stats}
         if deblock:
             entry["recipe"] = be.deblock_recipe
