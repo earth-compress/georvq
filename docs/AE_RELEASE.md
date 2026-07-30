@@ -56,6 +56,53 @@ Measured access costs (local ranged-HTTP): whole-tile coarse ~180 KiB /
 query ~1 MiB (one source-block quantum — the source tiff needs ~12 MiB
 for the same read).
 
+## Decoders: plain or deblock
+
+The bitstream is decoder-independent; this release ships two decoders
+against the same blobs:
+
+- **`plain`** (default): the base per-window decoder.
+- **`deblock`** (`--decoder deblock`, torch backend): the base decoder
+  plus a 2M-param seam-removal network (the windows decode
+  independently, leaving seams at every 64 px boundary). Validated on
+  held-out val + a real tile: mean dcos −40% at full rate (−22/−16/−6%
+  on val at full/half/low), window-seam adjacency factor 3.7 → 0.7.
+
+The deblock decoder is defined by a **canonical recipe**, not a knob:
+512 px frames anchored at the tile origin, each deblocked from its
+frame plus a one-window (64 px) halo clipped at tile bounds, hard-crop
+back to the frame. The network's GroupNorm makes output depend on frame
+extents, so the tiling is part of the decoder identity — the recipe
+constants are stamped in the bundle (`decoders/deblock.pt`,
+`bundle.json`) and folded into its `decoder_id`. Its locality contract:
+*a deblocked pixel depends on the code indices within 64 px of its
+frame, and nothing else* — so per-frame, slab, or ranged-viewport
+decodes all produce the same result (deviation from whole-mosaic
+inference measured at ~1e-5 dcos), and window decodes may be shared
+between frames as a pure optimization. Costs: ~1.25 GB extra VRAM
+(fp32, one 640 px frame), 1.25–1.56× window-decode redundancy depending
+on scheduling, +27%-of-KiB index reads on viewport decodes. At tile
+edges the halo is clipped: the network leaves the tile-boundary seam
+essentially untouched rather than hallucinating (+1.3% dcos in the
+128 px border band; a mosaic-aware client can eliminate even that by
+fetching a 64 px window strip from the neighbor tile — not part of the
+canonical per-tile recipe).
+
+Each decoder has its own `decoder_id`, `quality/<decoder_id>.tif`
+raster and stats namespace in `metadata.json`, all minted server-side
+with the identical canonical routine. Tiles encoded before the deblock
+decoder existed decode with it unchanged, but resolve `--quality`
+against the plain stats (conservative — deblock dominates) until a
+re-stat pass with source access mints the deblock layer in place:
+
+```bash
+georvq-ae-tile restat --model <bundle> --device cuda tile_dir/ src.tiff
+```
+
+A deblocker is trained against one base decoder's outputs: the package
+stamps the `bitstream_id` + base `decoder_id` it was trained on, and
+loading refuses mismatched bundles.
+
 ## Controls: rate or quality
 
 - **Rate control**: `--tuple L0,L1,L2`. The efficient ladder (measured
@@ -110,6 +157,7 @@ bucket is 302,466 tiles over 9 years.
   (fine tier ~95% entropy-saturated; deflate recovers the rest) while
   dominating decode time. The coarse tier's ~30% entropy gap is left on
   the table (a regional coarse-mosaic product is the fix if it matters).
-- **Single deep decoder**: lite variants trained and parked below the
-  quality bar (docs/PARKED.md), which also holds the deblocker and the
-  error-envelope predictor.
+- **Lite decoders**: trained and parked below the quality bar
+  (docs/PARKED.md, which also holds the error-envelope predictor). The
+  deblocker graduated from that list and ships as the second decoder
+  (above).
