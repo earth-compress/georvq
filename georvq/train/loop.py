@@ -44,6 +44,13 @@ def setup_data(cfg: Config, source, device):
                                        seed=cfg.data.split_seed)
     print(f"data: {len(store.index)} chips -> {len(train_rows)} train / "
           f"{len(val_rows)} val", flush=True)
+    if cfg.data.limit_chips:
+        order = np.random.default_rng(cfg.data.split_seed).permutation(
+            len(train_rows))
+        train_rows = train_rows.iloc[
+            order[:cfg.data.limit_chips]].reset_index(drop=True)
+        print(f"data: limit_chips -> training on {len(train_rows)} chips",
+              flush=True)
     val_s = fixed_val_tokens(store, val_rows, token=cfg.model.window)
     print(f"data: {val_s.shape[0]} fixed val tokens", flush=True)
     p = cfg.data.pool

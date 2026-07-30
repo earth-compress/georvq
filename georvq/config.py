@@ -220,6 +220,9 @@ class DataConfig(StrictModel):
     store_dir: Path
     val_frac: float = 0.04
     split_seed: int = 0
+    limit_chips: Optional[int] = None   # data-scaling probes: train on a
+    #   deterministic subsample of N chips (nested: N ⊂ 2N for the same
+    #   split_seed); the val split always stays full
     pool: PoolConfig = Field(default_factory=PoolConfig)
 
     @field_validator("val_frac")
