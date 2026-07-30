@@ -37,8 +37,12 @@ own version of this document.
   fine.tif    2048x2048, 8 uint16 bands    40 m cells
   star.tif     128x128, 66 uint8 bands    2-bit coarse-residual sidecar
   mask.tif    8192x8192 validity          exact -128 nodata restore
-  quality/<decoder_id>.tif                measured mean dcos per window
-                                          per rate point (decoder-keyed)
+  quality/<decoder_id>.tif                measured per-window error per
+                                          rate point (decoder-keyed):
+                                          mean dcos bands + int-step
+                                          bands (mean/p50/p90/p99/max of
+                                          per-pixel max-over-bands
+                                          |recon-src| in int8 steps)
   metadata.json                           source profile, quality stats,
                                           specs, bitstream_id
 ```

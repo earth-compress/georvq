@@ -96,32 +96,57 @@ def _write_cog(outdir, name, arr, cellpx, geo, bitstream_id):
     return os.path.getsize(path)
 
 
-def write_quality(outdir, meta, geo, did, ladder, win_means, keep):
+INT_STATS = ("mean", "p50", "p90", "p99", "max")
+QUALITY_INT_SCALE = 2 ** -8   # uint16 int bands: value * SCALE = int8 steps
+
+
+def write_quality(outdir, meta, geo, did, ladder, win_means, keep,
+                  win_int=None):
     """The decoder-specific quality asset quality/<decoder_id>.tif —
-    per-window mean dcos per ladder point — plus its entry in the meta
-    dict (returned updated; caller persists metadata.json). Callable at
-    encode time or by a later `restat` pass (variant decoders publish
-    alongside rather than overwrite)."""
+    per-window mean dcos per ladder point, plus (when `win_int` is
+    given) five bands per point of the int-domain secondary metric:
+    per-window mean/p50/p90/p99/max of the per-pixel max-over-bands
+    |recon_int8 - src_int8| (quantizer steps, fixed-point 1/256).
+    Updates the meta dict (returned; caller persists metadata.json).
+    Callable at encode time or by a later `restat` pass (variant
+    decoders publish alongside rather than overwrite)."""
     gh, gw = meta["grid"]
     names = ["-".join(map(str, t)) for t in ladder]
-    q = np.zeros((gh, gw, len(ladder)), np.uint16)
+
+    def plane(vals, scale):
+        p = np.zeros(gh * gw, np.uint16)
+        p[keep] = np.clip(np.round(vals / scale), 0, 65535) \
+            .astype(np.uint16)
+        return p.reshape(gh, gw)
+
+    bands, descs = [], []
     for bi, t in enumerate(ladder):
-        v = np.clip(np.round(win_means[t] / QUALITY_SCALE), 0, 65535)
-        plane = np.zeros(gh * gw, np.uint16)
-        plane[keep] = v.astype(np.uint16)
-        q[:, :, bi] = plane.reshape(gh, gw)
+        bands.append(plane(win_means[t], QUALITY_SCALE))
+        descs.append(names[bi])
+    if win_int is not None:
+        for bi, t in enumerate(ladder):
+            for si, stat in enumerate(INT_STATS):
+                bands.append(plane(win_int[t][:, si], QUALITY_INT_SCALE))
+                descs.append(f"int_{stat}:{names[bi]}")
+    q = np.stack(bands, -1)
     os.makedirs(os.path.join(outdir, "quality"), exist_ok=True)
     size = _write_cog(outdir, f"quality/{did}", q, meta["window"], geo,
                       meta["bitstream_id"])
     rio = _rasterio()
     with rio.open(os.path.join(outdir, f"quality/{did}.tif"), "r+") as ds:
         ds.update_tags(QUALITY_SCALE=QUALITY_SCALE, DECODER_ID=did,
-                       NOTE="per-window mean dcos per ladder point")
-        for bi, n in enumerate(names):
+                       QUALITY_INT_SCALE=QUALITY_INT_SCALE,
+                       NOTE="per-window mean dcos per ladder point; "
+                            "int_* bands = per-pixel max-over-bands "
+                            "|recon-src| int8 steps")
+        for bi, n in enumerate(descs):
             ds.set_band_description(bi + 1, n)
+    entry = {"points": names, "scale": QUALITY_SCALE}
+    if win_int is not None:
+        entry.update(int_stats=list(INT_STATS),
+                     int_scale=QUALITY_INT_SCALE)
     meta = {**meta, "quality_rasters":
-            {**meta.get("quality_rasters", {}),
-             did: {"points": names, "scale": QUALITY_SCALE}}}
+            {**meta.get("quality_rasters", {}), did: entry}}
     return meta, size
 
 

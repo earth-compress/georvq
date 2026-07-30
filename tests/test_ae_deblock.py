@@ -140,3 +140,40 @@ def test_release_deblocker_tiled_vs_whole():
     tiled = deblock_mosaic(net, x, Ls, frame=128, halo=64)
     dev = 1.0 - (whole * tiled).sum(1)
     assert float(dev.mean()) < 1e-4 and float(dev.max()) < 1e-3
+
+
+@pytest.mark.skipif(not os.path.exists(RELEASE_BUNDLE),
+                    reason="release bundle not available")
+def test_stats_rows_matches_numpy_reference():
+    """The fused device stats (dcos + int-step secondary metric) must
+    equal a straightforward numpy implementation."""
+    from georvq.ae.cli import NODATA, TorchBackend, prep_ae_np
+
+    be = TorchBackend(RELEASE_BUNDLE, "cpu")
+    rng = np.random.default_rng(0)
+    raw = rng.integers(-127, 128, (64, 128, 128)).astype(np.int8)
+    raw[:, :10, :10] = NODATA                    # a nodata patch
+    rows = F.normalize(torch.from_numpy(
+        rng.standard_normal((64, 128, 128), dtype=np.float32)), dim=0)
+
+    dvals, wm, hist, wint = be.stats_rows(rows.numpy(), raw)
+
+    x, v = prep_ae_np(raw[None])
+    x, v = x[0], v[0]
+    y = rows.numpy()
+    d = np.clip(1.0 - (x * y).sum(0), 1e-9, 2.0)
+    np.testing.assert_allclose(np.sort(dvals), np.sort(d[v]), atol=1e-5)
+    q = np.clip(np.rint(np.sign(y) * np.sqrt(np.abs(y)) * 127.5),
+                -127, 127).astype(np.int16)
+    dint = np.abs(q - raw.astype(np.int16)).max(0).astype(np.float64)
+    assert hist.sum() == int(v.sum())
+    np.testing.assert_array_equal(
+        hist, np.bincount(dint[v].astype(np.int64), minlength=255))
+    # per-window stats: check mean + max on a fully-valid window and
+    # that the nodata window's stats ignore invalid pixels
+    wd = dint[64:128, 64:128]
+    assert wint[1, 1, 0] == pytest.approx(wd.mean(), rel=1e-6)
+    assert wint[1, 1, 4] == wd.max()
+    wd0 = dint[:64, :64][v[:64, :64]]
+    assert wint[0, 0, 4] == wd0.max()
+    assert wint[0, 0, 0] == pytest.approx(wd0.mean(), rel=1e-6)

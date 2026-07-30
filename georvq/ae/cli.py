@@ -250,6 +250,48 @@ class TorchBackend:
         return t.clamp(t.round(t.sign(out) * t.sqrt(out.abs()) * 127.5),
                        -127, 127).to(t.int8).cpu().numpy()
 
+    def stats_rows(self, rows, raw):
+        """dcos_rows plus the int-domain secondary metric: per-pixel
+        **max |recon_int8 - src_int8| over bands** (L-inf, quantizer
+        steps) — what an int8-tile consumer actually experiences, with
+        an error-bound flavor the angular dcos doesn't have.
+
+        rows: (C, h, w) float32 (tensor or numpy); raw: (C, h, w) int8.
+        -> (valid dcos flat, (h/W, w/W) win mean dcos,
+            (255,) exact int-step histogram over valid pixels,
+            (h/W, w/W, 5) win int stats [mean, p50, p90, p99, max])"""
+        t = self.torch
+        W = self.window
+        with t.no_grad():
+            x, v = self._prep(raw[None])
+            x, v = x[0], v[0]
+            y = rows if t.is_tensor(rows) else \
+                t.from_numpy(np.ascontiguousarray(rows)).to(self.device)
+            d = (1.0 - (x * y).sum(0)).clamp_(1e-9, 2.0)
+            h, w = d.shape
+            dw = (d * v).reshape(h // W, W, w // W, W).sum((1, 3))
+            vw = v.reshape(h // W, W, w // W, W).sum((1, 3)).clamp_min(1)
+            a = t.from_numpy(np.ascontiguousarray(raw)) \
+                .to(self.device).to(t.int16)
+            q = t.clamp(t.round(t.sign(y) * t.sqrt(y.abs()) * 127.5),
+                        -127, 127).to(t.int16)
+            dint = (q - a).abs().amax(0).float()
+            hist = t.bincount(dint[v].to(t.int64).clamp(0, 254),
+                              minlength=255)
+            dint = t.where(v, dint, t.full_like(dint, float("nan")))
+            dwin = dint.reshape(h // W, W, w // W, W) \
+                .permute(0, 2, 1, 3).reshape(-1, W * W)
+            qq = t.nanquantile(
+                dwin, t.tensor([0.5, 0.9, 0.99], device=dwin.device),
+                dim=1)
+            wmax = t.where(t.isnan(dwin), dwin.new_tensor(-1.0),
+                           dwin).amax(1)
+            win_int = t.stack([dwin.nanmean(1), qq[0], qq[1], qq[2],
+                               wmax], 1)
+            return (d[v].cpu().numpy(), (dw / vw).cpu().numpy(),
+                    hist.cpu().numpy(),
+                    win_int.cpu().numpy().reshape(h // W, w // W, 5))
+
     def encode(self, x, coarse_residual=False):
         # encoder + assignment stay fp32: bf16 latents flip ~24% of
         # near-tie RVQ indices (quality-neutral but bitstream-unstable);
@@ -1065,6 +1107,16 @@ def codec_tile_main(argv=None):
                       f"{v['bits']:9.0f} " + " ".join(
                           f"{v[m]:9.2e}" for m in
                           ("mean", "p50", "p90", "p99", "max")))
+            if any("int" in v for v in stats.values()):
+                print(f"{'':>8s} {'int steps':>9s} " + " ".join(
+                    f"{m:>9s}" for m in ("mean", "p50", "p90", "p99",
+                                         "max")))
+                for k, v in stats.items():
+                    if "int" in v:
+                        i = v["int"]
+                        print(f"{k:>8s} {'':>9s} {i['mean']:9.2f} "
+                              + " ".join(f"{i[m]:9d}" for m in
+                                         ("p50", "p90", "p99", "max")))
 
         header = read_meta(args.input)
         stats = header.pop("quality_stats", None)
@@ -1206,36 +1258,53 @@ def codec_tile_main(argv=None):
         pad[:, :H, :Wd] = a
         ladder = quality_ladder(be.specs_sig)
         qs = QualityStats(ladder)
-        fused = hasattr(be, "dcos_rows")         # torch: all-device path
+        fused = hasattr(be, "stats_rows")        # torch: all-device path
         row_iter = _tile_rows_t if fused else _tile_rows
+        int_hist = {pt: np.zeros(255, np.int64) for pt in ladder}
+        int_win = {pt: [] for pt in ladder}
         for pt in ladder:
             tp = time.time()
             for y0, y1, rows in row_iter(be, packets, kept, meta,
                                          list(pt), args.batch, deblock):
                 nh = (y1 - y0) // W
+                r0w = y0 // W
+                slots = [int(s) - r0w * gw for s in kept
+                         if r0w <= s // gw < r0w + nh]
                 if fused:
-                    dvals, wmg = be.dcos_rows(rows, pad[:, y0:y1])
-                else:
+                    dvals, wmg, ih, wint = be.stats_rows(
+                        rows, pad[:, y0:y1])
+                    int_hist[pt] += ih
+                    int_win[pt].append(wint.reshape(-1, 5)[slots])
+                else:                # generic backend: dcos only
                     x, vrow = prep_ae_np(pad[None, :, y0:y1])
                     x, vrow = x[0], vrow[0]
                     d = np.clip(1.0 - (rows * x).sum(0), 1e-9, 2.0)
                     dw = (d * vrow).reshape(nh, W, gw, W).sum((1, 3))
                     vw = vrow.reshape(nh, W, gw, W).sum((1, 3))
                     dvals, wmg = d[vrow], dw / np.maximum(vw, 1)
-                r0w = y0 // W
-                slots = [int(s) - r0w * gw for s in kept
-                         if r0w <= s // gw < r0w + nh]
                 qs.add(pt, dvals, win_mean=wmg.reshape(-1)[slots])
             print(f"restat {'-'.join(map(str, pt))} "
                   f"{time.time() - tp:.1f}s", flush=True)
         star_cost = be.star_cost_bits if meta.get("star") else 0
         stats = qs.summary(be.specs_sig, star_cost)
+        win_int = None
+        if fused:                    # exact int-step summary per point
+            win_int = {pt: np.concatenate(v) for pt, v in int_win.items()}
+            for pt in ladder:
+                h_, n_ = int_hist[pt], int_hist[pt].sum()
+                cum = np.cumsum(h_)
+                pct = lambda p: int(np.searchsorted(cum, p * n_))
+                stats["-".join(map(str, pt))]["int"] = {
+                    "mean": float((h_ * np.arange(255)).sum() / max(n_, 1)),
+                    "p50": pct(.5), "p90": pct(.9), "p99": pct(.99),
+                    "max": int(np.nonzero(h_)[0].max()) if n_ else 0}
         entry = {"name": args.decoder, "quality_stats": stats}
         if deblock:
             entry["recipe"] = be.deblock_recipe
         meta.setdefault("decoders", {})[did] = entry
         meta, size = write_quality(args.input, meta, meta["geo"], did,
-                                   qs.ladder, qs.window_means(), kept)
+                                   qs.ladder, qs.window_means(), kept,
+                                   win_int=win_int)
         update_meta(args.input, meta)
         best = stats["-".join(str(d) for _, d, _ in be.specs_sig)]
         print(f"restat ({args.decoder}) -> decoders[{did}] + "
