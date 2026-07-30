@@ -44,7 +44,8 @@ class Source:
 
 def get_source(name: str, model_cfg) -> Source:
     from georvq.sources.ae import AESource
-    SOURCES = {"ae": AESource}
+    from georvq.sources.tessera import TesseraSource
+    SOURCES = {"ae": AESource, "tessera": TesseraSource}
     try:
         from georvq.sources.s2 import S2Source
         SOURCES["s2"] = S2Source
