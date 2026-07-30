@@ -66,7 +66,8 @@ The bitstream is decoder-independent; this release ships two decoders
 against the same blobs:
 
 - **`plain`** (default): the base per-window decoder.
-- **`deblock`** (`--decoder deblock`, torch backend): the base decoder
+- **`deblock`** (`--decoder deblock`, torch or ONNX backend): the base
+  decoder
   plus a 2M-param seam-removal network (the windows decode
   independently, leaving seams at every 64 px boundary). Validated on
   held-out val + a real tile: mean dcos −40% at full rate (−22/−16/−6%

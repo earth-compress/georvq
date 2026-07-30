@@ -183,3 +183,29 @@ def test_stats_rows_matches_numpy_reference():
         wd0 = dint[:64, :64][v[:64, :64]]
         assert wint[0, 0, fi, 4] == pytest.approx(wd0.max(), rel=1e-6)
         assert wint[0, 0, fi, 0] == pytest.approx(wd0.mean(), rel=1e-5)
+
+
+ONNX_DIR = os.path.join(os.path.dirname(RELEASE_BUNDLE.rstrip("/")),
+                        "onnx")
+
+
+@pytest.mark.skipif(
+    not os.path.exists(os.path.join(ONNX_DIR, "deblock.onnx")),
+    reason="release onnx export with deblock.onnx not available")
+def test_onnx_deblock_parity():
+    """deblock.onnx must match the torch deblocker (fp32 both) on a
+    frame size different from the export sample (dynamic H/W)."""
+    pytest.importorskip("onnxruntime")
+    from georvq.ae.cli import OnnxBackend, TorchBackend
+
+    tb = TorchBackend(RELEASE_BUNDLE, "cpu")
+    tb.load_deblock()
+    ob = OnnxBackend(ONNX_DIR, "cpu")
+    ob.load_deblock()
+    assert ob.deblock_decoder_id == tb.deblock_decoder_id
+    rng = np.random.default_rng(7)
+    m = rng.standard_normal((64, 256, 128)).astype(np.float32)
+    m /= np.linalg.norm(m, axis=0, keepdims=True)
+    yt = tb.deblock_frame(m, [8, 8, 8])
+    yo = ob.deblock_frame(m, [8, 8, 8])
+    assert float((1.0 - (yt * yo).sum(0)).max()) < 1e-5

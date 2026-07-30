@@ -376,10 +376,20 @@ class TorchBackend:
         return packets, dcos
 
 
+def seam_mask_np(h, w, win=64):
+    """(1, h, w) float32 window-seam mask — the numpy twin of
+    georvq.ae.deblock.boundary_mask, fed to deblock.onnx as an input."""
+    on = lambda n: ((np.arange(n) % win == 0)
+                    & (np.arange(n) > 0)).astype(np.float32)
+    return np.clip(on(h)[:, None] + on(w)[None, :], 0, 1)[None]
+
+
 class OnnxBackend:
     def __init__(self, export_dir, device="cpu", threads=None):
         from georvq.inference.onnx_backend import OnnxCodec
         self.codec = OnnxCodec(export_dir, device=device, threads=threads)
+        self.export_dir = export_dir
+        self.device, self.threads = device, threads
         self.window = self.codec.window
         self.bands = self.codec.bands
         self.specs_sig = [(t["grid"] ** 2, t["depth"], t["codes"])
@@ -388,6 +398,53 @@ class OnnxBackend:
         self.decoder_id = self.codec.meta.get("decoder_id")
         t0 = self.codec.tiers[0]
         self.star_cost_bits = t0["grid"] ** 2 * t0["dim"] * STAR_BITS + 16
+
+    def load_deblock(self):
+        """Attach the export dir's deblock.onnx session (idempotent)."""
+        if hasattr(self, "deblock_sess"):
+            return
+        from georvq.inference.onnx_backend import DEBLOCK_NAME
+        path = os.path.join(self.export_dir, DEBLOCK_NAME)
+        frag = self.codec.meta.get("deblock")
+        if not (frag and os.path.exists(path)):
+            raise SystemExit(
+                f"--decoder deblock needs {DEBLOCK_NAME} in the export "
+                f"dir (re-export with georvq-ae-export-onnx from a "
+                f"bundle carrying decoders/deblock.pt)")
+        if frag["trained_against"]["bitstream_id"] != self.bitstream_id \
+                or frag["trained_against"]["decoder_id"] != self.decoder_id:
+            raise SystemExit(
+                f"{path}: deblocker trained against a different base "
+                "decoder — its corrections would be garbage here")
+        import onnxruntime as ort
+        providers = ["CPUExecutionProvider"]
+        if self.device.startswith("cuda") and "CUDAExecutionProvider" \
+                in ort.get_available_providers():
+            providers = ["CUDAExecutionProvider"] + providers
+        opts = ort.SessionOptions()
+        if self.threads:
+            opts.intra_op_num_threads = self.threads
+        self.deblock_sess = ort.InferenceSession(path, opts,
+                                                 providers=providers)
+        self.deblock_recipe = frag["recipe"]
+        self.deblock_decoder_id = frag["decoder_id"]
+        self.deblock_win = frag.get("win", 64)
+
+    def deblock_frame(self, mosaic, depths, int8=False):
+        """(C, h, w) or (B, C, h, w) float32 blocky mosaic -> deblocked
+        (numpy twin of TorchBackend.deblock_frame)."""
+        single = mosaic.ndim == 3
+        x = np.ascontiguousarray(mosaic[None] if single else mosaic,
+                                 dtype=np.float32)
+        B, _, h, w = x.shape
+        mask = np.broadcast_to(seam_mask_np(h, w, self.deblock_win),
+                               (B, 1, h, w)).copy()
+        Ls = np.tile(np.asarray(depths, np.int64), (B, 1))
+        out = self.deblock_sess.run(
+            None, {"x": x, "mask": mask, "Ls": Ls})[0]
+        if int8:
+            out = requant_ae_np(out)
+        return out[0] if single else out
 
     def encode(self, x, coarse_residual=False):
         return self.codec.encode(x, coarse_residual=coarse_residual)
@@ -754,6 +811,34 @@ def export_onnx_main(argv=None):
           f"tiers={[t['depth'] for t in meta['tiers']]} "
           f"bitstream_id={meta['bitstream_id']}")
 
+    deblock_pt = os.path.join(args.ckpt, "decoders", "deblock.pt") \
+        if os.path.isdir(args.ckpt) else None
+    if deblock_pt and os.path.exists(deblock_pt):
+        from georvq.inference.onnx_backend import export_deblock_onnx
+        tb.load_deblock()
+        frag = export_deblock_onnx(
+            tb.deblock_net.cpu(), args.out,
+            {"recipe": tb.deblock_recipe,
+             "trained_against": {"bitstream_id": tb.bitstream_id,
+                                 "decoder_id": tb.decoder_id}},
+            tb.deblock_decoder_id, opset=args.opset)
+        print(f"exported deblock.onnx: decoder_id={frag['decoder_id']} "
+              f"recipe={frag['recipe']}")
+        if not args.skip_verify:
+            import torch
+            ob = OnnxBackend(args.out, "cpu")
+            ob.load_deblock()
+            rng = np.random.default_rng(1)
+            m = rng.standard_normal((64, 192, 256)).astype(np.float32)
+            m /= np.linalg.norm(m, axis=0, keepdims=True)
+            yt = tb.deblock_frame(m, [8, 4, 2])
+            yo = ob.deblock_frame(m, [8, 4, 2])
+            dev = 1.0 - (yt * yo).sum(0)
+            print(f"verify deblock: max dcos torch-vs-onnx "
+                  f"{dev.max():.2e}")
+            if dev.max() > 1e-4:
+                raise SystemExit("verify FAILED: deblock outputs diverge")
+
     if not args.skip_verify:
         ob = OnnxBackend(args.out, "cpu")
         rng = np.random.default_rng(0)
@@ -894,27 +979,49 @@ _PROFILE_KEYS = ("driver", "nodata", "blockxsize", "blockysize", "tiled",
 
 
 def _tile_rows(be, packets, kept, meta, depths, batch, deblock):
-    """Stream a tile decode as float32 numpy window rows — the
-    torch-free twin of _tile_rows_t below, kept for generic backends
-    (which never deblock: the deblock decoder is torch-only, so
-    deblock=True is rejected here)."""
-    if deblock:
-        raise SystemExit("deblock decoding needs the torch backend")
+    """Stream a tile decode as float32 numpy frame rows — the
+    torch-free twin of _tile_rows_t below (the ONNX backend deblocks
+    through here via its deblock.onnx session; torch takes the
+    all-device path instead)."""
     W, C = be.window, meta["shape"][0]
     gh, gw = meta["grid"]
+    fr = (be.deblock_recipe["frame"] // W) if deblock else 16
+    hw = (be.deblock_recipe["halo"] // W) if deblock else 0
     slot = {int(s): p for s, p in zip(kept, packets)}
-    for r0 in range(0, gh, 16):
-        r1 = min(r0 + 16, gh)
-        slab = np.zeros((C, (r1 - r0) * W, gw * W), np.float32)
-        todo = [(r, c) for r in range(r0, r1) for c in range(gw)
+    for r0 in range(0, gh, fr):
+        r1 = min(r0 + fr, gh)
+        ri0, ri1 = max(0, r0 - hw), min(gh, r1 + hw)
+        slab = np.zeros((C, (ri1 - ri0) * W, gw * W), np.float32)
+        todo = [(r, c) for r in range(ri0, ri1) for c in range(gw)
                 if r * gw + c in slot]
         for i in range(0, len(todo), batch):
             dec = be.decode([slot[r * gw + c]
                              for r, c in todo[i:i + batch]], depths)
             for w, (r, c) in zip(dec, todo[i:i + batch]):
-                slab[:, (r - r0) * W:(r - r0 + 1) * W,
+                slab[:, (r - ri0) * W:(r - ri0 + 1) * W,
                      c * W:(c + 1) * W] = w
-        yield r0 * W, r1 * W, slab
+        if not deblock:
+            yield r0 * W, r1 * W, slab
+            continue
+        rows = np.empty((C, (r1 - r0) * W, gw * W), np.float32)
+        spans = []
+        for c0 in range(0, gw, fr):
+            c1 = min(c0 + fr, gw)
+            spans.append((c0, c1, max(0, c0 - hw), min(gw, c1 + hw)))
+        by_width = {}
+        for s in spans:
+            by_width.setdefault(s[3] - s[2], []).append(s)
+        for group in by_width.values():
+            for i in range(0, len(group), _FRAME_BATCH):
+                chunk = group[i:i + _FRAME_BATCH]
+                x = np.stack([slab[:, :, ci0 * W:ci1 * W]
+                              for _, _, ci0, ci1 in chunk])
+                y = be.deblock_frame(x, depths)
+                for yk, (c0, c1, ci0, ci1) in zip(y, chunk):
+                    rows[:, :, c0 * W:c1 * W] = \
+                        yk[:, (r0 - ri0) * W:(r1 - ri0) * W,
+                           (c0 - ci0) * W:(c1 - ci0) * W]
+        yield r0 * W, r1 * W, rows
 
 
 def _tile_rows_t(be, packets, kept, meta, depths, batch, deblock):
@@ -1196,10 +1303,6 @@ def codec_tile_main(argv=None):
         from georvq.ae.cog import read_assets, read_meta
         deblock = args.decoder == "deblock"
         if deblock:
-            if not hasattr(be, "load_deblock"):
-                raise SystemExit("--decoder deblock runs on the torch "
-                                 "backend only (ONNX export of the "
-                                 "deblocker is not shipped yet)")
             be.load_deblock()
         if args.quality:
             depths = _resolve_quality(
@@ -1217,11 +1320,16 @@ def codec_tile_main(argv=None):
         # full 8192^2 source tile never needs an all-float intermediate
         canvas = (np.zeros((C, gh * W, gw * W), np.float32) if args.float32
                   else np.full((C, gh * W, gw * W), fill, np.int8))
-        if deblock:
+        if deblock and hasattr(be, "stats_rows"):    # torch: on-device
             for y0, y1, rows in _tile_rows_t(be, packets, kept, meta,
                                              depths, args.batch, True):
                 canvas[:, y0:y1] = (rows.cpu().numpy() if args.float32
                                     else be.requant_dev(rows))
+        elif deblock:                                # onnx: numpy rows
+            for y0, y1, rows in _tile_rows(be, packets, kept, meta,
+                                           depths, args.batch, True):
+                canvas[:, y0:y1] = (rows if args.float32
+                                    else requant_ae_np(rows[None])[0])
         else:
             for i in range(0, len(packets), args.batch):
                 dec = be.decode(packets[i:i + args.batch], depths,
@@ -1250,9 +1358,6 @@ def codec_tile_main(argv=None):
         from georvq.ae.cog import read_assets, update_meta, write_quality
         deblock = args.decoder == "deblock"
         if deblock:
-            if not hasattr(be, "load_deblock"):
-                raise SystemExit("restat --decoder deblock runs on the "
-                                 "torch backend only")
             be.load_deblock()
             did = be.deblock_decoder_id
         else:
