@@ -129,11 +129,15 @@ class AEDeblocker(nn.Module):
             x = b(x, c)
         return x
 
-    def forward(self, x, Ls):
+    def forward(self, x, Ls, mask=None):
+        """mask: optional precomputed (B,1,H,W) seam mask — the ONNX
+        export passes it as a graph input (clients build it in numpy)
+        so the graph carries no shape-dependent arange."""
         H, W = x.shape[-2:]
         c = self.cond(Ls)
-        mask = boundary_mask(H, W, self.win, x.device, x.dtype) \
-            .expand(x.shape[0], -1, -1, -1)
+        if mask is None:
+            mask = boundary_mask(H, W, self.win, x.device, x.dtype) \
+                .expand(x.shape[0], -1, -1, -1)
         s0 = self.stem(torch.cat([x, mask], dim=1))            # (B,w,H,W)
         d1 = self._stack(self.rb1, F.gelu(self.down1(s0)), c)  # /2
         d2 = self._stack(self.rb2, F.gelu(self.down2(d1)), c)  # /4
