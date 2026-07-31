@@ -1,0 +1,26 @@
+# Tessera stage-1 ceiling with a spectral capacity bump: tier latent dims
+# DOUBLED (512/384/128 vs 256/192/64 — Tessera is 128-band 10m-native, so
+# the bottleneck itself was the first suspect for the ~0.938 ceiling vs
+# AE's ~0.998), plus the dem128_stage1_2x-style trunk scaling (wider +
+# deeper tokenizer/decoder, head_feat 128) for information flow around it.
+# Trains on the FULL store (no limit_chips): the data-scaling sweep showed
+# the ceiling saturates by ~2048 chips at the old size, so data is not the
+# binding constraint and headroom against overfitting is ample.
+inherit: tessera_pyr64.yaml
+
+model:
+  vq: null
+  sigma: {max: 4.0, freqs: 8}
+  tiers: ["1:512:2048:8", "4:384:8192:8", "16:128:16384:8"]
+  tokenizer: {dim: 384, depth: 12}
+  decoder: {dim: 576, depth: 16, heads: 8, head_feat: 128, cls_bridge: true}
+
+train:
+  steps: 40000
+  optim: {lr: 1.5e-4, wd: 0.01, warmup: 1000, lr0_steps: 100}
+  val_interval: 500
+  fig_interval: 5000
+  save_interval: 5000
+
+log:
+  run_tag: tessera_s1_2x
