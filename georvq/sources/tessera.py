@@ -32,6 +32,11 @@ class TesseraSource(Source):
     # part of the model-space definition, so changing it invalidates
     # trained checkpoints
     XNORM = 32.0
+    # scales above this are corrupt source pixels, masked as nodata: real
+    # chips top out ~0.15 (median 0.065) while the anomalies — a few per
+    # billion pixels, incl. fp16 inf/nan — start ~2.9. One inf reaching
+    # the raw-space loss NaNs the whole run.
+    SCALE_MAX = 1.0
 
     def prep(self, raw, device):
         """int8 (B, bands+2, W, W) -> (x, valid). The last two bands are
@@ -45,8 +50,11 @@ class TesseraSource(Source):
         q = s8[:, :self.cfg.bands].float()
         scale = s8[:, -2:].permute(0, 2, 3, 1).contiguous() \
                           .view(torch.float16).squeeze(-1).float()
-        valid = s8[:, :-2].ne(0).any(dim=1) & (scale > 0)
-        x = q * (scale * valid / self.XNORM).unsqueeze(1)
+        valid = (s8[:, :-2].ne(0).any(dim=1) & (scale > 0)
+                 & (scale < self.SCALE_MAX))
+        # torch.where (not multiply): inf/nan scales must not touch x
+        x = q * torch.where(valid, scale / self.XNORM,
+                            torch.zeros((), device=scale.device)).unsqueeze(1)
         return x, valid
 
     def build_stem(self, model_cfg) -> nn.Module:
