@@ -83,6 +83,7 @@ class VQConfig(StrictModel):
     bf16_scores: bool = False
     skip_masked: bool = False      # skip VQ work for levels the sampled depth masks off
     grad_codebook: bool = False
+    book_bits: Optional[int] = None  # b-bit QAT codebooks (vq_quant.py); None = fp32
 
 
 class SigmaConfig(StrictModel):

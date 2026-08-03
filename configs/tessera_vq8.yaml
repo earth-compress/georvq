@@ -1,0 +1,27 @@
+# Full VQ training on Tessera in raw vector space, with SHIP-READY int8
+# codebooks (vq.book_bits: projected-EMA QAT, georvq/model/vq_quant.py).
+# Geometry = tessera_stage1_4x (the rank-cap-fixed 109M trunk: tok 512/14,
+# tiers 512/512/256, dec 576/12); codebook download at int8 is ~75 MiB vs
+# 302 MiB fp32.
+inherit: tessera_pyr64.yaml
+
+model:
+  tiers: ["1:512:2048:8", "4:512:8192:8", "16:256:16384:8"]
+  tokenizer: {dim: 512, depth: 14}
+  decoder: {dim: 576, depth: 12, heads: 8, head_feat: 128, cls_bridge: true}
+  vq:
+    commit_weight: 0.25
+    dead_threshold: 0.000625
+    ema_decay: 0.99
+    bf16_scores: true
+    skip_masked: true
+    warmup_steps: 500
+    kmeans_sample: 32768
+    book_bits: 8
+
+train:
+  steps: 60000
+  save_interval: 2500
+
+log:
+  run_tag: tessera_vq8

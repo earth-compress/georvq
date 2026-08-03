@@ -89,12 +89,18 @@ class PyramidCodec(nn.Module):
 
         if not self.continuous:
             v = cfg.vq
+            if v.book_bits:
+                from georvq.model.vq_quant import QuantizedResidualVQ
+                from functools import partial
+                rvq_cls = partial(QuantizedResidualVQ, book_bits=v.book_bits)
+            else:
+                rvq_cls = ResidualVQ
             self.rvqs = nn.ModuleList([
-                ResidualVQ(num_levels=sp.depth, num_codes=sp.codes,
-                           dim=sp.dim, decay=v.ema_decay,
-                           dead_threshold=v.dead_threshold,
-                           grad_codebook=v.grad_codebook,
-                           bf16_scores=v.bf16_scores)
+                rvq_cls(num_levels=sp.depth, num_codes=sp.codes,
+                        dim=sp.dim, decay=v.ema_decay,
+                        dead_threshold=v.dead_threshold,
+                        grad_codebook=v.grad_codebook,
+                        bf16_scores=v.bf16_scores)
                 for sp in self.specs])
             self._skip_masked = v.skip_masked
             self._base_dead = v.dead_threshold
