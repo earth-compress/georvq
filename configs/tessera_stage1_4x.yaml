@@ -1,17 +1,19 @@
-# Tessera stage-1 ceiling, second spectral capacity doubling: tier latent
-# dims 1024/768/256 (4x the original pyr64 recipe, 2x tessera_stage1_2x
-# which reached cos 0.9800). Latent dims only touch thin projection layers,
-# so the doubling costs ~1M params; the decoder loses one block (16 -> 15)
-# to keep the total at 103.9M, slightly UNDER the 107.6M of the 2x run —
-# deployment weight budget unchanged.
+# Tessera stage-1 ceiling, capacity rebalanced around the real choke point.
+# Tier latents are read out by a single Linear from one trunk token
+# (tokenizer.py `out`) and consumed via Linear(sp.dim, dec_dim), so the
+# effective per-cell channel is min(tok_dim, tier_dim, dec_dim) — in the 2x
+# run the coarse/mid tiers were silently capped at tok_dim=384. Fix: widen
+# and deepen the TOKENIZER (384/12 -> 512/14), set tier dims to what the
+# trunk can actually fill (512/512/256), and pay with decoder depth
+# (16 -> 12 blocks). 109.1M params vs 107.6M in tessera_stage1_2x.
 inherit: tessera_pyr64.yaml
 
 model:
   vq: null
   sigma: {max: 4.0, freqs: 8}
-  tiers: ["1:1024:2048:8", "4:768:8192:8", "16:256:16384:8"]
-  tokenizer: {dim: 384, depth: 12}
-  decoder: {dim: 576, depth: 15, heads: 8, head_feat: 128, cls_bridge: true}
+  tiers: ["1:512:2048:8", "4:512:8192:8", "16:256:16384:8"]
+  tokenizer: {dim: 512, depth: 14}
+  decoder: {dim: 576, depth: 12, heads: 8, head_feat: 128, cls_bridge: true}
 
 train:
   steps: 40000
