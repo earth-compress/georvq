@@ -1,0 +1,24 @@
+# Tessera stage-1 ceiling, second spectral capacity doubling: tier latent
+# dims 1024/768/256 (4x the original pyr64 recipe, 2x tessera_stage1_2x
+# which reached cos 0.9800). Latent dims only touch thin projection layers,
+# so the doubling costs ~1M params; the decoder loses one block (16 -> 15)
+# to keep the total at 103.9M, slightly UNDER the 107.6M of the 2x run —
+# deployment weight budget unchanged.
+inherit: tessera_pyr64.yaml
+
+model:
+  vq: null
+  sigma: {max: 4.0, freqs: 8}
+  tiers: ["1:1024:2048:8", "4:768:8192:8", "16:256:16384:8"]
+  tokenizer: {dim: 384, depth: 12}
+  decoder: {dim: 576, depth: 15, heads: 8, head_feat: 128, cls_bridge: true}
+
+train:
+  steps: 40000
+  optim: {lr: 1.5e-4, wd: 0.01, warmup: 1000, lr0_steps: 100}
+  val_interval: 500
+  fig_interval: 5000
+  save_interval: 5000
+
+log:
+  run_tag: tessera_s1_4x
