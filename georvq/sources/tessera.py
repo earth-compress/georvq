@@ -1,20 +1,18 @@
 """Tessera embedding-field source: 128-band vectors stored as per-pixel
-max-abs-quantized int8 chips (nodata = all-bands-zero).
+max-abs-quantized int8 chips (nodata = all-bands-zero) plus float16
+per-pixel dequant scales in scales_XXXX.npy sidecars.
 
-Tessera tiles ship as int8 quantized embeddings plus a per-pixel float32
-scale (dequant: x = q * scale). Max-abs quantization pins the largest
-band of every valid pixel at exactly +-127, so the int8 vector is a
-*reparametrization* of its unit direction: q = 127 * u / max_b|u_b|
-(exact round trip, verified on the store). The unit sphere is therefore
-the minimal coordinate system for q — `prep` normalizes and loses
-nothing. Full original reconstruction is x_hat = s * 127 * u_hat /
-max_b|u_hat_b|, where the scale plane s rides along as side information
-(float16 sidecars in the store; part of the payload rate accounting, not
-of the model). `vec_rel_l2` in recon_stats measures exactly this
-end-to-end error (s cancels in the relative norm).
+The model works in ORIGINAL dequantized units: the store surfaces each
+chip's scale plane as two trailing byte-bands (ChipStore.aux_bytes) and
+`prep` reassembles x = q * scale / XNORM on the GPU. XNORM is a single
+global constant (store median ||x|| is ~31, p1-p99 spread only 1.5x) that
+puts the loss at O(1); it rescales units uniformly and never reweights
+pixels. The training loss is masked MSE on these vectors; cosine is
+computed on the fly (normalized copies) as a metric only, alongside
+`vec_rel_l2`, the per-pixel relative L2 error of the reconstruction.
 
-Stem is the identity and the head is a dense plane head with per-pixel L2
-normalization, exactly as for AlphaEarth.
+Stem is the identity; the head is a dense plane head WITHOUT the unit
+normalization used for AlphaEarth — outputs are raw vector fields.
 """
 from __future__ import annotations
 
@@ -22,7 +20,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from georvq.metrics import masked_recon_stats
 from georvq.model.decoder import DenseHead
 from georvq.sources import Source
 
@@ -31,14 +28,25 @@ class TesseraSource(Source):
     name = "tessera"
     # 10 m native output (no upsampled lattice): trivial period-1 grid
     grid_period = 1
+    # global loss-conditioning constant (~median ||x|| of the store);
+    # part of the model-space definition, so changing it invalidates
+    # trained checkpoints
+    XNORM = 32.0
 
     def prep(self, raw, device):
-        """int8 (B, 128, W, W) -> (x, valid). Keeps the first `bands`
-        channels, re-normalized to unit vectors; nodata (all-zero vector)
-        pixels stay zero and are masked out."""
-        s = raw.to(device, non_blocking=True)
-        valid = s.ne(0).any(dim=1)
-        x = F.normalize(s[:, :self.cfg.bands].float(), dim=1, eps=1e-6)
+        """int8 (B, bands+2, W, W) -> (x, valid). The last two bands are
+        the float16 scale plane's bytes; x = q * scale / XNORM in original
+        (rescaled) units. nodata (all-zero vector / zero scale) pixels
+        stay zero and are masked out."""
+        assert raw.shape[1] == 130, \
+            "tessera raw must be 128 data bands + 2 scale bytes — is the " \
+            "store missing its scales_XXXX.npy sidecars?"
+        s8 = raw.to(device, non_blocking=True)
+        q = s8[:, :self.cfg.bands].float()
+        scale = s8[:, -2:].permute(0, 2, 3, 1).contiguous() \
+                          .view(torch.float16).squeeze(-1).float()
+        valid = s8[:, :-2].ne(0).any(dim=1) & (scale > 0)
+        x = q * (scale * valid / self.XNORM).unsqueeze(1)
         return x, valid
 
     def build_stem(self, model_cfg) -> nn.Module:
@@ -50,18 +58,15 @@ class TesseraSource(Source):
                          p=model_cfg.window // fine.grid,
                          bands=model_cfg.bands,
                          head_feat=model_cfg.decoder.head_feat,
-                         normalize=True)
+                         normalize=False)
 
     def recon_stats(self, out, x, valid):
-        mse, cos = masked_recon_stats(out, x, valid)
+        """Loss: masked per-pixel MSE in original (rescaled) units.
+        Metrics: on-the-fly cosine and relative L2 of the full vectors."""
+        se = (out - x).pow(2).sum(1)
+        mse = se[valid].mean()
         with torch.no_grad():
-            # End-to-end fidelity of the dequantized original x = q*s: map
-            # both unit fields back to int8 space via q = 127*u/max|u_b|
-            # (exact for the true field; see module docstring) and take the
-            # relative L2 error — the per-pixel scale s cancels.
-            q_t = x / x.abs().amax(dim=1, keepdim=True).clamp_min(1e-6)
-            q_o = out / out.abs().amax(dim=1, keepdim=True).clamp_min(1e-6)
-            num = (q_o - q_t).pow(2).sum(1).sqrt()
-            den = q_t.pow(2).sum(1).sqrt().clamp_min(1e-6)
-            rel = (num / den)[valid].mean()
+            cos = F.cosine_similarity(out, x, dim=1, eps=1e-6)[valid].mean()
+            rel = (se.sqrt()
+                   / x.pow(2).sum(1).sqrt().clamp_min(1e-6))[valid].mean()
         return mse, {"mse": mse, "cos": cos, "vec_rel_l2": rel}

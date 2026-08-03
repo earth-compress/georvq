@@ -21,60 +21,56 @@ def test_source_registered():
     assert src.name == "tessera" and src.grid_period == 1
 
 
-def test_prep_normalizes_and_masks():
+def _pack_raw(q, scale):
+    """(B,128,H,W) int8 + (B,H,W) float16 -> (B,130,H,W) int8 raw, the
+    scale plane's bytes as two trailing pseudo-bands (the pool layout)."""
+    B, _, H, W = q.shape
+    sb = scale.astype(np.float16).view(np.int8).reshape(B, H, W, 2) \
+              .transpose(0, 3, 1, 2)
+    return torch.from_numpy(np.concatenate([q, sb], axis=1))
+
+
+def test_prep_dequantizes_and_masks():
     from georvq.sources.tessera import TesseraSource
-    src = TesseraSource(SimpleNamespace(bands=16))
+    src = TesseraSource(SimpleNamespace(bands=128))
     rng = np.random.default_rng(0)
-    raw = torch.from_numpy(
-        rng.integers(-127, 128, size=(2, 128, 8, 8), dtype=np.int8))
-    raw[0, :, :3, :3] = 0                     # nodata: all-bands-zero
-    x, valid = src.prep(raw, "cpu")
-    assert x.shape == (2, 16, 8, 8) and valid.shape == (2, 8, 8)
-    assert not valid[0, :3, :3].any() and valid[1].all()
-    norms = x.norm(dim=1)
-    assert torch.allclose(norms[valid], torch.ones(1), atol=1e-4)
-    assert (norms[~valid] == 0).all()
+    q = rng.integers(-127, 128, size=(2, 128, 8, 8), dtype=np.int8)
+    scale = rng.uniform(0.03, 0.11, size=(2, 8, 8)).astype(np.float16)
+    q[0, :, :3, :3] = 0                       # nodata: all-bands-zero
+    scale[1, 0, 0] = 0.0                      # nodata: zero scale
+    x, valid = src.prep(_pack_raw(q, scale), "cpu")
+    assert x.shape == (2, 128, 8, 8) and valid.shape == (2, 8, 8)
+    assert not valid[0, :3, :3].any() and not valid[1, 0, 0]
+    ref = torch.from_numpy(
+        q.astype(np.float32) * scale.astype(np.float32)[:, None]
+        / TesseraSource.XNORM)
+    assert torch.allclose(x[valid.unsqueeze(1).expand_as(x)],
+                          ref[valid.unsqueeze(1).expand_as(ref)], atol=1e-5)
+    assert (x[0, :, :3, :3] == 0).all() and (x[1, :, 0, 0] == 0).all()
 
 
-def test_prep_scale_invariance():
-    """Unit direction from raw int8 must match dequantized-then-normalized."""
+def test_prep_rejects_missing_scales():
     from georvq.sources.tessera import TesseraSource
     src = TesseraSource(SimpleNamespace(bands=128))
-    rng = np.random.default_rng(1)
-    raw = torch.from_numpy(
-        rng.integers(-127, 128, size=(1, 128, 4, 4), dtype=np.int8))
-    scale = torch.rand(1, 1, 4, 4) * 0.1 + 0.01
-    x, _ = src.prep(raw, "cpu")
-    ref = torch.nn.functional.normalize(raw.float() * scale, dim=1)
-    assert torch.allclose(x, ref, atol=1e-5)
+    raw = torch.zeros(1, 128, 4, 4, dtype=torch.int8)
+    with pytest.raises(AssertionError, match="scale"):
+        src.prep(raw, "cpu")
 
 
-def test_direction_reparametrizes_int8_exactly():
-    """Max-abs quantization pins max|q_b| at 127, so q = 127*u/max|u_b| is
-    an exact round trip — unit-norming discards nothing of the original."""
-    from georvq.sources.tessera import TesseraSource
-    src = TesseraSource(SimpleNamespace(bands=128))
-    rng = np.random.default_rng(2)
-    q = rng.integers(-126, 127, size=(1, 128, 6, 6)).astype(np.float64)
-    q[0, rng.integers(0, 128, size=(6, 6)), np.arange(6)[:, None],
-      np.arange(6)[None, :]] = 127          # pin one band per pixel
-    x, _ = src.prep(torch.from_numpy(q.astype(np.int8)), "cpu")
-    q_rec = 127 * x.double() / x.double().abs().amax(dim=1, keepdim=True)
-    assert torch.allclose(q_rec, torch.from_numpy(q), atol=1e-3)
-
-
-def test_recon_stats_vec_rel_l2():
-    """Perfect recon -> 0; sign-flipped max band -> order-1 error."""
+def test_recon_stats_raw_space():
+    """Loss is raw-space MSE; cos is on-the-fly (scale-blind); rel_l2 is
+    not — a uniformly rescaled recon keeps cos=1 but pays in mse/rel."""
     from georvq.sources.tessera import TesseraSource
     src = TesseraSource(SimpleNamespace(bands=8))
-    x = torch.nn.functional.normalize(torch.randn(1, 8, 4, 4), dim=1)
+    x = torch.randn(1, 8, 4, 4)
     valid = torch.ones(1, 4, 4, dtype=torch.bool)
-    _, stats = src.recon_stats(x, x, valid)
-    assert stats["vec_rel_l2"] < 1e-6
-    out = x.clone()
-    out[0, 0] *= -1
-    _, stats = src.recon_stats(out, x, valid)
-    assert stats["vec_rel_l2"] > 0.1
+    mse, stats = src.recon_stats(x, x, valid)
+    assert mse < 1e-10 and stats["vec_rel_l2"] < 1e-5
+    assert abs(stats["cos"] - 1.0) < 1e-5
+    mse, stats = src.recon_stats(2 * x, x, valid)
+    assert abs(stats["cos"] - 1.0) < 1e-5     # direction untouched
+    assert abs(stats["vec_rel_l2"] - 1.0) < 1e-5   # magnitude off by 100%
+    assert mse > 0.1
 
 
 def test_tile_key_snapping():
@@ -150,6 +146,52 @@ def test_limit_chips_nested_subsample(tmp_path):
     assert nval3 == nval6                     # val split untouched
 
 
+def _write_scale_sidecars(store_dir, n_chips, shard_size, chip_px, seed=7):
+    """Random positive fp16 scale planes matching the store's shard/slot
+    layout, as the tessera builder would have written them."""
+    rng = np.random.default_rng(seed)
+    n_shards = (n_chips + shard_size - 1) // shard_size
+    for sh in range(n_shards):
+        s = rng.uniform(0.03, 0.11,
+                        size=(shard_size, chip_px, chip_px)).astype(np.float16)
+        np.save(os.path.join(store_dir, f"scales_{sh:04d}.npy"), s)
+
+
+def test_store_aux_planes_reach_prep(tmp_path):
+    """Scale sidecars ride through ChipStore -> pool / val tokens as two
+    trailing byte-bands and dequantize correctly in prep."""
+    from georvq.data.build import build_synthetic_store
+    from georvq.data.pool import ChipPool, fixed_val_tokens
+    from georvq.data.store import ChipStore
+    from georvq.sources.tessera import TesseraSource
+
+    d = str(tmp_path / "store")
+    build_synthetic_store(d, n_chips=6, bands=128, chip_px=32,
+                          shard_size=4, nodata=0, grid_period=1)
+    _write_scale_sidecars(d, n_chips=6, shard_size=4, chip_px=32)
+    store = ChipStore(d)
+    assert store.aux_bands == 2
+
+    # pool path
+    pool = ChipPool(store, store.index, pool_size=6,
+                    device=torch.device("cpu"), workers=0)
+    batch = pool.sample_batch(4, token=16)
+    pool.shutdown()
+    assert batch.shape == (4, 130, 16, 16)
+
+    # val-token path + end-to-end dequant check on a full chip
+    toks = fixed_val_tokens(store, store.index, token=16, per_chip=4)
+    assert toks.shape[1] == 130
+    src = TesseraSource(SimpleNamespace(bands=128))
+    x, valid = src.prep(toks[:2], "cpu")
+    q = toks[:2, :128].float()
+    s = np.load(os.path.join(d, "scales_0000.npy"))
+    # crop grid starts at (0,0): token 0 of chip 0 is its top-left corner
+    ref = q[0] * torch.from_numpy(
+        s[0, :16, :16].astype(np.float32)) / TesseraSource.XNORM
+    assert torch.allclose(x[0][:, valid[0]], ref[:, valid[0]], atol=1e-5)
+
+
 @pytest.mark.slow
 def test_tessera_training_smoke(tmp_path):
     """End-to-end pyramid smoke on a synthetic 128-band tessera store."""
@@ -158,6 +200,8 @@ def test_tessera_training_smoke(tmp_path):
     from georvq.train.loop import train
     build_synthetic_store(tmp_path / "store", n_chips=8, bands=128,
                           chip_px=64, shard_size=4, nodata=0, grid_period=1)
+    _write_scale_sidecars(str(tmp_path / "store"), n_chips=8, shard_size=4,
+                          chip_px=64)
     cfg = load_config("configs/smoke.yaml",
                       [f"data.store_dir={tmp_path / 'store'}",
                        f"log.out_dir={tmp_path / 'ckpt'}",

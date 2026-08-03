@@ -22,7 +22,7 @@ import torch
 
 from georvq.config import Config
 from georvq.factory import build_model
-from georvq.metrics import centered_cos, masked_recon_stats
+from georvq.metrics import centered_cos
 from georvq.repro import (run_metadata, save_checkpoint, seed_all,
                           write_resolved_config)
 from georvq.train.figures import stage1_recon_figure
@@ -42,15 +42,19 @@ def validate_stage1(model, source, val_s, sigma_max, device, batch=256):
               for i in range(0, val_s.shape[0], batch)]
     out = {}
     for frac in SIG_FRACS:
-        cs, ccs, n = 0.0, 0.0, 0
+        agg, n = {}, 0
         for x, valid in chunks:
             sig = torch.full((x.shape[0], n_tiers), sigma_max * frac,
                              device=device)
             rec = model.forward_stage1(x, sig)
-            _, c = masked_recon_stats(rec, x, valid)
-            nb = int(valid.sum()); cs += float(c) * nb; n += nb
-            ccs += float(centered_cos(rec, x, valid)) * nb
-        out[frac] = (cs / n, ccs / n)
+            _, st = source.recon_stats(rec, x, valid)
+            nb = int(valid.sum()); n += nb
+            for k in ("cos", "vec_rel_l2"):
+                if k in st:
+                    agg[k] = agg.get(k, 0.0) + float(st[k]) * nb
+            agg["ccos"] = agg.get("ccos", 0.0) \
+                + float(centered_cos(rec, x, valid)) * nb
+        out[frac] = {k: v / n for k, v in agg.items()}
     model.train()
     return out
 
@@ -103,7 +107,7 @@ def train(cfg: Config, gpu=0):
     align = cfg.data.pool.align_crops
     t0 = time.time()
     acc = {"loss": 0.0, "cos": 0.0}; na = 0
-    vs = {0.0: (None, None)}
+    vs = {0.0: {}}
     for step in range(1, cfg.train.steps + 1):
         s = pool.sample_batch(batch, token=cfg.model.window, align=align)
         x, valid = source.prep(s, device)
@@ -111,39 +115,48 @@ def train(cfg: Config, gpu=0):
         with torch.autocast(device.type, torch.bfloat16, enabled=amp_on):
             rec = model.forward_stage1(x, sigmas)
         rec = rec.float()
-        mse, cos = masked_recon_stats(rec, x, valid)
-        loss = mse
+        loss, st = source.recon_stats(rec, x, valid)
         opt.zero_grad(set_to_none=True)
         loss.backward()
         gn = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         opt.step(); sched.step()
-        acc["loss"] += loss.item(); acc["cos"] += cos.item(); na += 1
+        acc["loss"] += loss.item(); acc["cos"] += float(st["cos"]); na += 1
+        if "vec_rel_l2" in st:
+            acc["rel"] = acc.get("rel", 0.0) + float(st["vec_rel_l2"])
 
         if step % 100 == 0:
             a = {k: val / na for k, val in acc.items()}
             acc = {k: 0.0 for k in acc}; na = 0
             print(f"step {step}: loss={a['loss']:.4f} cos={a['cos']:.4f} "
-                  f"gn={gn:.2f} lr={sched.get_last_lr()[0]:.1e} "
+                  + (f"rel={a['rel']:.4f} " if "rel" in a else "")
+                  + f"gn={gn:.2f} lr={sched.get_last_lr()[0]:.1e} "
                   f"{(time.time()-t0)/step*1000:.0f}ms/step", flush=True)
             if use_wandb:
                 log = {"train/loss": a["loss"], "train/cos": a["cos"],
                        "train/grad_norm": float(gn),
                        "train/lr": sched.get_last_lr()[0]}
+                if "rel" in a:
+                    log["train/vec_rel_l2"] = a["rel"]
                 if pool.cycle:
                     log["data/epochs"] = pool.epochs
                     log["data/reuse_per_patch"] = pool.reuse_estimate
                 wandb.log(log, step=step)
         if step % cfg.train.val_interval == 0 or step == cfg.train.steps:
             vs = validate_stage1(model, source, val_s, sigma_max, device)
-            ceil = vs[0.0][0]
-            print(f"step {step} VAL ceiling(σ=0)={ceil:.4f}  "
-                  + " ".join(f"σ{f:.2f}={vs[f][0]:.4f}"
+            ceil = vs[0.0]["cos"]
+            print(f"step {step} VAL ceiling(σ=0)={ceil:.4f}"
+                  + (f" rel={vs[0.0]['vec_rel_l2']:.4f}"
+                     if "vec_rel_l2" in vs[0.0] else "") + "  "
+                  + " ".join(f"σ{f:.2f}={vs[f]['cos']:.4f}"
                              for f in SIG_FRACS[1:]), flush=True)
             if use_wandb:
-                log = {f"val/cos_sigma{f:.2f}": vs[f][0] for f in SIG_FRACS}
+                log = {f"val/cos_sigma{f:.2f}": vs[f]["cos"]
+                       for f in SIG_FRACS}
                 log["val/ceiling_cos"] = ceil
-                log.update({f"val/ccos_sigma{f:.2f}": vs[f][1]
+                log.update({f"val/ccos_sigma{f:.2f}": vs[f]["ccos"]
                             for f in SIG_FRACS})
+                log.update({f"val/vec_rel_l2_sigma{f:.2f}": vs[f]["vec_rel_l2"]
+                            for f in SIG_FRACS if "vec_rel_l2" in vs[f]})
                 if step % cfg.train.fig_interval == 0:
                     fig = stage1_recon_figure(model, source, val_s,
                                               sigma_max, step)
@@ -151,7 +164,7 @@ def train(cfg: Config, gpu=0):
                 wandb.log(log, step=step)
         if step % cfg.train.save_interval == 0 or step == cfg.train.steps:
             save_checkpoint(os.path.join(run_dir, "model.pt"), model, cfg,
-                            step, {"cos_sigma0": vs[0.0][0]
+                            step, {"cos_sigma0": vs[0.0].get("cos")
                                    if step >= cfg.train.val_interval else None})
     pool.shutdown()
     print(f"done -> {run_dir}", flush=True)
