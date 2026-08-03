@@ -8,7 +8,7 @@ import numpy as np
 import torch
 
 from georvq.config import TierSpec, parse_tier
-from georvq.metrics import centered_cos, masked_recon_stats
+from georvq.metrics import centered_cos
 from georvq.model.codec import tuple_bits
 
 
@@ -66,12 +66,12 @@ def validate(model, source, val_s, tuples, canon_names=(), val_loc=None):
         n = int(cv.sum())
         for t in tuples:
             o = model.eval_tuple(cums, t, cx)
-            _, c = masked_recon_stats(o, cx, cv)
+            c = source.recon_stats(o, cx, cv)[1]["cos"]
             s = sums[tname(t)]; s[0] += float(c) * n; s[1] += n
             if tname(t) in canon_names:
                 s[2] += float(centered_cos(o, cx, cv)) * n
         o = model.eval_ceiling(cx)
-        _, c = masked_recon_stats(o, cx, cv)
+        c = source.recon_stats(o, cx, cv)[1]["cos"]
         ceil_sum[0] += float(c) * n; ceil_sum[1] += n
         ceil_sum[2] += float(centered_cos(o, cx, cv)) * n
     for t in tuples:

@@ -39,7 +39,10 @@ class ChipPool:
         self.pool_device = (torch.device(pool_device)
                             if pool_device is not None else device)
         self.chip_px = store.chip_px
-        self.bands = store.bands
+        # aux-plane sidecar bytes (e.g. tessera dequant scales) ride along
+        # as trailing pseudo-bands; the source's `prep` reinterprets them
+        self.aux = getattr(store, "aux_bands", 0)
+        self.bands = store.bands + self.aux
         self.slot_rows = slot_rows or self.chip_px
         self.cycle = cycle
         self.period = max(int(period), 1)
@@ -104,10 +107,15 @@ class ChipPool:
         r = self.rows.iloc[ri]
         sh = self.store.open_shard(int(r["shard"]))
         chip = sh[int(r["slot"])]
+        r0 = 0
         if self.slot_rows < self.chip_px:
             r0 = int(rng.integers(0, self.chip_px - self.slot_rows + 1))
             chip = chip[:, r0:r0 + self.slot_rows]
-        return np.ascontiguousarray(chip), ri
+        chip = np.ascontiguousarray(chip)
+        if self.aux:
+            chip = np.concatenate([chip, self.store.aux_bytes(
+                int(r["shard"]), int(r["slot"]), r0, r0 + self.slot_rows)])
+        return chip, ri
 
     def _refresher(self, seed):
         rng = np.random.default_rng(seed)
@@ -152,8 +160,12 @@ class ChipPool:
     def _load_tile(self, ci, r0):
         r = self.rows.iloc[ci]
         sh = self.store.open_shard(int(r["shard"]))
-        return np.ascontiguousarray(
+        tile = np.ascontiguousarray(
             sh[int(r["slot"])][:, r0:r0 + self.slot_rows])
+        if self.aux:
+            tile = np.concatenate([tile, self.store.aux_bytes(
+                int(r["shard"]), int(r["slot"]), r0, r0 + self.slot_rows)])
+        return tile
 
     def _next_tile(self):
         """(slot, (chip_idx, r0)) for the next FIFO replacement."""
@@ -303,6 +315,9 @@ def fixed_val_tokens(store, rows: pd.DataFrame, token=16, per_chip=16,
         if sh not in shards:
             shards[sh] = store.open_shard(sh)
         a = np.asarray(shards[sh][int(r["slot"])])
+        if getattr(store, "aux_bands", 0):
+            a = np.concatenate([a, store.aux_bytes(
+                sh, int(r["slot"]), 0, store.chip_px)])
         for rr in grid:
             for cc in grid:
                 t = a[:, rr:rr + token, cc:cc + token]
