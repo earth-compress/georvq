@@ -49,6 +49,34 @@ def test_prep_scale_invariance():
     assert torch.allclose(x, ref, atol=1e-5)
 
 
+def test_direction_reparametrizes_int8_exactly():
+    """Max-abs quantization pins max|q_b| at 127, so q = 127*u/max|u_b| is
+    an exact round trip — unit-norming discards nothing of the original."""
+    from georvq.sources.tessera import TesseraSource
+    src = TesseraSource(SimpleNamespace(bands=128))
+    rng = np.random.default_rng(2)
+    q = rng.integers(-126, 127, size=(1, 128, 6, 6)).astype(np.float64)
+    q[0, rng.integers(0, 128, size=(6, 6)), np.arange(6)[:, None],
+      np.arange(6)[None, :]] = 127          # pin one band per pixel
+    x, _ = src.prep(torch.from_numpy(q.astype(np.int8)), "cpu")
+    q_rec = 127 * x.double() / x.double().abs().amax(dim=1, keepdim=True)
+    assert torch.allclose(q_rec, torch.from_numpy(q), atol=1e-3)
+
+
+def test_recon_stats_vec_rel_l2():
+    """Perfect recon -> 0; sign-flipped max band -> order-1 error."""
+    from georvq.sources.tessera import TesseraSource
+    src = TesseraSource(SimpleNamespace(bands=8))
+    x = torch.nn.functional.normalize(torch.randn(1, 8, 4, 4), dim=1)
+    valid = torch.ones(1, 4, 4, dtype=torch.bool)
+    _, stats = src.recon_stats(x, x, valid)
+    assert stats["vec_rel_l2"] < 1e-6
+    out = x.clone()
+    out[0, 0] *= -1
+    _, stats = src.recon_stats(out, x, valid)
+    assert stats["vec_rel_l2"] > 0.1
+
+
 def test_tile_key_snapping():
     # geotessera docstring example: (-120, 36) snaps to (-119.95, 36.05)
     assert builder.tile_key(-120.0, 36.0) == (-11995, 3605)
