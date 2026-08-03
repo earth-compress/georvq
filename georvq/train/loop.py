@@ -210,6 +210,8 @@ def train(cfg: Config, gpu=0):
                     kmeans_init_rvq(rvq, torch.cat(samples[i]),
                                     iters=v.kmeans_iters,
                                     expected_batch=batch * specs[i].cells)
+                    if hasattr(rvq, "project_books"):  # b-bit QAT books
+                        rvq.project_books()
             print(f"step {step}: codebooks fit via residual k-means",
                   flush=True)
 
