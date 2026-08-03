@@ -49,6 +49,23 @@ def test_prep_dequantizes_and_masks():
     assert (x[0, :, :3, :3] == 0).all() and (x[1, :, 0, 0] == 0).all()
 
 
+def test_prep_masks_corrupt_scales():
+    """inf / nan / absurd fp16 scales (rare corrupt source pixels) must be
+    masked as nodata and never reach x — one inf NaNs a raw-space run."""
+    from georvq.sources.tessera import TesseraSource
+    src = TesseraSource(SimpleNamespace(bands=128))
+    rng = np.random.default_rng(3)
+    q = rng.integers(1, 128, size=(1, 128, 4, 4), dtype=np.int8)
+    scale = np.full((1, 4, 4), 0.06, np.float16)
+    scale[0, 0, 0] = np.inf
+    scale[0, 0, 1] = np.nan
+    scale[0, 0, 2] = 3000.0        # finite but far beyond SCALE_MAX
+    x, valid = src.prep(_pack_raw(q, scale), "cpu")
+    assert torch.isfinite(x).all()
+    assert not valid[0, 0, 0] and not valid[0, 0, 1] and not valid[0, 0, 2]
+    assert (x[0, :, 0, :3] == 0).all() and valid[0, 1:].all()
+
+
 def test_prep_rejects_missing_scales():
     from georvq.sources.tessera import TesseraSource
     src = TesseraSource(SimpleNamespace(bands=128))

@@ -211,7 +211,11 @@ def main():
                 for arr, sc, meta in f.result():
                     if writer.n_done >= target:
                         break
-                    scales.write(writer.n_done, sc.astype(np.float16))
+                    # finite fp16 only: rare corrupt source scales overflow
+                    # to inf on cast (TesseraSource masks them via SCALE_MAX)
+                    scales.write(writer.n_done, np.nan_to_num(
+                        sc, nan=0.0, posinf=65504, neginf=0.0
+                    ).astype(np.float16))
                     writer.add(arr, meta, target=args.n_chips)
 
     manifest = writer.finalize(
