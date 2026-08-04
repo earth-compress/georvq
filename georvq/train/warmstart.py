@@ -26,9 +26,10 @@ def load_partial(model, path, device):
         for k, v in sd.items():
             if k in own and own[k].shape == v.shape:
                 own[k].copy_(v); copied += 1
-            elif k in own and k.endswith("to_patch.weight"):
-                # decoder head grew extra ancestor inputs: zero-pad the new
-                # columns so the loaded mapping is preserved
+            elif (k in own and k.endswith("to_patch.weight")
+                  and own[k].shape[0] == v.shape[0]):
+                # same pixel-patch output, wider ancestor input: zero-pad;
+                # any other head geometry change starts fresh
                 own[k].zero_()
                 own[k][:, :v.shape[1]].copy_(v)
                 copied += 1
