@@ -16,7 +16,7 @@ model:
             late_join: 6}
 
 train:
-  batch_windows: 256
+  batch_windows: 512
   compile: true
   init_from: null
 
