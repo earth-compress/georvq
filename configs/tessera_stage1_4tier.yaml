@@ -5,8 +5,10 @@
 # trunk stays MLP-dominated at 1297 tokens, so plain full attention is
 # ~4x step time — no local-attention machinery needed at this scale.
 # Head rides the new finest tier automatically (p=2, cls_bridge concat
-# of 4 ancestors). Warm-start from tessera_s1_4x copies the trunk and
-# tier 1-3 stems; tier-4 stem/readout, decoder pos and head are fresh.
+# of 4 ancestors). From scratch, plain sigma sampling (no truncation:
+# absent-tier handling is the stage-2 decoder's job via placeholder
+# tokens); speed package = 12-layer trunks with the ultrafine tier
+# late-joining the last 6, torch.compile, decoder grad-ckpt, batch 512.
 inherit: tessera_pyr64.yaml
 
 model:
@@ -16,12 +18,14 @@ model:
   # provably not the bottleneck at 2x2 px; slim ablation later
   tiers: ["1:512:2048:8", "4:512:8192:8", "16:256:16384:8", "32:128:16384:8"]
   min_depths: [6, 1, 0, 0]
-  tokenizer: {dim: 512, depth: 14}
-  decoder: {dim: 576, depth: 12, heads: 8, head_feat: 128, cls_bridge: true}
+  tokenizer: {dim: 512, depth: 12, late_join: 6}
+  decoder: {dim: 576, depth: 12, heads: 8, head_feat: 128, cls_bridge: true,
+            late_join: 6}
 
 train:
   steps: 40000
-  init_from: /home/ali/projects/ring-space/checkpoints/tessera_s1_4x/model.pt
+  batch_windows: 512
+  compile: true
   optim: {lr: 1.5e-4, wd: 0.01, warmup: 1000, lr0_steps: 100}
   val_interval: 500
   fig_interval: 5000
