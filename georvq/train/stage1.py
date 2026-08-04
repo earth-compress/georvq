@@ -159,14 +159,19 @@ def train(cfg: Config, gpu=0):
         if step % 100 == 0:
             a = {k: val / na for k, val in acc.items()}
             acc = {k: 0.0 for k in acc}; na = 0
+            now = time.time()
+            sps = 100 / (now - t0)          # windowed, not cumulative
+            t0 = now
             print(f"step {step}: loss={a['loss']:.4f} cos={a['cos']:.4f} "
                   + (f"rel={a['rel']:.4f} " if "rel" in a else "")
                   + f"gn={gn:.2f} lr={sched.get_last_lr()[0]:.1e} "
-                  f"{(time.time()-t0)/step*1000:.0f}ms/step", flush=True)
+                  f"{1000/sps:.0f}ms/step", flush=True)
             if use_wandb:
                 log = {"train/loss": a["loss"], "train/cos": a["cos"],
                        "train/grad_norm": float(gn),
-                       "train/lr": sched.get_last_lr()[0]}
+                       "train/lr": sched.get_last_lr()[0],
+                       "train/steps_per_s": sps,
+                       "train/windows_per_s": sps * batch}
                 if "rel" in a:
                     log["train/vec_rel_l2"] = a["rel"]
                 if pool.cycle:
