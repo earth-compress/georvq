@@ -1,0 +1,15 @@
+# 4-tier stage-1 with nested tier-truncation (layer-wise matryoshka)
+# sampling, warm-started from the plain 4-tier run's checkpoint to save
+# schedule. 40/20/20/20: all / +fine / coarse+mid / coarse-only; kept
+# tiers gently noised (U(0,1)) for quantization robustness.
+inherit: tessera_stage1_4tier.yaml
+
+model:
+  sigma: {max: 4.0, freqs: 8, truncate: [0.4, 0.2, 0.2, 0.2], kept_max: 1.0}
+
+train:
+  batch_windows: 128
+  init_from: /home/ali/projects/ring-space/checkpoints/tessera_s1_4tier/model.pt
+
+log:
+  run_tag: tessera_s1_4tier_mk
