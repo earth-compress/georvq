@@ -60,6 +60,10 @@ def parse_tier(v):
 class TokenizerConfig(StrictModel):
     dim: int = 256
     depth: int = 9
+    # finest tier joins the trunk only for the last k layers (0 = every
+    # layer). High-frequency content is local: a few joint layers suffice
+    # and the coarse-only prefix runs at a fraction of the sequence length
+    late_join: int = 0
 
 
 class DecoderConfig(StrictModel):
@@ -68,6 +72,7 @@ class DecoderConfig(StrictModel):
     heads: int = 8
     head_feat: int = 64
     cls_bridge: bool = True
+    late_join: int = 0             # same contract as tokenizer.late_join
 
 
 class VQConfig(StrictModel):
@@ -259,6 +264,7 @@ class TrainConfig(StrictModel):
     amp: bool = True
     grad_ckpt: bool = False
     tf32: bool = True
+    compile: bool = False          # torch.compile the trunk layer forwards
     init_from: Optional[Path] = None
     freeze_encoder_steps: int = 0
     freeze_codec: bool = False

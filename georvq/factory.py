@@ -12,9 +12,22 @@ def build_model(cfg: Config, device="cpu") -> PyramidCodec:
     source = get_source(cfg.data.source, cfg.model)
     model = PyramidCodec(cfg.model, source).to(device)
     model.tokenizer.grad_ckpt = cfg.train.grad_ckpt
+    model.decoder.grad_ckpt = cfg.train.grad_ckpt
     model.source = source
     model.full_config = cfg
+    if cfg.train.compile and device != "cpu":
+        compile_trunks(model)
     return model
+
+
+def compile_trunks(model):
+    """torch.compile the per-layer forwards of both trunks. Compiling bound
+    forwards (not the modules) keeps state-dict names untouched, so
+    checkpoints stay loadable everywhere."""
+    for layer in model.tokenizer.vit.layers:
+        layer.forward = torch.compile(layer.forward)
+    for blk in model.decoder.blocks:
+        blk.forward = torch.compile(blk.forward)
 
 
 def from_checkpoint(path, device="cpu") -> PyramidCodec:

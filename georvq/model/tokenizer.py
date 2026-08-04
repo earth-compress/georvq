@@ -15,11 +15,14 @@ class ViTTokenizer(nn.Module):
     """x: (B, C, W, W) -> list of per-tier latents [(B, cells_i, dim_i)]."""
 
     def __init__(self, specs, window, bands, dim=256, depth=9, ff_ratio=4.0,
-                 grad_ckpt=False):
+                 grad_ckpt=False, late_join=0):
         super().__init__()
         assert specs[0].cells == 1, "coarsest tier must be grid=1 (CLS token)"
+        assert 0 <= late_join < depth
         self.specs = specs
         self.grad_ckpt = grad_ckpt
+        self.late_join = late_join
+        self.n_base = 1 + sum(sp.cells for sp in specs[1:-1])
         self.patches = nn.ModuleList([
             nn.Conv2d(bands, dim, window // sp.grid, window // sp.grid)
             for sp in specs[1:]])
@@ -32,16 +35,30 @@ class ViTTokenizer(nn.Module):
         self.vit = nn.TransformerEncoder(layer, depth)
         self.out = nn.ModuleList([nn.Linear(dim, sp.dim) for sp in specs])
 
+    def _run(self, h, layers):
+        if self.grad_ckpt and self.training:
+            from torch.utils.checkpoint import checkpoint
+            for layer in layers:
+                h = checkpoint(layer, h, use_reentrant=False)
+        else:
+            for layer in layers:
+                h = layer(h)
+        return h
+
     def forward(self, x):
         streams = [self.cls.expand(x.shape[0], -1, -1)]
         streams += [pe(x).flatten(2).transpose(1, 2) for pe in self.patches]
         h = torch.cat(streams, 1) + self.pos
-        if self.grad_ckpt and self.training:
-            from torch.utils.checkpoint import checkpoint
-            for layer in self.vit.layers:
-                h = checkpoint(layer, h, use_reentrant=False)
+        layers = self.vit.layers
+        if self.late_join:
+            # coarse tiers run the prefix alone; the finest tier's tokens
+            # (patch embed + pos only) join for the last `late_join` layers
+            base, ultra = h[:, :self.n_base], h[:, self.n_base:]
+            base = self._run(base, layers[:len(layers) - self.late_join])
+            h = self._run(torch.cat([base, ultra], 1),
+                          layers[len(layers) - self.late_join:])
         else:
-            h = self.vit(h)
+            h = self._run(h, layers)
         zs, o = [], 0
         for sp, lo in zip(self.specs, self.out):
             zs.append(lo(h[:, o:o + sp.cells]))

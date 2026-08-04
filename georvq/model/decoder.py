@@ -50,11 +50,14 @@ class PyramidAttnDecoder(nn.Module):
 
     def __init__(self, specs, head, dim=384, depth=8, heads=8,
                  cls_bridge=False, ff_ratio=4.0, sigma_cond=False,
-                 sigma_freqs=8):
+                 sigma_freqs=8, late_join=0):
         super().__init__()
+        assert 0 <= late_join < depth
         self.cls_bridge = cls_bridge
         self.sigma_cond = sigma_cond
         self.sigma_freqs = sigma_freqs
+        self.late_join = late_join
+        self.grad_ckpt = False        # set by the factory from train cfg
         self.specs = specs
         self.fine = specs[-1]
         n_tokens = sum(sp.cells for sp in specs)
@@ -98,8 +101,24 @@ class PyramidAttnDecoder(nn.Module):
             cond = torch.cat([thermometer(Ls[:, i], sp.depth, Ls.device)
                               for i, sp in enumerate(self.specs)], -1)
         c = self.cond_mlp(cond)
-        for blk in self.blocks:
-            x = blk(x, c)
+
+        def run(h, blocks):
+            if self.grad_ckpt and self.training:
+                from torch.utils.checkpoint import checkpoint
+                for blk in blocks:
+                    h = checkpoint(blk, h, c, use_reentrant=False)
+            else:
+                for blk in blocks:
+                    h = blk(h, c)
+            return h
+
+        if self.late_join:
+            nb = x.shape[1] - self.fine.cells
+            base = run(x[:, :nb], self.blocks[:len(self.blocks) - self.late_join])
+            x = run(torch.cat([base, x[:, nb:]], 1),
+                    self.blocks[len(self.blocks) - self.late_join:])
+        else:
+            x = run(x, self.blocks)
         xo = self.norm_out(x)
         fine = xo[:, -self.fine.cells:]                    # (B, cells, dim)
         if self.cls_bridge:    # lineage: concat all ancestors per fine cell

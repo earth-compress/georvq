@@ -85,7 +85,8 @@ class PyramidCodec(nn.Module):
         self.stem = source.build_stem(cfg)
         self.tokenizer = ViTTokenizer(
             self.specs, cfg.window, cfg.bands, dim=cfg.tokenizer.dim,
-            depth=cfg.tokenizer.depth, ff_ratio=cfg.ff_ratio)
+            depth=cfg.tokenizer.depth, ff_ratio=cfg.ff_ratio,
+            late_join=cfg.tokenizer.late_join)
 
         if not self.continuous:
             v = cfg.vq
@@ -126,7 +127,8 @@ class PyramidCodec(nn.Module):
             dim=cfg.decoder.dim, depth=cfg.decoder.depth,
             heads=cfg.decoder.heads, cls_bridge=cfg.decoder.cls_bridge,
             ff_ratio=cfg.ff_ratio, sigma_cond=cfg.sigma is not None,
-            sigma_freqs=cfg.sigma.freqs if cfg.sigma else 8)
+            sigma_freqs=cfg.sigma.freqs if cfg.sigma else 8,
+            late_join=cfg.decoder.late_join)
 
     # ---- encode / decode ----
 
