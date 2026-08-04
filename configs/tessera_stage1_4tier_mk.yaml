@@ -1,23 +1,24 @@
 # 4-tier stage-1 with nested tier-truncation (layer-wise matryoshka)
-# sampling, warm-started from the plain 4-tier run's checkpoint to save
-# schedule. 40/20/20/20: all / +fine / coarse+mid / coarse-only; kept
-# tiers gently noised (U(0,1)) for quantization robustness.
+# sampling, from scratch (no warm start: the 14->12 trunk change makes a
+# partial copy more confusing than helpful). 40/20/20/20: all / +fine /
+# coarse+mid / coarse-only; kept tiers gently noised (U(0,1)) for
+# quantization robustness.
 # Speed package: trunks at 12 layers with the ultrafine tier late-joining
-# the last 4 (high-frequency content is local — the coarse-only prefix
-# runs at 273 tokens), decoder grad-ckpt via train.grad_ckpt, and
-# torch.compile — together sized to restore batch 256.
+# the last 6 (the coarse-only prefix runs at 273 tokens), decoder
+# grad-ckpt via train.grad_ckpt, and torch.compile — together sized to
+# restore batch 256.
 inherit: tessera_stage1_4tier.yaml
 
 model:
   sigma: {max: 4.0, freqs: 8, truncate: [0.4, 0.2, 0.2, 0.2], kept_max: 1.0}
-  tokenizer: {dim: 512, depth: 12, late_join: 4}
+  tokenizer: {dim: 512, depth: 12, late_join: 6}
   decoder: {dim: 576, depth: 12, heads: 8, head_feat: 128, cls_bridge: true,
-            late_join: 4}
+            late_join: 6}
 
 train:
   batch_windows: 256
   compile: true
-  init_from: /home/ali/projects/ring-space/checkpoints/tessera_s1_4tier/model.pt
+  init_from: null
 
 log:
   run_tag: tessera_s1_4tier_mk
