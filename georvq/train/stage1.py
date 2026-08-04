@@ -32,6 +32,23 @@ from georvq.train.warmstart import load_partial
 SIG_FRACS = [0.0, 0.1, 0.25, 0.5, 1.0]   # val sigma levels (fractions of max)
 
 
+def sample_sigmas(sig_cfg, batch, n_tiers, device):
+    """Per-tier noise levels for one training batch.
+
+    Legacy: independent U(0, max) per tier. With sig_cfg.truncate: nested
+    matryoshka sampling — draw how many coarsest tiers to keep (probs
+    ordered [all, ..., coarse only]), dropped tiers get sigma=max, kept
+    tiers U(0, kept_max). Nesting invariant: a dropped tier implies every
+    finer tier is dropped."""
+    if not sig_cfg.truncate:
+        return torch.rand(batch, n_tiers, device=device) * sig_cfg.max
+    probs = torch.tensor(sig_cfg.truncate, dtype=torch.float, device=device)
+    n_drop = torch.multinomial(probs, batch, replacement=True)  # 0 = keep all
+    dropped = torch.arange(n_tiers, device=device)[None] >= (n_tiers - n_drop)[:, None]
+    sigmas = torch.rand(batch, n_tiers, device=device) * sig_cfg.kept_max
+    return torch.where(dropped, torch.full_like(sigmas, sig_cfg.max), sigmas)
+
+
 @torch.no_grad()
 def validate_stage1(model, source, val_s, sigma_max, device, batch=256):
     """Recon cosine at several uniform (all-tier) sigma levels. frac=0 is
@@ -55,6 +72,18 @@ def validate_stage1(model, source, val_s, sigma_max, device, batch=256):
             agg["ccos"] = agg.get("ccos", 0.0) \
                 + float(centered_cos(rec, x, valid)) * nb
         out[frac] = {k: v / n for k, v in agg.items()}
+    # truncation ladder: keep the k coarsest tiers clean, drop the rest
+    # (sigma=max) — the stage-1 analog of the stage-2 recon tuples
+    for k in range(1, n_tiers):
+        cs, n = 0.0, 0
+        for x, valid in chunks:
+            sig = torch.full((x.shape[0], n_tiers), float(sigma_max),
+                             device=device)
+            sig[:, :k] = 0.0
+            rec = model.forward_stage1(x, sig)
+            _, st = source.recon_stats(rec, x, valid)
+            nb = int(valid.sum()); cs += float(st["cos"]) * nb; n += nb
+        out[f"keep{k}"] = {"cos": cs / n}
     model.train()
     return out
 
@@ -62,6 +91,9 @@ def validate_stage1(model, source, val_s, sigma_max, device, batch=256):
 def train(cfg: Config, gpu=0):
     assert cfg.model.sigma is not None, \
         "stage-1 training needs model.sigma set (and model.vq: null)"
+    if cfg.model.sigma.truncate is not None:
+        assert len(cfg.model.sigma.truncate) == len(cfg.model.tiers), \
+            "sigma.truncate needs one probability per tier"
     seed_all(cfg.train.seed)
     device = resolve_device(gpu)
     if cfg.train.tf32:
@@ -111,7 +143,7 @@ def train(cfg: Config, gpu=0):
     for step in range(1, cfg.train.steps + 1):
         s = pool.sample_batch(batch, token=cfg.model.window, align=align)
         x, valid = source.prep(s, device)
-        sigmas = torch.rand(x.shape[0], n_tiers, device=device) * sigma_max
+        sigmas = sample_sigmas(cfg.model.sigma, x.shape[0], n_tiers, device)
         with torch.autocast(device.type, torch.bfloat16, enabled=amp_on):
             rec = model.forward_stage1(x, sigmas)
         rec = rec.float()
@@ -144,11 +176,15 @@ def train(cfg: Config, gpu=0):
         if step % cfg.train.val_interval == 0 or step == cfg.train.steps:
             vs = validate_stage1(model, source, val_s, sigma_max, device)
             ceil = vs[0.0]["cos"]
+            trunc = {k: v for k, v in vs.items() if isinstance(k, str)}
             print(f"step {step} VAL ceiling(σ=0)={ceil:.4f}"
                   + (f" rel={vs[0.0]['vec_rel_l2']:.4f}"
                      if "vec_rel_l2" in vs[0.0] else "") + "  "
                   + " ".join(f"σ{f:.2f}={vs[f]['cos']:.4f}"
-                             for f in SIG_FRACS[1:]), flush=True)
+                             for f in SIG_FRACS[1:])
+                  + ("  " + " ".join(f"{k}={v['cos']:.4f}"
+                                     for k, v in trunc.items())
+                     if trunc else ""), flush=True)
             if use_wandb:
                 log = {f"val/cos_sigma{f:.2f}": vs[f]["cos"]
                        for f in SIG_FRACS}
@@ -157,6 +193,8 @@ def train(cfg: Config, gpu=0):
                             for f in SIG_FRACS})
                 log.update({f"val/vec_rel_l2_sigma{f:.2f}": vs[f]["vec_rel_l2"]
                             for f in SIG_FRACS if "vec_rel_l2" in vs[f]})
+                log.update({f"val/cos_{k}": v["cos"]
+                            for k, v in trunc.items()})
                 if step % cfg.train.fig_interval == 0:
                     fig = stage1_recon_figure(model, source, val_s,
                                               sigma_max, step)

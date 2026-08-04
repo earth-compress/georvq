@@ -88,9 +88,18 @@ class VQConfig(StrictModel):
 
 class SigmaConfig(StrictModel):
     """Stage-1 continuous mode: no codebooks; the decoder is conditioned on a
-    per-tier additive-noise level instead of the matryoshka depth."""
+    per-tier additive-noise level instead of the matryoshka depth.
+
+    truncate: nested tier-wise matryoshka sampling — probability of keeping
+    the k coarsest tiers, ordered [all, all-but-finest, ..., coarse only]
+    (must have one entry per tier and sum to ~1). Dropped tiers train at
+    sigma=max (informationally absent); kept tiers draw U(0, kept_max) so
+    the decoder stays quantization-noise-robust. None = legacy independent
+    U(0, max) per tier."""
     max: float = 4.0
     freqs: int = 8
+    truncate: Optional[list[float]] = None
+    kept_max: float = 1.0
 
 
 class RateConfig(StrictModel):
