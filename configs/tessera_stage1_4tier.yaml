@@ -12,7 +12,9 @@ inherit: tessera_pyr64.yaml
 model:
   vq: null
   sigma: {max: 4.0, freqs: 8}
-  tiers: ["1:512:2048:8", "4:512:8192:8", "16:256:16384:8", "32:96:16384:8"]
+  # ultrafine dim 128 = the 2x run's fine width, so dimensionality is
+  # provably not the bottleneck at 2x2 px; slim ablation later
+  tiers: ["1:512:2048:8", "4:512:8192:8", "16:256:16384:8", "32:128:16384:8"]
   min_depths: [6, 1, 0, 0]
   tokenizer: {dim: 512, depth: 14}
   decoder: {dim: 576, depth: 12, heads: 8, head_feat: 128, cls_bridge: true}
@@ -24,6 +26,9 @@ train:
   val_interval: 500
   fig_interval: 5000
   save_interval: 5000
+
+eval:
+  recon_tuples: ["8-1-0-0", "8-8-1-0", "8-8-8-1", "8-8-8-8"]
 
 log:
   run_tag: tessera_s1_4tier
