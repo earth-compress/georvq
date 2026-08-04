@@ -224,12 +224,19 @@ class PyramidCodec(nn.Module):
         return [F.normalize(z, dim=-1, eps=1e-6) * (z.shape[-1] ** 0.5)
                 for z in self.encode_levels(x)]
 
-    def forward_stage1(self, x, sigmas):
+    def forward_stage1(self, x, sigmas, drop=None):
         """Encode -> normalize -> add per-tier additive-uniform noise
-        U(-s/2, s/2) -> sigma-conditioned decode. sigmas: (B, n_tiers) >= 0."""
+        U(-s/2, s/2) -> sigma-conditioned decode. sigmas: (B, n_tiers) >= 0.
+        drop: optional (B, n_tiers) bool — tiers zeroed to TRUE informational
+        absence (matryoshka truncation; heavy noise still leaks signal). The
+        sigma conditioning for dropped tiers should be sigma_max so the
+        decoder can tell."""
         zs = self.encode_stage1(x)
         noisy = [z + (torch.rand_like(z) - 0.5) * sigmas[:, i].view(-1, 1, 1)
                  for i, z in enumerate(zs)]
+        if drop is not None:
+            noisy = [nz * (~drop[:, i]).view(-1, 1, 1).to(nz.dtype)
+                     for i, nz in enumerate(noisy)]
         return self.decoder(noisy, sigmas)
 
     # ---- rate model ----

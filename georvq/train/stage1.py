@@ -80,7 +80,7 @@ def validate_stage1(model, source, val_s, sigma_max, device, batch=256):
             sig = torch.full((x.shape[0], n_tiers), float(sigma_max),
                              device=device)
             sig[:, :k] = 0.0
-            rec = model.forward_stage1(x, sig)
+            rec = model.forward_stage1(x, sig, drop=sig == sigma_max)
             _, st = source.recon_stats(rec, x, valid)
             nb = int(valid.sum()); cs += float(st["cos"]) * nb; n += nb
         out[f"keep{k}"] = {"cos": cs / n}
@@ -144,8 +144,11 @@ def train(cfg: Config, gpu=0):
         s = pool.sample_batch(batch, token=cfg.model.window, align=align)
         x, valid = source.prep(s, device)
         sigmas = sample_sigmas(cfg.model.sigma, x.shape[0], n_tiers, device)
+        # truncation mode: dropped tiers (pinned at sigma=max) are ZEROED —
+        # sigma=max noise alone still leaks signal the decoder can mine
+        drop = (sigmas == sigma_max) if cfg.model.sigma.truncate else None
         with torch.autocast(device.type, torch.bfloat16, enabled=amp_on):
-            rec = model.forward_stage1(x, sigmas)
+            rec = model.forward_stage1(x, sigmas, drop=drop)
         rec = rec.float()
         loss, st = source.recon_stats(rec, x, valid)
         opt.zero_grad(set_to_none=True)

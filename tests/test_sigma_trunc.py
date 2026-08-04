@@ -38,6 +38,26 @@ def test_nesting_invariant_and_levels():
         assert abs(frac - p) < 0.03, (lvl, frac)
 
 
+def test_dropped_tiers_are_zeroed_in_forward():
+    """With drop mask set, a dropped tier's latents must carry NO signal:
+    output is invariant to input changes that only affect that tier's
+    information when every tier is dropped."""
+    from georvq.config import load_config
+    from georvq.factory import build_model
+    cfg = load_config("configs/smoke.yaml", [
+        "model.tiers=['1:16:32:3','4:8:32:3']",
+        "model.vq=null", "model.sigma={max: 4.0, freqs: 4}"])
+    m = build_model(cfg, "cpu"); m.eval()
+    B, W = 2, cfg.model.window
+    sig = torch.full((B, 2), 4.0)
+    drop = torch.ones(B, 2, dtype=torch.bool)
+    torch.manual_seed(0)
+    with torch.no_grad():
+        r1 = m.forward_stage1(torch.randn(B, cfg.model.bands, W, W), sig, drop)
+        r2 = m.forward_stage1(torch.randn(B, cfg.model.bands, W, W), sig, drop)
+    assert torch.allclose(r1, r2, atol=1e-5)      # all info zeroed out
+
+
 def test_truncate_probs_length_asserted():
     from georvq.config import load_config
     import pytest
