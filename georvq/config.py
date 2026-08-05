@@ -171,6 +171,9 @@ class ModelConfig(StrictModel):
     sigma: Optional[SigmaConfig] = None
     conditioning: Optional[Conditioning] = None
     rate: Optional[RateConfig] = None
+    # hierarchical local attention: per-tier radius in own-tier cells
+    # (null = global tier). e.g. [null, null, 2, 4]. None = full attention.
+    local_attn: Optional[list[Optional[int]]] = None
 
     @field_validator("tiers", mode="before")
     @classmethod

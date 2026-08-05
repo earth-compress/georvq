@@ -36,13 +36,16 @@ class ViTTokenizer(nn.Module):
         self.out = nn.ModuleList([nn.Linear(dim, sp.dim) for sp in specs])
 
     def _run(self, h, layers):
+        m = getattr(self, "attn_mask", None)
+        if m is not None:
+            m = m[:h.shape[1], :h.shape[1]]    # late-join prefix slice
         if self.grad_ckpt and self.training:
             from torch.utils.checkpoint import checkpoint
             for layer in layers:
-                h = checkpoint(layer, h, use_reentrant=False)
+                h = checkpoint(layer, h, m, use_reentrant=False)
         else:
             for layer in layers:
-                h = layer(h)
+                h = layer(h, m)
         return h
 
     def forward(self, x):

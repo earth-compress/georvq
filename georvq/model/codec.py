@@ -23,6 +23,7 @@ from georvq.model.decoder import PyramidAttnDecoder
 from georvq.model.layers import thermometer
 from georvq.model.rate import PyramidRateModel
 from georvq.model.tokenizer import ViTTokenizer
+from georvq.model.attnmask import build_local_mask
 from georvq.model.vq import ResidualVQ
 
 
@@ -87,6 +88,10 @@ class PyramidCodec(nn.Module):
             self.specs, cfg.window, cfg.bands, dim=cfg.tokenizer.dim,
             depth=cfg.tokenizer.depth, ff_ratio=cfg.ff_ratio,
             late_join=cfg.tokenizer.late_join)
+        if cfg.local_attn is not None:
+            m = build_local_mask(self.specs, cfg.window, cfg.local_attn)
+            # computed once; non-persistent so checkpoints stay unchanged
+            self.tokenizer.register_buffer("attn_mask", m, persistent=False)
 
         if not self.continuous:
             v = cfg.vq
@@ -129,6 +134,11 @@ class PyramidCodec(nn.Module):
             ff_ratio=cfg.ff_ratio, sigma_cond=cfg.sigma is not None,
             sigma_freqs=cfg.sigma.freqs if cfg.sigma else 8,
             late_join=cfg.decoder.late_join)
+        if cfg.local_attn is not None:
+            self.decoder.register_buffer(
+                "attn_mask", build_local_mask(self.specs, cfg.window,
+                                              cfg.local_attn),
+                persistent=False)
 
     # ---- encode / decode ----
 
