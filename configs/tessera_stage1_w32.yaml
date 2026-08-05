@@ -1,0 +1,29 @@
+# Stage-1 ceiling probe: 3-tier pyramid on HALF-SIZE (32px) windows.
+# Same grids (1/4/16) so the fine tier sits at 2x2 px — the ultrafine
+# resolution of the 4-tier design without 1297-token sequences (273
+# tokens/window, 4x the windows per area => ~4x bitrate/px; window seams
+# are the deblocker's job). Trade: the coarse tier summarizes 320 m
+# instead of 640 m of context. Batch 1024 w32-windows = 256 w64-windows
+# of pixels per step.
+inherit: tessera_pyr64.yaml
+
+model:
+  window: 32
+  vq: null
+  sigma: {max: 4.0, freqs: 8}
+  tiers: ["1:512:2048:8", "4:512:8192:8", "16:256:16384:8"]
+  min_depths: [6, 1, 0]
+  tokenizer: {dim: 512, depth: 12}
+  decoder: {dim: 576, depth: 12, heads: 8, head_feat: 128, cls_bridge: true}
+
+train:
+  steps: 40000
+  batch_windows: 1024
+  compile: true
+  optim: {lr: 1.5e-4, wd: 0.01, warmup: 1000, lr0_steps: 100}
+  val_interval: 500
+  fig_interval: 5000
+  save_interval: 5000
+
+log:
+  run_tag: tessera_s1_w32
