@@ -64,6 +64,11 @@ class TokenizerConfig(StrictModel):
     # layer). High-frequency content is local: a few joint layers suffice
     # and the coarse-only prefix runs at a fraction of the sequence length
     late_join: int = 0
+    # with suffix_dim set, the finest tier becomes a NARROW stream: base
+    # tiers run the full self-attention stack alone (cheap — few tokens),
+    # and the finest tier runs `late_join` cross+local layers at this
+    # width over [projected base | fine] keys. None = shared-width trunk.
+    suffix_dim: Optional[int] = None
 
 
 class DecoderConfig(StrictModel):
@@ -73,6 +78,7 @@ class DecoderConfig(StrictModel):
     head_feat: int = 64
     cls_bridge: bool = True
     late_join: int = 0             # same contract as tokenizer.late_join
+    suffix_dim: Optional[int] = None
 
 
 class VQConfig(StrictModel):
