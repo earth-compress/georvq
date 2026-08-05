@@ -22,6 +22,7 @@ train:
   steps: 40000
   batch_windows: 512
   compile: true
+  grad_ckpt: false
   optim: {lr: 1.5e-4, wd: 0.01, warmup: 1000, lr0_steps: 100}
   val_interval: 500
   fig_interval: 5000
