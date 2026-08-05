@@ -103,13 +103,16 @@ class PyramidAttnDecoder(nn.Module):
         c = self.cond_mlp(cond)
 
         def run(h, blocks):
+            m = getattr(self, "attn_mask", None)
+            if m is not None:
+                m = m[:h.shape[1], :h.shape[1]]    # late-join prefix slice
             if self.grad_ckpt and self.training:
                 from torch.utils.checkpoint import checkpoint
                 for blk in blocks:
-                    h = checkpoint(blk, h, c, use_reentrant=False)
+                    h = checkpoint(blk, h, c, m, use_reentrant=False)
             else:
                 for blk in blocks:
-                    h = blk(h, c)
+                    h = blk(h, c, m)
             return h
 
         if self.late_join:
