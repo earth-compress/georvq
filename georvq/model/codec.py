@@ -84,11 +84,16 @@ class PyramidCodec(nn.Module):
         self.continuous = cfg.vq is None
 
         self.stem = source.build_stem(cfg)
+        # narrow-suffix radius: the finest tier's local_attn entry (cells)
+        sr = 2
+        if cfg.local_attn and cfg.local_attn[-1] is not None:
+            sr = cfg.local_attn[-1]
         self.tokenizer = ViTTokenizer(
             self.specs, cfg.window, cfg.bands, dim=cfg.tokenizer.dim,
             depth=cfg.tokenizer.depth, ff_ratio=cfg.ff_ratio,
-            late_join=cfg.tokenizer.late_join)
-        if cfg.local_attn is not None:
+            late_join=cfg.tokenizer.late_join,
+            suffix_dim=cfg.tokenizer.suffix_dim, suffix_radius=sr)
+        if cfg.local_attn is not None and cfg.tokenizer.suffix_dim is None:
             m = build_local_mask(self.specs, cfg.window, cfg.local_attn)
             # computed once; non-persistent so checkpoints stay unchanged
             self.tokenizer.register_buffer("attn_mask", m, persistent=False)
@@ -126,15 +131,17 @@ class PyramidCodec(nn.Module):
             build_conditioning(self, cfg.conditioning)
 
         head_in = PyramidAttnDecoder.head_in_dim(
-            self.specs, cfg.decoder.dim, cfg.decoder.cls_bridge)
+            self.specs, cfg.decoder.dim, cfg.decoder.cls_bridge,
+            suffix_dim=cfg.decoder.suffix_dim)
         self.decoder = PyramidAttnDecoder(
             self.specs, head=source.build_head(cfg, head_in),
             dim=cfg.decoder.dim, depth=cfg.decoder.depth,
             heads=cfg.decoder.heads, cls_bridge=cfg.decoder.cls_bridge,
             ff_ratio=cfg.ff_ratio, sigma_cond=cfg.sigma is not None,
             sigma_freqs=cfg.sigma.freqs if cfg.sigma else 8,
-            late_join=cfg.decoder.late_join)
-        if cfg.local_attn is not None:
+            late_join=cfg.decoder.late_join,
+            suffix_dim=cfg.decoder.suffix_dim, suffix_radius=sr)
+        if cfg.local_attn is not None and cfg.decoder.suffix_dim is None:
             self.decoder.register_buffer(
                 "attn_mask", build_local_mask(self.specs, cfg.window,
                                               cfg.local_attn),
