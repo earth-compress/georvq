@@ -1,0 +1,7 @@
+# Noise-floor probe, 4x compression point: 4x4 patch -> 512-d latent.
+# Same trunks as the 1024 probe (1024 >= 512: no rank cap).
+inherit: tessera_stage1_patch4.yaml
+model:
+  tiers: ["1:512:2048:8"]
+log:
+  run_tag: tessera_s1_patch4_512
