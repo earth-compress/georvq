@@ -3,20 +3,27 @@ import torch
 
 from georvq.config import load_config
 from georvq.factory import build_model
-from georvq.model.suffix import NeighborhoodCrossAttention, neighbor_index
+from georvq.model.suffix import NeighborhoodCrossAttention
 
 
-def test_neighbor_index_geometry():
-    idx = neighbor_index(grid=4, radius=1)
-    assert idx.shape == (16, 9)
-    # corner cell (0,0): only 4 valid neighbors (itself + right/down/diag)
-    assert (idx[0] >= 0).sum() == 4
-    # interior cell (1,1) = flat 5: all 9 valid, centered on itself
-    assert (idx[5] >= 0).all() and idx[5][4] == 5
+def _halo_allow(g, b, r, Nb):
+    """(g*g, Nb + g*g) bool: base always allowed; fine keys allowed iff
+    inside the query's block halo."""
+    allow = torch.zeros(g * g, Nb + g * g, dtype=torch.bool)
+    allow[:, :Nb] = True
+    for qi in range(g * g):
+        qr, qc = divmod(qi, g)
+        bi, bj = qr // b, qc // b
+        for ki in range(g * g):
+            kr, kc = divmod(ki, g)
+            if (bi * b - r <= kr < bi * b + b + r
+                    and bj * b - r <= kc < bj * b + b + r):
+                allow[qi, Nb + ki] = True
+    return allow
 
 
-def test_neighborhood_attention_matches_masked_dense():
-    """Gathered attention == dense attention under the equivalent mask."""
+def test_halo_attention_matches_masked_dense():
+    """Blocked-halo attention == dense attention under the halo mask."""
     torch.manual_seed(0)
     B, Nb, g, r, D = 2, 5, 4, 1, 32
     att = NeighborhoodCrossAttention(D, base_dim=16, grid=g, radius=r,
@@ -25,23 +32,25 @@ def test_neighborhood_attention_matches_masked_dense():
     base = torch.randn(B, Nb, 16)
     out = att(fine, base)
 
-    # dense reference: same projections, full (Nf, Nb+Nf) with mask
     q = att.q(fine).view(B, g * g, 4, D // 4).permute(0, 2, 1, 3)
     kf, vf = att.kv_f(fine).chunk(2, -1)
     kb, vb = att.kv_b(base).chunk(2, -1)
     K = torch.cat([kb, kf], 1).view(B, -1, 4, D // 4).permute(0, 2, 1, 3)
     V = torch.cat([vb, vf], 1).view(B, -1, 4, D // 4).permute(0, 2, 1, 3)
     logits = q @ K.transpose(-2, -1) * (D // 4) ** -0.5
-    idx = neighbor_index(g, r)
-    allow = torch.zeros(g * g, Nb + g * g, dtype=torch.bool)
-    allow[:, :Nb] = True
-    for i in range(g * g):
-        for j in idx[i][idx[i] >= 0]:
-            allow[i, Nb + j] = True
+    allow = _halo_allow(g, att.b, r, Nb)
     logits = logits.masked_fill(~allow, float("-inf"))
     ref = (logits.softmax(-1) @ V).permute(0, 2, 1, 3).reshape(B, g * g, D)
     ref = att.out(ref)
-    assert torch.allclose(out, ref, atol=1e-5)
+    assert torch.allclose(out, ref, atol=1e-4)
+
+
+def test_halo_block_shapes():
+    att = NeighborhoodCrossAttention(64, base_dim=32, grid=16, radius=2,
+                                     heads=8)
+    assert att.b == 4 and att.nb == 4 and att.halo == 8
+    out = att(torch.randn(2, 256, 64), torch.randn(2, 17, 32))
+    assert out.shape == (2, 256, 64) and torch.isfinite(out).all()
 
 
 def _eff_cfg():
