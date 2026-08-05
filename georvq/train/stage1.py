@@ -137,11 +137,20 @@ def train(cfg: Config, gpu=0):
 
     batch = cfg.train.batch_windows
     align = cfg.data.pool.align_crops
+    # one-deep prefetch: assemble batch N+1 (CPU-pool gather + H2D) while
+    # the GPU computes batch N — hides ~100ms/step of serial stall
+    from concurrent.futures import ThreadPoolExecutor
+    _fetcher = ThreadPoolExecutor(1)
+
+    def _fetch():
+        return pool.sample_batch(batch, token=cfg.model.window, align=align)
+    nxt = _fetcher.submit(_fetch)
     t0 = time.time()
     acc = {"loss": 0.0, "cos": 0.0}; na = 0
     vs = {0.0: {}}
     for step in range(1, cfg.train.steps + 1):
-        s = pool.sample_batch(batch, token=cfg.model.window, align=align)
+        s = nxt.result()
+        nxt = _fetcher.submit(_fetch)
         x, valid = source.prep(s, device)
         sigmas = sample_sigmas(cfg.model.sigma, x.shape[0], n_tiers, device)
         # truncation mode: dropped tiers (pinned at sigma=max) are ZEROED —
@@ -212,6 +221,7 @@ def train(cfg: Config, gpu=0):
             save_checkpoint(os.path.join(run_dir, "model.pt"), model, cfg,
                             step, {"cos_sigma0": vs[0.0].get("cos")
                                    if step >= cfg.train.val_interval else None})
+    _fetcher.shutdown(wait=False, cancel_futures=True)
     pool.shutdown()
     print(f"done -> {run_dir}", flush=True)
     return run_dir
