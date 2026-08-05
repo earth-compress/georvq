@@ -50,7 +50,8 @@ def sample_sigmas(sig_cfg, batch, n_tiers, device):
 
 
 @torch.no_grad()
-def validate_stage1(model, source, val_s, sigma_max, device, batch=256):
+def validate_stage1(model, source, val_s, sigma_max, device, batch=256,
+                    trunc=False):
     """Recon cosine at several uniform (all-tier) sigma levels. frac=0 is
     the near-lossless ceiling; higher frac = more corruption = lossier."""
     model.eval()
@@ -73,8 +74,9 @@ def validate_stage1(model, source, val_s, sigma_max, device, batch=256):
                 + float(centered_cos(rec, x, valid)) * nb
         out[frac] = {k: v / n for k, v in agg.items()}
     # truncation ladder: keep the k coarsest tiers clean, drop the rest
-    # (sigma=max) — the stage-1 analog of the stage-2 recon tuples
-    for k in range(1, n_tiers):
+    # (sigma=max) — the stage-1 analog of the stage-2 recon tuples. Only
+    # meaningful when the run trains truncation (sigma.truncate).
+    for k in (range(1, n_tiers) if trunc else ()):
         cs, n = 0.0, 0
         for x, valid in chunks:
             sig = torch.full((x.shape[0], n_tiers), float(sigma_max),
@@ -191,7 +193,8 @@ def train(cfg: Config, gpu=0):
                     log["data/reuse_per_patch"] = pool.reuse_estimate
                 wandb.log(log, step=step)
         if step % cfg.train.val_interval == 0 or step == cfg.train.steps:
-            vs = validate_stage1(model, source, val_s, sigma_max, device)
+            vs = validate_stage1(model, source, val_s, sigma_max, device,
+                                 trunc=cfg.model.sigma.truncate is not None)
             ceil = vs[0.0]["cos"]
             trunc = {k: v for k, v in vs.items() if isinstance(k, str)}
             print(f"step {step} VAL ceiling(σ=0)={ceil:.4f}"
@@ -212,7 +215,8 @@ def train(cfg: Config, gpu=0):
                             for f in SIG_FRACS if "vec_rel_l2" in vs[f]})
                 log.update({f"val/cos_{k}": v["cos"]
                             for k, v in trunc.items()})
-                if step % cfg.train.fig_interval == 0:
+                # recon panels are meaningless for near-pixel windows
+                if step % cfg.train.fig_interval == 0 and cfg.model.window >= 16:
                     fig = stage1_recon_figure(model, source, val_s,
                                               sigma_max, step)
                     log["figs/recon"] = wandb.Image(fig); plt.close(fig)
