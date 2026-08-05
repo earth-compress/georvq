@@ -16,12 +16,13 @@ model:
   local_attn: [null, null, 2]
   tokenizer: {dim: 384, depth: 14, late_join: 7, suffix_dim: 128}
   decoder: {dim: 576, depth: 12, heads: 8, head_feat: 128, cls_bridge: true,
-            late_join: 6, suffix_dim: 128}
+            late_join: 6, suffix_dim: 128, head_dw: true}
 
 train:
   steps: 40000
   batch_windows: 512
   compile: true
+  grad_ckpt: false
   optim: {lr: 1.5e-4, wd: 0.01, warmup: 1000, lr0_steps: 100}
   val_interval: 500
   fig_interval: 5000

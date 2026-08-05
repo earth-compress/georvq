@@ -79,6 +79,8 @@ class DecoderConfig(StrictModel):
     cls_bridge: bool = True
     late_join: int = 0             # same contract as tokenizer.late_join
     suffix_dim: Optional[int] = None
+    head_dw: bool = False          # depthwise-separable head convs (8x fewer
+                                   # MACs; smooths intra-window tile seams)
 
 
 class VQConfig(StrictModel):
