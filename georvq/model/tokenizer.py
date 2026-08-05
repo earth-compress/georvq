@@ -28,12 +28,20 @@ class ViTTokenizer(nn.Module):
         self.suffix_dim = suffix_dim
         self.n_base = 1 + sum(sp.cells for sp in specs[1:-1])
         fdim = suffix_dim or dim                # finest tier's stem/pos width
-        self.patches = nn.ModuleList([
-            nn.Conv2d(bands, fdim if sp is specs[-1] else dim,
-                      window // sp.grid, window // sp.grid)
-            for sp in specs[1:]])
+        self.single = len(specs) == 1
+        if self.single:
+            # single-vector autoencoder: per-pixel input tokens feed the
+            # trunk, the CLS token is the only readout
+            self.patches = nn.ModuleList([nn.Conv2d(bands, dim, 1)])
+            fdim = dim
+        else:
+            self.patches = nn.ModuleList([
+                nn.Conv2d(bands, fdim if sp is specs[-1] else dim,
+                          window // sp.grid, window // sp.grid)
+                for sp in specs[1:]])
         self.cls = nn.Parameter(torch.zeros(1, 1, dim))
-        n_tok = 1 + sum(sp.cells for sp in specs[1:])
+        n_tok = 1 + (window * window if self.single
+                     else sum(sp.cells for sp in specs[1:]))
         if suffix_dim:
             self.pos = nn.Parameter(
                 torch.randn(1, self.n_base, dim) * 0.02)
