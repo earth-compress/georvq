@@ -66,7 +66,8 @@ class TesseraSource(Source):
                          p=model_cfg.window // fine.grid,
                          bands=model_cfg.bands,
                          head_feat=model_cfg.decoder.head_feat,
-                         normalize=False)
+                         normalize=False,
+                         dw=model_cfg.decoder.head_dw)
 
     def recon_stats(self, out, x, valid):
         """Loss: masked per-pixel MSE in original (rescaled) units.

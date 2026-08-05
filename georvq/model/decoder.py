@@ -23,14 +23,23 @@ class DenseHead(nn.Module):
     smooths patch seams; optional per-pixel L2 normalization for unit-norm
     embedding fields (AlphaEarth)."""
 
-    def __init__(self, in_dim, grid, p, bands, head_feat=64, normalize=True):
+    def __init__(self, in_dim, grid, p, bands, head_feat=64, normalize=True,
+                 dw=False):
         super().__init__()
         self.grid, self.p, self.normalize = grid, p, normalize
         self.to_patch = nn.Linear(in_dim, head_feat * p * p)
+
+        def block(cin, cout):
+            if not dw:
+                return [nn.Conv2d(cin, cout, 3, 1, 1)]
+            # depthwise-separable: 3x3 per-channel then 1x1 mix (~8x fewer
+            # MACs at these widths)
+            return [nn.Conv2d(cin, cin, 3, 1, 1, groups=cin),
+                    nn.Conv2d(cin, cout, 1)]
         self.conv = nn.Sequential(
-            nn.Conv2d(head_feat, head_feat, 3, 1, 1), nn.GELU(),
-            nn.Conv2d(head_feat, head_feat, 3, 1, 1), nn.GELU(),
-            nn.Conv2d(head_feat, bands, 3, 1, 1))
+            *block(head_feat, head_feat), nn.GELU(),
+            *block(head_feat, head_feat), nn.GELU(),
+            *block(head_feat, bands))
 
     def forward(self, fine):                       # fine: (B, g*g, in_dim)
         B, g, p = fine.shape[0], self.grid, self.p

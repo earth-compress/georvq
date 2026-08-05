@@ -48,7 +48,8 @@ class AESource(Source):
                          p=model_cfg.window // fine.grid,
                          bands=model_cfg.bands,
                          head_feat=model_cfg.decoder.head_feat,
-                         normalize=True)
+                         normalize=True,
+                         dw=model_cfg.decoder.head_dw)
 
     def recon_stats(self, out, x, valid):
         mse, cos = masked_recon_stats(out, x, valid)
