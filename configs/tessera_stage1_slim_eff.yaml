@@ -12,7 +12,7 @@ inherit: tessera_pyr64.yaml
 model:
   vq: null
   sigma: {max: 4.0, freqs: 8}
-  tiers: ["1:512:2048:8", "4:384:8192:8", "16:128:16384:8"]
+  tiers: ["1:384:2048:8", "4:384:8192:8", "16:128:16384:8"]  # coarse 384: honest width (tok trunk is 384; a 512 label would be rank-capped payload waste)
   local_attn: [null, null, 2]
   tokenizer: {dim: 384, depth: 14, late_join: 7, suffix_dim: 128}
   decoder: {dim: 576, depth: 12, heads: 8, head_feat: 128, cls_bridge: true,
