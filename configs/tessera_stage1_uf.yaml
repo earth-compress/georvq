@@ -1,0 +1,38 @@
+# The evidence-synthesis architecture: 4-tier ultrafine pyramid sized
+# for a >=0.99 unquantized ceiling (RVQ target 0.985-0.99).
+# - Rate: 49.6 latent dims/px = 2.6x naive int8 (noise-floor curves say
+#   0.99 needs ~80 dims/px context-free; pyramid context buys ~1 octave).
+# - Widths from measured latent rank (d99.9: coarse 214, mid 310 in 512
+#   slots -> honest 256/384; fine 256 keeps its 179 tail; ultrafine 128).
+# - Dense where proven: coarse+mid+fine = the 273-token full-attention
+#   trunk (the 0.9801 regime; eff showed restricting fine costs ~0.0015).
+# - Structured where measured: ONLY the ultrafine tier is a narrow
+#   (192-d) blocked-halo cross suffix, 9x9 halo + full base access —
+#   the regime the AE attention probe licenses (local + global read).
+inherit: tessera_pyr64.yaml
+
+model:
+  vq: null
+  sigma: {max: 4.0, freqs: 8}
+  tiers: ["1:256:2048:8", "4:384:8192:8", "16:256:16384:8", "32:128:16384:8"]
+  min_depths: [6, 1, 0, 0]
+  local_attn: [null, null, null, 4]   # fine stays unmasked; ultrafine halo r=4
+  tokenizer: {dim: 512, depth: 14, late_join: 6, suffix_dim: 192}
+  decoder: {dim: 576, depth: 12, heads: 8, head_feat: 128, cls_bridge: true,
+            late_join: 5, suffix_dim: 192}
+
+train:
+  steps: 40000
+  batch_windows: 512
+  compile: true
+  grad_ckpt: false
+  optim: {lr: 1.5e-4, wd: 0.01, warmup: 1000, lr0_steps: 100}
+  val_interval: 500
+  fig_interval: 5000
+  save_interval: 5000
+
+eval:
+  recon_tuples: ["8-1-0-0", "8-8-1-0", "8-8-8-1", "8-8-8-8"]
+
+log:
+  run_tag: tessera_s1_uf
