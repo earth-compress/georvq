@@ -1,0 +1,23 @@
+# AE noise-floor probe, mirror of tessera_stage1_patch4 with all dims
+# halved (64 bands): 4x4 patch = 1024 values -> 512-d latent (2x at
+# int8). Trunks = latent width (rank invariant).
+inherit: pyr64.yaml
+model:
+  window: 4
+  vq: null
+  sigma: {max: 4.0, freqs: 8}
+  tiers: ["1:512:2048:8"]
+  min_depths: [8]
+  tokenizer: {dim: 512, depth: 8}
+  decoder: {dim: 512, depth: 8, heads: 8, head_feat: 64, cls_bridge: false}
+train:
+  steps: 40000
+  batch_windows: 4096
+  compile: true
+  grad_ckpt: false
+  optim: {lr: 1.5e-4, wd: 0.01, warmup: 1000, lr0_steps: 100}
+  val_interval: 500
+  fig_interval: 5000
+  save_interval: 5000
+log:
+  run_tag: ae_s1_patch4_512
