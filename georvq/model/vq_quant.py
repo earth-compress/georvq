@@ -44,14 +44,54 @@ class QuantizedBookVQ(VectorQuantizer):
         W.copy_((W / s).round().clamp(-qmax, qmax) * s)
 
     def forward(self, z):
-        # pre: k-means init / dead resets may have written off-grid vectors
-        # post: the EMA update re-derived an fp32 weight from the buffers
+        """Parent semantics with two changes: the book is projected onto
+        the b-bit grid around the update, and the EMA update uses
+        bincount/index_add instead of a dense one-hot — the (N, K) one-hot
+        is ~16 GiB at K=16384 with 512x1024-cell batches."""
+        import torch.nn.functional as F
         if self.training:
             self.project_book()
-        out = super().forward(z)
+        flat_shape = z.shape[:-1]
+        z_flat = z.reshape(-1, self.dim)
+        if self.training and not self.initialized.item():
+            self._data_init(z_flat.detach())
+        if self.bf16_scores:
+            E = self.codebook.weight
+            s = z_flat.bfloat16() @ E.t().bfloat16()
+            indices = (s - (E.pow(2).sum(1) * 0.5).bfloat16()[None]) \
+                .argmax(dim=-1)
+        else:
+            d = (z_flat.pow(2).sum(1, keepdim=True)
+                 - 2 * z_flat @ self.codebook.weight.t()
+                 + self.codebook.weight.pow(2).sum(1, keepdim=True).t())
+            indices = d.argmin(dim=-1)
+        z_q = self.codebook(indices)
+        if self.training and not self.grad_codebook:
+            with torch.no_grad():
+                count = torch.bincount(
+                    indices, minlength=self.num_codes).to(z_flat.dtype)
+                vec_sum = torch.zeros_like(self.ema_sum, dtype=z_flat.dtype) \
+                    .index_add_(0, indices, z_flat)
+                self.ema_count.mul_(self.decay).add_(count,
+                                                     alpha=1 - self.decay)
+                self.ema_sum.mul_(self.decay).add_(vec_sum,
+                                                   alpha=1 - self.decay)
+                n = self.ema_count.sum()
+                cs = (self.ema_count + self.eps) \
+                    / (n + self.num_codes * self.eps) * n
+                self.codebook.weight.data.copy_(self.ema_sum / cs.unsqueeze(1))
+                self.step += 1
+                if self.reset_interval > 0 and \
+                        (self.step.item() % self.reset_interval == 0):
+                    self._reset_dead(z_flat.detach())
+        commit_loss = F.mse_loss(z_flat, z_q.detach())
+        if self.grad_codebook:
+            commit_loss = commit_loss + F.mse_loss(z_q, z_flat.detach())
+        z_q_st = z_flat + (z_q - z_flat).detach()
         if self.training:
             self.project_book()
-        return out
+        return (z_q_st.reshape(*flat_shape, self.dim),
+                indices.reshape(flat_shape), commit_loss)
 
 
 class QuantizedResidualVQ(ResidualVQ):
