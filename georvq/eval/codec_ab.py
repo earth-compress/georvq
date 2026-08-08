@@ -29,16 +29,24 @@ def load_codec(ckpt_path, device):
     return model, model.window, model.specs
 
 
-def orig_embeddings(windows, t):
-    """Published embedding at each target pixel (L2-normed), (N,64)."""
+def orig_embeddings(windows, t, source="ae"):
+    """Published embedding at each target pixel (L2-normed), (N, bands).
+    `source` picks the raw-window dequant: AE = signed-square int8; tessera
+    = q * fp16-scale (scale bytes in the 2 trailing bands)."""
     wi, r, c = t.window_idx.to_numpy(), t.r.to_numpy(), t.c.to_numpy()
-    return l2norm_np(dequant_np(windows[wi, :, r, c]))
+    px = windows[wi, :, r, c]                        # (N, raw_bands)
+    if source == "tessera":
+        q = px[:, :-2].astype(np.float32)
+        scale = np.ascontiguousarray(px[:, -2:]).view(np.uint8) \
+            .view(np.float16).astype(np.float32)
+        return l2norm_np(q * scale)
+    return l2norm_np(dequant_np(px))
 
 
 def unique_windows(windows, t, W):
     """Sub-tile each target's crop to the codec window. Returns the unique
-    (64,W,W) int8 windows, the per-target window index `inv`, and per-target
-    local pixel offsets (lr, lc) inside that window."""
+    (raw_bands,W,W) int8 windows, the per-target window index `inv`, and
+    per-target local pixel offsets (lr, lc) inside that window."""
     crop = windows.shape[-1]
     assert crop % W == 0 and crop >= W, f"crop {crop} not a multiple of W {W}"
     wi, r, c = t.window_idx.to_numpy(), t.r.to_numpy(), t.c.to_numpy()
@@ -46,7 +54,7 @@ def unique_windows(windows, t, W):
     key = np.stack([wi, sr, sc], 1)
     uniq, inv = np.unique(key, axis=0, return_inverse=True)
     inv = inv.ravel()
-    win = np.empty((len(uniq), 64, W, W), np.int8)
+    win = np.empty((len(uniq), windows.shape[1], W, W), np.int8)
     for k in range(len(uniq)):
         w, a, b = uniq[k]
         win[k] = windows[w][:, a * W:(a + 1) * W, b * W:(b + 1) * W]
@@ -55,15 +63,20 @@ def unique_windows(windows, t, W):
 
 @torch.no_grad()
 def reconstruct_tuples(model, win_int8, inv, lr, lc, tuples_ls, device,
-                       chunk=256):
+                       chunk=256, source="ae"):
     """Reconstruct every target pixel at each rate tuple. Encodes each window
     once; decodes all tuples from the cached cumulative codes. Returns a list
-    (aligned to tuples_ls) of (N,64) L2-normed reconstructions."""
-    N = len(inv)
-    out = [np.empty((N, 64), np.float32) for _ in tuples_ls]
+    (aligned to tuples_ls) of (N, bands) L2-normed reconstructions."""
+    N, bands = len(inv), model.cfg.bands
+    out = [np.empty((N, bands), np.float32) for _ in tuples_ls]
     for a in range(0, len(win_int8), chunk):
         b = min(a + chunk, len(win_int8))
-        x = dequant(torch.from_numpy(win_int8[a:b]).to(device))
+        raw = torch.from_numpy(win_int8[a:b])
+        if source == "ae":
+            # historical AE eval path: plain dequant, no re-norm/mask
+            x = dequant(raw.to(device))
+        else:
+            x, _ = model.source.prep(raw, device)    # exact training prep
         _, cums = model.level_cumsums(x)
         mask = (inv >= a) & (inv < b)
         idx = np.nonzero(mask)[0]
