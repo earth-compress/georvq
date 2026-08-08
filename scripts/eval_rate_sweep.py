@@ -129,6 +129,11 @@ def main():
     ap.add_argument("--out-dir", default="plots/ae_downstream")
     ap.add_argument("--label-col", default="label",
                     help="label column to evaluate (e.g. label_lu for land use)")
+    ap.add_argument("--restrict-parquet", default=None,
+                    help="targets.parquet of a matched dataset (e.g. the "
+                         "tessera re-extraction): keep only this dataset's "
+                         "rows whose index appears in its ae_idx column, so "
+                         "both sources are probed on the same points")
     ap.add_argument("--wandb", action="store_true")
     args = ap.parse_args()
     os.makedirs(args.out_dir, exist_ok=True)
@@ -136,6 +141,12 @@ def main():
     meta = json.load(open(os.path.join(args.dataset, "meta.json")))
     windows = np.load(os.path.join(args.dataset, "windows.npy"), mmap_mode="r")
     t = pd.read_parquet(os.path.join(args.dataset, "targets.parquet"))
+    if args.restrict_parquet:
+        keep = set(pd.read_parquet(args.restrict_parquet,
+                                   columns=["ae_idx"]).ae_idx)
+        t = t[t.index.isin(keep)]
+        print(f"restricted to {len(t)} matched targets "
+              f"({args.restrict_parquet})", flush=True)
     lc = args.label_col
     if lc not in t.columns:
         raise SystemExit(f"--label-col {lc} not in dataset ({list(t.columns)})")
