@@ -52,7 +52,8 @@ def sweep_ckpt(ckpt, windows, t, X_orig, y, groups, meta, args, device):
 
     win, inv, lr, lc = codec_ab.unique_windows(windows, t, W)
     recons = codec_ab.reconstruct_tuples(model, win, inv, lr, lc, tuples,
-                                         device)
+                                         device,
+                                         source=meta.get("source", "ae"))
     budgets = [None if b == "all" else int(b) for b in args.budgets.split(",")]
     probes = tuple(args.probes.split(","))
 
@@ -144,7 +145,8 @@ def main():
         t = t[t[lc].isin(vc[vc >= 50].index)].reset_index(drop=True)
     tag = meta["benchmark"] + ("" if lc == "label" else f"_{lc}")
     y, groups = t[lc].to_numpy(), t.fid.to_numpy()
-    X_orig = codec_ab.orig_embeddings(windows, t)
+    X_orig = codec_ab.orig_embeddings(windows, t,
+                                      source=meta.get("source", "ae"))
     print(f"dataset: {tag} ({meta['task']}, {meta['metric']}) | "
           f"{len(t)} targets / {t.fid.nunique()} tiles | "
           f"classes={sorted(set(y.tolist())) if meta['task']=='classification' else 'reg'}",
