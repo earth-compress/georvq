@@ -1,0 +1,41 @@
+# Stage-2 on the frozen tessera_s1_uf encoder (4-tier, ceiling 0.9835):
+# AE-style — warm-start, encoder frozen for the whole run, decoder-only
+# warmup then residual k-means init of int8-QAT codebooks on the frozen
+# latents. 8 RVQ levels per tier (AE ladder); ultrafine at the fine
+# tier's K (16384) per its spec. Geometry = tessera_stage1_uf.
+inherit: tessera_pyr64.yaml
+
+model:
+  tiers: ["1:256:2048:8", "4:384:8192:8", "16:256:16384:8", "32:128:16384:8"]
+  min_depths: [6, 1, 0, 0]
+  local_attn: [null, null, null, 4]
+  tokenizer: {dim: 512, depth: 14, late_join: 6, suffix_dim: 192}
+  decoder: {dim: 576, depth: 12, heads: 8, head_feat: 128, cls_bridge: true,
+            late_join: 5, suffix_dim: 192}
+  vq:
+    commit_weight: 0.25
+    dead_threshold: 0.000625
+    ema_decay: 0.99
+    bf16_scores: true
+    skip_masked: true
+    warmup_steps: 500
+    kmeans_sample: 32768
+    book_bits: 8
+
+train:
+  steps: 60000
+  batch_windows: 512
+  compile: true
+  grad_ckpt: true
+  init_from: /home/ali/projects/ring-space/checkpoints/tessera_s1_uf/model.pt
+  freeze_encoder_steps: 60000
+  optim: {lr: 2.5e-4, wd: 0.01, warmup: 500}
+  val_interval: 1000
+  fig_interval: 5000
+  save_interval: 2500
+
+eval:
+  recon_tuples: ["8-1-0-0", "8-8-1-0", "8-8-8-1", "8-8-8-8"]
+
+log:
+  run_tag: tessera_uf_vq8_s2
