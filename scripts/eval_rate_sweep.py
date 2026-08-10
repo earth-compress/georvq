@@ -124,7 +124,8 @@ def main():
     ap.add_argument("--probes", default="knn3,linear")
     ap.add_argument("--test-frac", type=float, default=0.3)
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--device", default="cuda" if torch.cuda.is_available()
+    # GPU0 usually carries other people's jobs on this box -- default to 1
+    ap.add_argument("--device", default="cuda:1" if torch.cuda.is_available()
                     else "cpu")
     ap.add_argument("--out-dir", default="plots/ae_downstream")
     ap.add_argument("--label-col", default="label",
