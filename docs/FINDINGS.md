@@ -103,3 +103,54 @@ strong priors, not laws.
   cumsums, ~2x the base encode cost) yields per-blob and per-window true
   error stats that make quality-controlled delivery possible with no
   predictor network.
+
+## Tessera stage-2 / codebook investigation (2026-08-10)
+
+- **Tier-redundancy collapse is real and silent.** In the 4-tier `uf`
+  model (grids 1/4/16/32 over 64 px) the fine tier carries only **0.2%**
+  of its variance *within* a window — its 256 cells are near-copies of
+  one window-level vector. The same tier is healthy in every 3-tier
+  model (96.8% in `s1_4x`, 97.9% in `s1_2x`); it collapses only once the
+  2 px ultrafine tier is added and takes over its job. Costs ~62% of the
+  rate budget (256 cells x 8 lvl x 14 b) and is invisible in the ceiling,
+  because a duplicated tier wastes rate, not quality. **Check
+  within-window latent variance per tier before trusting any tier.**
+- **Codebook perplexity is not a health metric — it is gameable.** An
+  isolated agent, given only vectors and a fixed scorer, reached 11.94 /
+  11.96 / 11.97 bits of 12 with all 4096 codes used at every level, at
+  **0.014% of energy explained** (verified fp64, independent re-score);
+  decoded cosine 0.45 vs 0.98 for k-means. Utilization is bought by
+  quantizing directions where the data has no structure: 8.24 bits on
+  the top-12 PCA directions vs 11.90 deep in the tail. Judge codebooks
+  on rate-distortion, never on usage.
+- **EMA codebook training can degrade a good fit, source-dependently.**
+  Frozen encoder, static latents, no resets firing: `ema_decay 0.99`
+  took residual 0.033 -> 0.047 by 2400 steps (damage concentrated in
+  deep levels = cascade drift); `0.9995` was flat. On Tessera a fresh
+  8-iter k-means beat 60k EMA steps end-to-end (**0.9766 vs 0.9744**).
+  On AE the same test is a tie (**0.9963 vs 0.9964**) — AE's latents are
+  much lower-rank (d95 19/34/28 vs 51/91/71), so its books are better
+  sampled and stable. Prefer fit-once-and-freeze; it is never worse.
+- **At matched rate, bigger K beats more levels** (healthy tier, ~112
+  b/cell): K=16384 x8 -> 0.2252, 4096 x9 -> 0.2354, 1024 x11 -> 0.2411,
+  256 x14 -> 0.2539. The opposite conclusion drawn from a *collapsed*
+  tier was an artefact. Keep the AE ladder (2048/8192/16384).
+- **Gain-shape VQ loses at matched rate**: plain VQ 0.2251 vs 0.2537
+  (K=4096+2 gain bits) and 0.3087 (K=1024+4). Implemented and tested
+  (`vq.gain_shape`), kept for reference. Its premise (books wasting
+  capacity on magnitude) does not hold; the shape-codebook capacity it
+  costs exceeds the magnitude precision it buys.
+- **Cross-fitted refinement levels help only degenerate tiers.** +33% on
+  the collapsed tier (where levels 1-2 contributed 1.3%), **-13% on a
+  healthy one** (0.2556 vs 0.2262) — the fold models are weaker, so the
+  residuals they produce mismatch what the shipped book will see.
+- **MSE-optimal codebooks are ~decoder-optimal.** Freezing AE's encoder
+  AND decoder and optimising only the codewords against the *decoded*
+  loss gained **+0.00007 cos** (0.99585 -> 0.99592, monotone, held-out)
+  — a real but negligible degree of freedom. Not worth a pipeline stage.
+- **Measurement gotchas.** (a) Split latent datasets by *window*, never
+  by cell: adjacent cells are near-duplicates (mean NN distance ~6% of
+  vector norm) and a random split makes k-means look ~500x better than
+  it is. (b) Latent residual is a weak proxy for quality — 0.22 residual
+  maps to ~0.001 cos via the sigma ladder, because the decoder is
+  trained for noise robustness. Always decode.
