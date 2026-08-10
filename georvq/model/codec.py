@@ -100,9 +100,14 @@ class PyramidCodec(nn.Module):
 
         if not self.continuous:
             v = cfg.vq
-            if v.book_bits:
+            from functools import partial
+            if v.gain_shape:
+                from georvq.model.vq_gainshape import GainShapeResidualVQ
+                assert not v.book_bits, \
+                    "gain_shape and book_bits are separate quantizer paths"
+                rvq_cls = partial(GainShapeResidualVQ, gain_bits=v.gain_bits)
+            elif v.book_bits:
                 from georvq.model.vq_quant import QuantizedResidualVQ
-                from functools import partial
                 rvq_cls = partial(QuantizedResidualVQ, book_bits=v.book_bits)
             else:
                 rvq_cls = ResidualVQ

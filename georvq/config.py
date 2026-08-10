@@ -97,6 +97,8 @@ class VQConfig(StrictModel):
     skip_masked: bool = False      # skip VQ work for levels the sampled depth masks off
     grad_codebook: bool = False
     book_bits: Optional[int] = None  # b-bit QAT codebooks (vq_quant.py); None = fp32
+    gain_shape: bool = False       # unit-sphere shape book + scalar gain
+    gain_bits: int = 5             # log-domain gain levels (gain_shape only)
 
 
 class SigmaConfig(StrictModel):
