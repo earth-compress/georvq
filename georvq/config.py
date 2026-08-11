@@ -183,6 +183,13 @@ class ModelConfig(StrictModel):
     tokenizer: TokenizerConfig = Field(default_factory=TokenizerConfig)
     decoder: DecoderConfig = Field(default_factory=DecoderConfig)
     vq: Optional[VQConfig] = Field(default_factory=VQConfig)
+    # Emit L2-normalized * sqrt(dim) latents from encode_levels, i.e. the
+    # geometry encode_stage1 (and therefore stage-1 training) uses. Set
+    # this on any stage-2 run warm-started from a stage-1 checkpoint;
+    # without it the decoder and the fitted codebooks are handed raw
+    # latents from a different scale. Default off so existing checkpoints
+    # and the bitstream contract are unaffected.
+    normalize_latents: bool = False
     sigma: Optional[SigmaConfig] = None
     conditioning: Optional[Conditioning] = None
     rate: Optional[RateConfig] = None
