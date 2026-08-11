@@ -28,6 +28,7 @@ from georvq.repro import (run_metadata, save_checkpoint, seed_all,
                           write_resolved_config)
 from georvq.train.figures import codebook_figure, cosdist_figure, rd_figure, recon_figure
 from georvq.train.validate import canonical_tuples, load_rd_ref, tname, validate
+from georvq.train import dist as D
 from georvq.train.warmstart import (decoder_tail_names, freeze_books,
                                     load_partial, set_encoder_frozen,
                                     set_params_frozen, trainable_params)
@@ -40,12 +41,20 @@ def resolve_device(gpu):
 
 
 def setup_data(cfg: Config, source, device):
-    """Store, split, fixed val tokens, training pool."""
+    """Store, split, fixed val tokens, training pool.
+
+    Under data parallelism the resident pool is split across ranks so the
+    host RAM footprint is unchanged (two full pools would not fit). Every
+    rank still draws from ALL training chips and refreshes from disk at
+    the configured rate, so this costs no corpus coverage -- it only
+    halves how much each rank holds in RAM at any moment. Seeds are
+    offset by rank so ranks hold and sample different chips."""
     store = ChipStore(cfg.data.store_dir)
     train_rows, val_rows = store.split(cfg.data.val_frac,
                                        seed=cfg.data.split_seed)
-    print(f"data: {len(store.index)} chips -> {len(train_rows)} train / "
-          f"{len(val_rows)} val", flush=True)
+    if D.is_main():
+        print(f"data: {len(store.index)} chips -> {len(train_rows)} train / "
+              f"{len(val_rows)} val", flush=True)
     if cfg.data.limit_chips:
         order = np.random.default_rng(cfg.data.split_seed).permutation(
             len(train_rows))
@@ -54,20 +63,28 @@ def setup_data(cfg: Config, source, device):
         print(f"data: limit_chips -> training on {len(train_rows)} chips",
               flush=True)
     val_s = fixed_val_tokens(store, val_rows, token=cfg.model.window)
-    print(f"data: {val_s.shape[0]} fixed val tokens", flush=True)
+    if D.is_main():
+        print(f"data: {val_s.shape[0]} fixed val tokens", flush=True)
     p = cfg.data.pool
     period = store.grid_period or getattr(source, "grid_period", 1)
-    pool = ChipPool(store, train_rows, p.size, device, workers=p.workers,
+    pool_size = max(1, p.size // D.world_size())
+    if D.world_size() > 1 and D.is_main():
+        print(f"data: pool split {D.world_size()} ways -> {pool_size} slots "
+              f"per rank (all ranks draw from all {len(train_rows)} chips)",
+              flush=True)
+    pool = ChipPool(store, train_rows, pool_size, device, workers=p.workers,
                     refresh_chips_per_s=p.refresh_per_s,
-                    seed=cfg.train.seed, slot_rows=p.slot_rows,
+                    seed=cfg.train.seed + 1000 * D.rank(),
+                    slot_rows=p.slot_rows,
                     pool_device=("cpu" if p.device == "cpu" else device),
                     cycle=p.cycle, period=period)
     return store, train_rows, val_rows, val_s.to(device), pool
 
 
 def train(cfg: Config, gpu=0):
-    seed_all(cfg.train.seed)
-    device = resolve_device(gpu)
+    seed_all(cfg.train.seed)          # identical model init on every rank
+    ddp_device, ddp_rank, ddp_world = D.setup(cfg)
+    device = ddp_device or resolve_device(gpu)
     if cfg.train.tf32:
         torch.set_float32_matmul_precision("high")
     amp_on = cfg.train.amp and device.type == "cuda"
@@ -152,6 +169,22 @@ def train(cfg: Config, gpu=0):
               f"(last {cfg.train.freeze_head_blocks} blocks + head) for "
               f"{cfg.train.freeze_head_steps} steps", flush=True)
 
+    if ddp_world > 1:
+        # A warm start leaves some modules freshly initialised (the depth
+        # cond_mlp), so equal seeds are not a safe guarantee of equal
+        # weights -- copy rank 0's state outright. Only AFTER that do we
+        # diverge the RNG, so each rank draws different crops and depth
+        # tuples; identical streams would make the extra rank pure waste.
+        n = D.broadcast_state(model)
+        seed_all(cfg.train.seed + 1000 * ddp_rank)
+        assert cfg.train.batch_windows % ddp_world == 0, \
+            "train.batch_windows must divide by the number of ranks"
+        if D.is_main():
+            print(f"ddp: {ddp_world} ranks, broadcast {n} tensors from "
+                  f"rank 0; global batch {cfg.train.batch_windows} "
+                  f"-> {cfg.train.batch_windows // ddp_world} per rank",
+                  flush=True)
+
     # a fresh rate model gets its own (higher) LR so it can learn while a
     # warm-started codec fine-tunes at the small base LR. The optimizer owns
     # every param that trains at ANY point in the run — temporarily frozen
@@ -186,7 +219,7 @@ def train(cfg: Config, gpu=0):
                 * 0.5 * (1 + np.cos(np.pi * min(1.0, s / total))))
     sched = torch.optim.lr_scheduler.LambdaLR(opt, lr_fn)
 
-    use_wandb = cfg.log.wandb
+    use_wandb = cfg.log.wandb and D.is_main()
     if use_wandb:
         import wandb
         wandb.init(project=cfg.log.wandb_project, name=cfg.log.run_tag,
@@ -196,7 +229,10 @@ def train(cfg: Config, gpu=0):
                      if cfg.model.conditioning is not None
                      and cfg.model.conditioning.kind == "select" else 0.0)
     commit_weight = v.commit_weight
-    batch = cfg.train.batch_windows
+    # batch_windows is the GLOBAL batch: splitting it keeps the effective
+    # batch, the LR schedule and the step count identical to a single-GPU
+    # run, so extra ranks buy wall-clock rather than changing the recipe.
+    batch = cfg.train.batch_windows // ddp_world
     align = cfg.data.pool.align_crops
     t0, data_ms = time.time(), 0.0
     best_cos = -1.0
@@ -290,11 +326,14 @@ def train(cfg: Config, gpu=0):
             loss = loss + rate_w * rate_bpp
         opt.zero_grad(set_to_none=True)
         loss.backward()
+        if ddp_world > 1:
+            # average (not sum) so the LR keeps its single-GPU meaning
+            D.average_grads(base_p + rate_p)
         opt.step(); sched.step()
 
-        if step % 50 == 0:
+        if step % 50 == 0 and D.is_main():
             dt = time.time() - t0; t0 = time.time()
-            tok_s = 50 * batch / dt
+            tok_s = 50 * batch * ddp_world / dt
             log = {"train/loss": loss.item(),
                    "train/commit": commit.item(),
                    "train/select": select.item(),
@@ -321,7 +360,8 @@ def train(cfg: Config, gpu=0):
             if use_wandb:
                 wandb.log(log, step=step)
 
-        if step % cfg.train.val_interval == 0 or step == cfg.train.steps:
+        if (step % cfg.train.val_interval == 0
+                or step == cfg.train.steps) and D.is_main():
             canon_ts = list(canon.values())
             if step == cfg.train.steps and len(tuples) <= 64:
                 val_ts = tuples           # full enumeration at the end
@@ -393,7 +433,8 @@ def train(cfg: Config, gpu=0):
                 best_cos = full_cos
                 save_checkpoint(os.path.join(run_dir, "model_best.pt"),
                                 model, cfg, step, metrics)
-        if step % cfg.train.save_interval == 0 or step == cfg.train.steps:
+        if (step % cfg.train.save_interval == 0
+                or step == cfg.train.steps) and D.is_main():
             save_checkpoint(os.path.join(run_dir, "model.pt"), model, cfg,
                             step, {"cos_full": best_cos})
 
