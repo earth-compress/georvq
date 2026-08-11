@@ -123,6 +123,16 @@ def assign(x, C, chunk=1 << 15):
     return torch.cat(out)
 
 
+def sub_assigned_(r, C, a, chunk=1 << 20):
+    """In-place r -= C[a], chunked.
+
+    `r = r - C[a]` would hold three full-size tensors at once (the gather,
+    the result, and the original). At 16M x 384 fp32 that is 74 GiB and
+    OOMs an 80 GiB card on the finer tiers."""
+    for i in range(0, r.shape[0], chunk):
+        r[i:i + chunk] -= C[a[i:i + chunk]]
+
+
 def fit_rvq(fit, ev, K, levels, iters, bits, dev, tag):
     """Sequential residual k-means; each level is quantized before the next
     level sees its residual."""
@@ -146,8 +156,8 @@ def fit_rvq(fit, ev, K, levels, iters, bits, dev, tag):
         C = quantize_book(C, bits)
         a_f = assign(r_fit, C)
         a_e = assign(r_ev, C)
-        r_fit = r_fit - C[a_f]
-        r_ev = r_ev - C[a_e]
+        sub_assigned_(r_fit, C, a_f)
+        sub_assigned_(r_ev, C, a_e)
         cnt = torch.bincount(a_e, minlength=K).float()
         p = cnt / cnt.sum()
         perp = float(torch.exp(-(p * p.clamp_min(1e-12).log()).sum()))

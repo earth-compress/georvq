@@ -27,6 +27,12 @@ inherit: tessera_pyr64.yaml
 model:
   window: 32
   sigma: null                      # depth-conditioned now, not sigma
+  # LOAD-BEARING. The store, the codebook fit and all of stage-1 use
+  # encode_stage1 (L2-normalized * sqrt(dim)); raw encode_levels output
+  # has norms 5.3/6.0/9.7 against sqrt(384)=19.6. Quantizing raw latents
+  # with these books leaves residual energy of 1.75/1.32/0.49 -- above
+  # 1.0 means worse than sending zeros.
+  normalize_latents: true
   tiers: ["1:384:2048:8", "4:384:8192:8", "16:384:16384:8"]
   # Coarse tier stays deep (stage-1's floor), but the two finer tiers may
   # drop out entirely: 8-0-0 and 8-8-0 are the operating points the plain

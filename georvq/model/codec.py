@@ -82,6 +82,7 @@ class PyramidCodec(nn.Module):
         self.bands = cfg.bands
         self.specs = list(cfg.tiers)
         self.continuous = cfg.vq is None
+        self.normalize_latents = cfg.normalize_latents
 
         self.stem = source.build_stem(cfg)
         # narrow-suffix radius: the finest tier's local_attn entry (cells)
@@ -155,8 +156,25 @@ class PyramidCodec(nn.Module):
     # ---- encode / decode ----
 
     def encode_levels(self, x):
-        """x: (B, C, W, W) -> list of per-tier latents [(B, cells, dim)]."""
-        return self.tokenizer(self.stem(x))
+        """x: (B, C, W, W) -> list of per-tier latents [(B, cells, dim)].
+
+        With `normalize_latents`, tiers come out in the SAME normalized
+        geometry `encode_stage1` produces, so a stage-2 run quantizes and
+        decodes exactly what stage-1 trained on. Without it, a decoder
+        warm-started from stage-1 is handed raw latents whose norms are a
+        fraction of sqrt(dim) (measured on w32hd: 5.3/6.0/9.7 vs 19.6),
+        and codebooks fitted on stage-1 latents are 2-4x too long for the
+        vectors they are matched against -- which leaves the 8-level RVQ
+        residual ABOVE the input energy on the coarse tiers, i.e. worse
+        than transmitting nothing.
+
+        Default off: this changes what the encoder emits, so every
+        existing checkpoint and bitstream keeps its current behaviour."""
+        zs = self.tokenizer(self.stem(x))
+        if self.normalize_latents:
+            zs = [F.normalize(z, dim=-1, eps=1e-6) * (z.shape[-1] ** 0.5)
+                  for z in zs]
+        return zs
 
     def decode(self, zqs, cond):
         """zqs: list of (B, cells, dim); cond: (B, n_tiers) depths (or sigmas
