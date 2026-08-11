@@ -1,0 +1,59 @@
+# Stage-2 for the w32hd encoder: DECODER-ONLY training against frozen
+# corpus-fitted codebooks.
+#
+# Everything upstream of the decoder is fixed. The encoder is frozen for
+# the whole run (freeze_encoder_steps == steps), and the codebooks are
+# hard-frozen (vq.freeze_books: no EMA, no dead-code resets, no gradient)
+# because they were fitted once at corpus scale by
+# analysis/fit_corpus_books.py -- letting EMA drift them would desync the
+# shipped books from the fitted ones for no measured gain (a fresh 8-iter
+# k-means already beat the 60k-step EMA books end-to-end, 0.9766 vs
+# 0.9744; ema_decay 0.99 actively DEGRADES deep levels over a long run).
+#
+# So this run only has to answer one question: how much of the 0.0284 gap
+# between the unfinetuned decoder (0.9615) and the stage-1 ceiling
+# (0.9899) the decoder can recover once it is trained on quantized
+# latents instead of sigma-noised ones.
+#
+# Matryoshka depth sampling is load-bearing, not a nicety: the stage-1
+# decoder was conditioned on a per-tier sigma and has never seen a tier
+# that is absent outright, which is why 8-8-0 scores only 0.69 today.
+# `decoder.cond_mlp` therefore starts FRESH by design (the sigma Fourier
+# features and the depth thermometer have different input widths, so
+# load_partial skips it) -- that fresh conditioning path is a large part
+# of what the run is training.
+inherit: tessera_pyr64.yaml
+
+model:
+  window: 32
+  sigma: null                      # depth-conditioned now, not sigma
+  tiers: ["1:384:2048:8", "4:384:8192:8", "16:384:16384:8"]
+  # Widen the ladder vs stage-1's [6,1,0]: stage-1 only ever had to be good
+  # near the top, but the shipped codec is judged across the whole R-D
+  # curve, and 8-1-0 is a canonical eval point. 1 is the floor the schema
+  # allows on the coarsest tier.
+  min_depths: [1, 0, 0]
+  tokenizer: {dim: 512, depth: 12}
+  decoder: {dim: 576, depth: 12, heads: 8, head_feat: 128, cls_bridge: true}
+  vq:
+    commit_weight: 0.0             # encoder is frozen: nothing to commit
+    bf16_scores: true
+    skip_masked: true
+    warmup_steps: 0                # books arrive pre-fitted via init_from
+    freeze_books: true
+
+train:
+  steps: 30000
+  batch_windows: 2048
+  compile: true
+  grad_ckpt: true
+  # books + stage-1 weights, merged by analysis/fit_corpus_books.py
+  init_from: /home/ali/projects/ring-space/checkpoints/tessera_w32hd_books.pt
+  freeze_encoder_steps: 30000      # never unfreeze
+  optim: {lr: 1.0e-4, wd: 0.01, warmup: 500, lr0_steps: 100}
+  val_interval: 500
+  fig_interval: 5000
+  save_interval: 2500
+
+log:
+  run_tag: tessera_w32hd_vq8_s2

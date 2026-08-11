@@ -23,6 +23,8 @@ in `reports/`; run logs and result artefacts in
 | `sens.py`, `corr.py`, `wkm.py` | decoder sensitivity per dimension and per principal direction |
 | `rdcmp.py` | R-D of the trained phase-1 codec vs the new encoder pre-finetune |
 | `build_full.py`, `build_full2.py` | full-corpus int8 latent store builder (2 GPUs) |
+| `verify_latent_store.py` | store completeness: shard integrity, row agreement, chip coverage |
+| `fit_corpus_books.py` | **stage-2 step 1**: corpus-scale int4 codebook fit -> merged `init_from` checkpoint |
 | `build_latents.py` | sampled latent store (superseded by the full build) |
 | `ae_books.py`, `ae_cbopt.py` | AE codebooks: fresh refit, and decoder-loss optimisation |
 | `residual_diag.py`, `ae_attn_probe.py` | error spectra; AE attention locality probe |

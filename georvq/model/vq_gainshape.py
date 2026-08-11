@@ -183,21 +183,57 @@ class GainShapeResidualVQ(ResidualVQ):
             for _ in range(num_levels)])
 
     @torch.no_grad()
-    def spherize_books(self, z=None):
-        """Post-k-means hook: put every codeword on the sphere and seed the
-        gain books from the residual projections (call after
-        kmeans_init_rvq, which fits unconstrained centroids)."""
-        resid = None if z is None else z.reshape(-1, z.shape[-1]).float()
-        if resid is not None and resid.shape[0] > 200_000:
+    def spherize_books(self, z=None, iters=6, chunk=16384):
+        """Post-k-means hook: run proper SPHERICAL k-means per level.
+
+        Projecting an unconstrained k-means book onto the sphere is not a
+        fair init — those centroids were fitted under a different
+        objective, and the residual cascade behind them was produced by a
+        different reconstruction rule. This re-fits each level with
+        max-cosine assignment and normalized-mean updates, propagating
+        residuals with the gain-shape reconstruction, then seeds the gain
+        book and the EMA buffers consistently."""
+        if z is None:
+            for lev in self.levels:
+                lev.normalize_book()
+            return
+        resid = z.reshape(-1, z.shape[-1]).float()
+        if resid.shape[0] > 200_000:
             sel = torch.randperm(resid.shape[0], device=resid.device)[:200_000]
             resid = resid[sel]
+        N = resid.shape[0]
+        ones = torch.ones(N, device=resid.device)
+
+        def assign(C):
+            out = []
+            for r in resid.split(chunk):
+                out.append((r @ C.t()).argmax(-1))
+            return torch.cat(out)
+
         for lev in self.levels:
-            lev.normalize_book()
-            if resid is None:
-                continue
-            E = lev.codebook.weight.float()
-            idx = (resid @ E.t()).argmax(-1)
-            u = E[idx]
+            K = lev.num_codes
+            C = resid[torch.randperm(N, device=resid.device)[:K]].clone()
+            C = C / C.norm(dim=1, keepdim=True).clamp_min(EPS)
+            for _ in range(iters):
+                a = assign(C)
+                sums = torch.zeros_like(C).index_add_(0, a, resid)
+                cnt = torch.zeros(K, device=resid.device).index_add_(0, a, ones)
+                live = cnt > 0
+                C[live] = sums[live] / sums[live].norm(
+                    dim=1, keepdim=True).clamp_min(EPS)
+                n_dead = int((~live).sum())
+                if n_dead:
+                    rs = resid[torch.randint(0, N, (n_dead,),
+                                             device=resid.device)]
+                    C[~live] = rs / rs.norm(dim=1, keepdim=True).clamp_min(EPS)
+            a = assign(C)
+            cnt = torch.zeros(K, device=resid.device).index_add_(0, a, ones)
+            lev.codebook.weight.data.copy_(C)
+            lev.ema_count.copy_((cnt / N * 4096).clamp_min(
+                2 * lev.dead_threshold))
+            lev.ema_sum.copy_(C * lev.ema_count[:, None])
+            lev.initialized.fill_(True)
+            u = C[a]
             g = (resid * u).sum(-1)
             lev.init_gain_book(g)
             resid = resid - lev.quantize_gain(g)[0].unsqueeze(-1) * u
