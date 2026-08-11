@@ -52,6 +52,70 @@ def mature_codebooks(model, decay=0.9995):
             lev.decay = decay
 
 
+def freeze_books(model):
+    """Hard-freeze the codebooks: no EMA, no resets, no gradient.
+
+    The EMA update in `VectorQuantizer.forward` is guarded by
+    `self.training`, so putting the RVQ modules in eval() is a complete
+    freeze without touching `vq.py` (they hold no dropout/norm state, so
+    eval() changes nothing else). Codebook weights are also detached from
+    the optimizer — an `nn.Embedding` weight would otherwise pick up
+    weight decay and decay toward zero even with no loss gradient.
+
+    Must be re-asserted after every `validate()` call: validate flips the
+    whole model back to train() on its way out.
+    """
+    for rvq in model.rvqs:
+        rvq.eval()
+        for lev in rvq.levels:
+            lev.reset_interval = 1 << 30
+            lev.codebook.weight.requires_grad_(False)
+    return sum(l.codebook.weight.numel() for rvq in model.rvqs
+               for l in rvq.levels)
+
+
+def decoder_tail_names(model, n_blocks):
+    """Names of the last `n_blocks` decoder blocks plus the output head."""
+    import re
+    idx = {int(m.group(1)) for n, _ in model.named_parameters()
+           if (m := re.match(r"decoder\.blocks\.(\d+)\.", n))}
+    tail = {i for i in sorted(idx)[-n_blocks:]} if n_blocks > 0 else set()
+    keep = set()
+    for n, _ in model.named_parameters():
+        m = re.match(r"decoder\.blocks\.(\d+)\.", n)
+        if (m and int(m.group(1)) in tail) or \
+                n.startswith(("decoder.head.", "decoder.norm_out.")):
+            keep.add(n)
+    return keep
+
+
+def set_params_frozen(model, names, frozen: bool):
+    """Freeze/unfreeze by name. Safe to call after the optimizer is built:
+    the optimizer holds every trainable param from the start (see
+    `trainable_params`), and AdamW skips params whose grad is None — so a
+    param frozen at construction still trains once released."""
+    for n, p in model.named_parameters():
+        if n in names:
+            p.requires_grad_(not frozen)
+    return names
+
+
+def trainable_params(model, predicate=None):
+    """Params the optimizer should own for the WHOLE run.
+
+    Deliberately ignores the current `requires_grad`: a param frozen only
+    for the first N steps must already be in the optimizer, or unfreezing
+    it later silently does nothing (it would never be stepped). Params
+    that are frozen forever — the codebooks under `vq.freeze_books` — are
+    excluded via `predicate`, so they never pick up weight decay."""
+    out = []
+    for n, p in model.named_parameters():
+        if predicate is not None and not predicate(n, p):
+            continue
+        out.append((n, p))
+    return out
+
+
 def encoder_param_names(model):
     return set(n for n, _ in model.named_parameters()
                if n.startswith(ENCODER_PREFIXES))

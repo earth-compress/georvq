@@ -97,6 +97,11 @@ class VQConfig(StrictModel):
     skip_masked: bool = False      # skip VQ work for levels the sampled depth masks off
     grad_codebook: bool = False
     book_bits: Optional[int] = None  # b-bit QAT codebooks (vq_quant.py); None = fp32
+    # Hard-freeze warm-started codebooks: no EMA, no dead-code resets, no
+    # gradient. `mature_codebooks` only SLOWS the EMA (decay 0.9995), which
+    # still drifts a corpus-fitted book over a long run; this stops it dead
+    # so the shipped books stay bit-identical to the fitted ones.
+    freeze_books: bool = False
     gain_shape: bool = False       # unit-sphere shape book + scalar gain
     gain_bits: int = 5             # log-domain gain levels (gain_shape only)
 
@@ -281,6 +286,11 @@ class TrainConfig(StrictModel):
     init_from: Optional[Path] = None
     freeze_encoder_steps: int = 0
     freeze_codec: bool = False
+    # Hold the decoder's output end still while its internal representation
+    # re-adapts to quantized latents: freeze the last `freeze_head_blocks`
+    # decoder blocks plus norm_out/head for this many steps.
+    freeze_head_steps: int = 0
+    freeze_head_blocks: int = 3
     optim: OptimConfig = Field(default_factory=OptimConfig)
     seed: int = 0
     val_interval: int = 1000

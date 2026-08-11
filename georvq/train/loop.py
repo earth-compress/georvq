@@ -28,7 +28,9 @@ from georvq.repro import (run_metadata, save_checkpoint, seed_all,
                           write_resolved_config)
 from georvq.train.figures import codebook_figure, cosdist_figure, rd_figure, recon_figure
 from georvq.train.validate import canonical_tuples, load_rd_ref, tname, validate
-from georvq.train.warmstart import load_partial, set_encoder_frozen
+from georvq.train.warmstart import (decoder_tail_names, freeze_books,
+                                    load_partial, set_encoder_frozen,
+                                    set_params_frozen, trainable_params)
 
 
 def resolve_device(gpu):
@@ -138,11 +140,34 @@ def train(cfg: Config, gpu=0):
         print("freeze-codec: codec frozen (eval, no EMA) -- only the "
               "selector trains", flush=True)
 
+    if v.freeze_books:
+        n_book = freeze_books(model)
+        print(f"vq.freeze_books: {n_book/1e6:.1f}M codebook weights frozen "
+              f"(no EMA, no resets, no grad)", flush=True)
+    head_names = set()
+    if cfg.train.freeze_head_steps > 0:
+        head_names = decoder_tail_names(model, cfg.train.freeze_head_blocks)
+        set_params_frozen(model, head_names, True)
+        print(f"froze {len(head_names)} decoder-tail tensors "
+              f"(last {cfg.train.freeze_head_blocks} blocks + head) for "
+              f"{cfg.train.freeze_head_steps} steps", flush=True)
+
     # a fresh rate model gets its own (higher) LR so it can learn while a
-    # warm-started codec fine-tunes at the small base LR
-    rate_p = [p for n, p in model.named_parameters() if n.startswith("rate.")]
-    base_p = [p for n, p in model.named_parameters()
-              if p.requires_grad and not n.startswith("rate.")]
+    # warm-started codec fine-tunes at the small base LR. The optimizer owns
+    # every param that trains at ANY point in the run — temporarily frozen
+    # params (encoder, decoder tail) must be present from the start or
+    # unfreezing them later would never take effect.
+    def _trains_eventually(n, p):
+        if v.freeze_books and n.startswith("rvqs."):
+            return False              # frozen for the whole run
+        if cfg.train.freeze_codec:
+            return n.startswith("selector.")
+        return p.requires_grad or n in head_names or \
+            (enc_frozen and n.startswith(("tokenizer.", "stem.")))
+    rate_p = [p for n, p in trainable_params(model, _trains_eventually)
+              if n.startswith("rate.")]
+    base_p = [p for n, p in trainable_params(model, _trains_eventually)
+              if not n.startswith("rate.")]
     groups = [{"params": base_p, "lr": cfg.train.optim.lr}] if base_p else []
     if rate_p and cfg.model.rate is not None:
         groups.append({"params": rate_p, "lr": cfg.model.rate.lr})
@@ -182,6 +207,10 @@ def train(cfg: Config, gpu=0):
             enc_frozen = False
             print(f"step {step}: unfroze encoder (co-adaptation begins)",
                   flush=True)
+        if head_names and step > cfg.train.freeze_head_steps:
+            set_params_frozen(model, head_names, False)
+            print(f"step {step}: unfroze decoder tail", flush=True)
+            head_names = set()
         if v.reset_freeze_frac and \
                 step == int(cfg.train.steps * v.reset_freeze_frac):
             for rvq in model.rvqs:
@@ -309,6 +338,8 @@ def train(cfg: Config, gpu=0):
                                val_loc=val_loc)
             if cfg.train.freeze_codec:    # keep the codec frozen (no EMA)
                 model.eval()
+            if v.freeze_books:            # validate() leaves the model in
+                freeze_books(model)       # train() -- re-assert the freeze
             ccbt = vs.pop("_ccos", {})
             print(f"step {step} VAL: "
                   + " ".join(f"{k}({tname(t)})={cbt[tname(t)]:.4f}"
