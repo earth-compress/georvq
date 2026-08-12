@@ -1,0 +1,73 @@
+# Vanilla end-to-end VQ training (ala tessera_vq8) on the w32hd geometry,
+# with LIVE codebooks and LBG distortion splitting as the dead-code reset.
+#
+# Nothing is frozen. The encoder, decoder and codebooks all train, from
+# the ORIGINAL unquantized stage-1 checkpoint -- not the decoder-only
+# stage-2 run -- so the codebooks are seeded once, from scratch, and the
+# split reset is exercised from the beginning rather than inheriting a
+# already-good book.
+#
+# Codebooks are seeded OFFLINE from the full int8 latent store by
+#   analysis/fit_corpus_books.py --init tree --bits 8
+# which is the whole corpus of stage-1 latents sitting on disk, so the
+# seeding has no sample starvation at all: 4965 vectors/codeword on the
+# coarse tier and ~977 on the finest, versus the 16/codeword the
+# in-training init would give the coarse tier at this batch size (the
+# tiers are coupled through batch count, so a batch budget that feeds the
+# coarse tier buys the finest tier tens of GiB it does not need).
+# The store is exactly this encoder's output, which is what makes an
+# offline seed legitimate here.
+#
+# The decoder's cond_mlp starts fresh by design: stage-1 conditioned on a
+# per-tier sigma (48 Fourier features), this conditions on the depth
+# thermometer (24), so load_partial skips that one tensor.
+inherit: tessera_pyr64.yaml
+
+model:
+  window: 32
+  sigma: null
+  normalize_latents: true          # the geometry the books were fitted in
+  tiers: ["1:384:2048:8", "4:384:8192:8", "16:384:16384:8"]
+  min_depths: [6, 0, 0]
+  tokenizer: {dim: 512, depth: 12}
+  decoder: {dim: 576, depth: 12, heads: 8, head_feat: 128, cls_bridge: true}
+  vq:
+    commit_weight: 0.25
+    dead_threshold: 0.000625
+    # 0.99 measurably degrades deep RVQ levels over a long run
+    # (0.033 -> 0.047 across 60k steps); 0.9995 is stable but leaves the
+    # books nearly static, which would defeat unfreezing them.
+    ema_decay: 0.998
+    bf16_scores: true
+    skip_masked: true
+    warmup_steps: 0                # books arrive fitted via init_from
+    book_bits: 8                   # QAT on the int8 grid; int4 is a later A/B
+    # Dead codes are revived into the highest-distortion live cell rather
+    # than at a random encoder output. A uniform draw lands in a dense
+    # region by construction -- usually one already covered -- so the
+    # revived code contributes little and often dies again.
+    reset_mode: split
+    # load_partial would otherwise mature the warm-started books (resets
+    # off, decay 0.9995), silently disabling reset_mode and overriding
+    # ema_decay. The whole point of this run is live books.
+    mature_warmstart: false
+    passthrough_frac: 0.15
+
+train:
+  steps: 60000
+  batch_windows: 2048
+  compile: true
+  grad_ckpt: true
+  init_from: /home/ali/projects/ring-space/checkpoints/tessera_w32hd_books_tree8.pt
+  freeze_encoder_steps: 0
+  freeze_head_steps: 0
+  # 100 steps at lr=0 for AdamW's moments, then a flat 3e-5. Constant, so
+  # the run can be stopped as soon as it plateaus.
+  optim: {lr: 3.0e-5, wd: 0.01, warmup: 1, lr0_steps: 100,
+          schedule: constant}
+  val_interval: 500
+  fig_interval: 5000
+  save_interval: 2500
+
+log:
+  run_tag: tessera_w32hd_e2e_tree

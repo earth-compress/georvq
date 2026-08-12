@@ -119,6 +119,24 @@ class VQConfig(StrictModel):
     # cell with the largest distortion contribution, at that cell's
     # worst-fitting point (LBG splitting).
     reset_mode: Literal["random", "split"] = "random"
+    # Codebook seeding. "kmeans" draws K random data rows (historical);
+    # "tree" builds a balanced PCA tree of median splits, which cannot
+    # emit an empty leaf and does not waste seeds on near-duplicates in
+    # dense regions. Lloyd iterations follow either way.
+    init_mode: Literal["kmeans", "tree"] = "kmeans"
+    # Per-tier init budget, in vectors PER CODEWORD. The legacy path sizes
+    # the init by batch count, which couples the tiers: at
+    # kmeans_sample=32768 and batch 2048 the coarse tier sees 16 vectors
+    # per centroid while the finest sees 512 and costs 12 GiB. Setting
+    # this gives each tier its own target and subsamples the fine tiers
+    # per batch. 0 = legacy behaviour.
+    init_per_code: int = 0
+    # load_partial "matures" warm-started codebooks: dead-code resets off,
+    # EMA decay 0.9995. That is right when the books arrive already fitted
+    # to the encoder and should barely move -- and WRONG when the point of
+    # the run is to keep them live, because it silently overrides
+    # ema_decay and disables reset_mode entirely.
+    mature_warmstart: bool = True
 
 
 class SigmaConfig(StrictModel):

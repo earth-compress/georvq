@@ -24,6 +24,7 @@ from georvq.factory import build_model
 from georvq.model.codec import (monotone_tuples, sample_monotone_depths,
                                 tuple_bits)
 from georvq.model.vq import kmeans_init_rvq
+from georvq.model.vqinit import residual_init_rvq
 from georvq.repro import (run_metadata, save_checkpoint, seed_all,
                           write_resolved_config)
 from georvq.train.figures import codebook_figure, cosdist_figure, rd_figure, recon_figure
@@ -126,6 +127,16 @@ def train(cfg: Config, gpu=0):
               f"{cfg.train.freeze_encoder_steps} steps", flush=True)
 
     v = cfg.model.vq
+    if cfg.train.init_from and not v.mature_warmstart:
+        # undo load_partial's maturing: keep the books live at the
+        # configured decay with resets (and therefore reset_mode) active
+        for rvq in model.rvqs:
+            for lev in rvq.levels:
+                lev.decay = v.ema_decay
+                lev.reset_interval = 2500
+        print(f"warm-started books kept LIVE: decay {v.ema_decay}, "
+              f"resets every 2500 steps, reset_mode={v.reset_mode}",
+              flush=True)
     if not v.warmup_steps and not cfg.train.init_from:
         # per-tier data init with >=2K vectors per codebook, drawn and
         # encoded in batch-sized chunks (a single draw of 2*max(K) windows
@@ -271,24 +282,46 @@ def train(cfg: Config, gpu=0):
                     lev.decay = d
         if v.warmup_steps and step == v.warmup_steps + 1:
             with torch.no_grad():
-                n = max(v.kmeans_sample // batch, 1)
+                # Per-tier budgets when init_per_code is set. Sizing the
+                # init by batch count couples the tiers: the coarse tier
+                # yields 1 vector per window and the finest 256, so a
+                # batch count that gives the coarse tier enough data
+                # gives the finest tier tens of GiB of it.
+                if v.init_per_code:
+                    want = [v.init_per_code * sp.codes for sp in specs]
+                else:
+                    nb = max(v.kmeans_sample // batch, 1)
+                    want = [nb * batch * sp.cells for sp in specs]
                 samples = [[] for _ in specs]
-                for _ in range(n):
+                got = [0] * len(specs)
+                while any(g < w for g, w in zip(got, want)):
                     xs, _ = source.prep(
                         pool.sample_batch(batch, cfg.model.window, align=align),
                         device)
                     for i, z in enumerate(model.encode_levels(xs)):
-                        samples[i].append(z.reshape(-1, z.shape[-1]))
+                        if got[i] >= want[i]:
+                            continue
+                        zf = z.reshape(-1, z.shape[-1])
+                        zf = zf[:want[i] - got[i]]
+                        samples[i].append(zf)
+                        got[i] += zf.shape[0]
                 for i, rvq in enumerate(model.rvqs):
-                    kmeans_init_rvq(rvq, torch.cat(samples[i]),
-                                    iters=v.kmeans_iters,
-                                    expected_batch=batch * specs[i].cells)
+                    zi = torch.cat(samples[i])
+                    samples[i] = None
+                    residual_init_rvq(rvq, zi, mode=v.init_mode,
+                                      iters=v.kmeans_iters,
+                                      expected_batch=batch * specs[i].cells)
                     if hasattr(rvq, "project_books"):    # b-bit QAT books
                         rvq.project_books()
                     if hasattr(rvq, "spherize_books"):   # gain-shape books
-                        rvq.spherize_books(torch.cat(samples[i]))
-            print(f"step {step}: codebooks fit via residual k-means",
-                  flush=True)
+                        rvq.spherize_books(zi)
+                    print(f"  tier {i}: {zi.shape[0]:,} vectors "
+                          f"({zi.shape[0]/specs[i].codes:.0f}/codeword)",
+                          flush=True)
+                    del zi
+                torch.cuda.empty_cache()
+            print(f"step {step}: codebooks fit via residual "
+                  f"{v.init_mode} init", flush=True)
 
         td = time.time()
         loc = None
