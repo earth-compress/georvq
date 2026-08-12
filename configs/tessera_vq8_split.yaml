@@ -35,8 +35,21 @@ data:
 model:
   vq:
     reset_mode: split
+    # Books arrive trained via init_from, so no VQ-free warmup and no
+    # re-fit -- this continues tessera_vq8, it does not re-derive it.
+    warmup_steps: 0
+    # LOAD-BEARING. load_partial matures warm-started books (resets off,
+    # decay 0.9995), which would disable reset_mode outright and make this
+    # run a plain continuation of tessera_vq8 with no experiment in it.
+    mature_warmstart: false
 
 train:
+  # Continue from the deployed tessera_vq8 (step 47500, cos_full 0.9621).
+  # It arrives with ~half of its deep codebooks already dead -- tier2 L7
+  # has 8320 of 16384 below the dead threshold, tier1 L7 4178 of 8192 --
+  # so the split reset has real work from the first reset event.
+  init_from: /home/ali/projects/ring-space/checkpoints/tessera_vq8/model.pt
+  batch_windows: 1024
   # 100 steps at lr=0 so AdamW warms its moments before any gradient step;
   # the inherited 5000-step linear ramp and cosine schedule follow.
   optim: {lr: 5.0e-5, wd: 0.01, warmup: 5000, lr0_steps: 100}
