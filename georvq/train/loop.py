@@ -170,6 +170,10 @@ def train(cfg: Config, gpu=0):
               f"{cfg.train.freeze_head_steps} steps", flush=True)
 
     if ddp_world > 1:
+        # Absorb prefill skew explicitly before the first real collective:
+        # ranks reach this point many minutes apart because each fills its
+        # own CPU chip pool from the same array.
+        D.barrier()
         # A warm start leaves some modules freshly initialised (the depth
         # cond_mlp), so equal seeds are not a safe guarantee of equal
         # weights -- copy rank 0's state outright. Only AFTER that do we
