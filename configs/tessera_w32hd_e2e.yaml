@@ -1,0 +1,80 @@
+# End-to-end finetune of the whole codec against FROZEN codebooks.
+#
+# The decoder-only run (tessera_w32hd_vq8_s2) plateaued at 0.9809 full
+# depth with its own continuous ceiling at 0.9830 -- 0.002 apart, i.e.
+# the decoder had already absorbed essentially all of the quantization
+# penalty at the top end and had nothing left to recover. What it could
+# NOT fix is the low-rate end, where the deployed w64 tessera_vq8 still
+# wins at matched bits/px (0.9478 @ 1.30 b/px vs our 0.9369 @ 1.71).
+#
+# Hypothesis under test: that gap is the frozen ENCODER. Stage-1 was
+# trained under per-tier sigma noise, which corrupts every tier equally,
+# so the encoder was never given a reason to front-load information into
+# the coarse tier the way matryoshka depth sampling would. Here nothing
+# is frozen except the books, so the encoder can (a) redistribute
+# information toward the coarse tiers and (b) place its latents where the
+# fixed codewords actually are.
+#
+# Books stay frozen deliberately: they were fitted once at corpus scale,
+# int4-quantized and are shippable at 39 MiB, and a fresh k-means fit
+# already beat 60k steps of EMA end-to-end. Freezing them also keeps the
+# bitstream fixed while the encoder moves, and is what makes multi-GPU
+# safe (EMA books live in buffers, which a gradient all-reduce does not
+# sync -- georvq/train/dist.py refuses the combination outright).
+#
+# Trains from the ORIGINAL chip store, as every run here does: the int8
+# latent store was only ever an input to the codebook fit, never to
+# training.
+#
+# Launch on both cards:
+#   torchrun --nproc_per_node=2 $(which georvq-train) \
+#       -c configs/tessera_w32hd_e2e.yaml
+inherit: tessera_pyr64.yaml
+
+model:
+  window: 32
+  sigma: null
+  normalize_latents: true          # the space the books were fitted in
+  tiers: ["1:384:2048:8", "4:384:8192:8", "16:384:16384:8"]
+  min_depths: [6, 0, 0]
+  tokenizer: {dim: 512, depth: 12}
+  decoder: {dim: 576, depth: 12, heads: 8, head_feat: 128, cls_bridge: true}
+  vq:
+    # NON-ZERO and load-bearing now. With a trainable encoder and fixed
+    # books this is the only term pulling encoder outputs toward the
+    # codewords -- it is the mechanism by which utilization improves.
+    # It was 0.0 in the decoder-only run because a frozen encoder has
+    # nothing to commit.
+    commit_weight: 0.25
+    bf16_scores: true
+    skip_masked: true
+    warmup_steps: 0
+    freeze_books: true
+    # 15% of every batch decoded from raw latents at full depth. The
+    # decoder-only run let the continuous path rot (ceiling 0.9899 ->
+    # 0.9830) because the encoder was fixed and the decoder could only
+    # specialize away from it. With the encoder training too, the ceiling
+    # can genuinely recover rather than merely decay more slowly.
+    passthrough_frac: 0.15
+
+train:
+  # Constant LR, so this can be stopped the moment it plateaus without
+  # leaving a cosine schedule half-applied.
+  steps: 60000
+  # GLOBAL batch, split across ranks by georvq/train/dist.py: 2048/GPU.
+  batch_windows: 4096
+  compile: true
+  grad_ckpt: true
+  init_from: checkpoints/tessera_w32hd_vq8_s2/model.pt
+  freeze_encoder_steps: 0          # nothing frozen but the books
+  freeze_head_steps: 0
+  # 100 steps at lr=0 for AdamW to warm its moments, then straight to a
+  # constant 1e-5 -- 10x below the 1e-4 the decoder-only run used.
+  optim: {lr: 1.0e-5, wd: 0.01, warmup: 1, lr0_steps: 100,
+          schedule: constant}
+  val_interval: 500
+  fig_interval: 5000
+  save_interval: 2500
+
+log:
+  run_tag: tessera_w32hd_e2e

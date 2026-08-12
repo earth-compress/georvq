@@ -102,6 +102,16 @@ class VQConfig(StrictModel):
     # still drifts a corpus-fitted book over a long run; this stops it dead
     # so the shipped books stay bit-identical to the fitted ones.
     freeze_books: bool = False
+    # Fraction of each batch decoded from UNQUANTIZED latents at full
+    # depth (the `cos_ceiling` path). Without it a stage-2 decoder
+    # specializes to quantized inputs and its continuous path decays --
+    # measured on w32hd, the ceiling fell 0.9899 -> 0.9830 over 25k
+    # decoder-only steps. Keeping a slice of clean batches holds the
+    # encoder/decoder pair honest on the un-quantized mapping, keeps
+    # cos_ceiling a meaningful diagnostic rather than a drifting one, and
+    # leaves the codec usable continuously. Costs a little capacity that
+    # would otherwise go to the quantized path.
+    passthrough_frac: float = 0.0
     gain_shape: bool = False       # unit-sphere shape book + scalar gain
     gain_bits: int = 5             # log-domain gain levels (gain_shape only)
 
@@ -281,6 +291,10 @@ class OptimConfig(StrictModel):
     wd: float = 0.01
     warmup: int = 500
     lr0_steps: int = 0              # optional initial LR hold
+    # "cosine" anneals to zero over train.steps -- the run must finish to
+    # get its final LR. "constant" holds `lr` after warmup, so the run can
+    # be stopped at any point without leaving the schedule half-applied.
+    schedule: Literal["cosine", "constant"] = "cosine"
 
 
 class TrainConfig(StrictModel):
