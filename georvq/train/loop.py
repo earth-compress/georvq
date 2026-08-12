@@ -210,13 +210,17 @@ def train(cfg: Config, gpu=0):
                             weight_decay=cfg.train.optim.wd)
     warmup, lr0 = cfg.train.optim.warmup, cfg.train.optim.lr0_steps
 
+    const_lr = cfg.train.optim.schedule == "constant"
+
     def lr_fn(s):
         if s < lr0:                   # AdamW warms its moments at lr=0 first
             return 0.0
         s -= lr0
+        ramp = min(1.0, (s + 1) / warmup)
+        if const_lr:                  # stoppable at any step
+            return ramp
         total = max(cfg.train.steps - lr0, 1)
-        return (min(1.0, (s + 1) / warmup)
-                * 0.5 * (1 + np.cos(np.pi * min(1.0, s / total))))
+        return ramp * 0.5 * (1 + np.cos(np.pi * min(1.0, s / total)))
     sched = torch.optim.lr_scheduler.LambdaLR(opt, lr_fn)
 
     use_wandb = cfg.log.wandb and D.is_main()
@@ -304,9 +308,26 @@ def train(cfg: Config, gpu=0):
             Ls = sample_monotone_depths(x.shape[0], specs, device,
                                         mins=mins,
                                         full_frac=cfg.model.full_frac)
+            # quantization pass-through: a slice of the batch is decoded
+            # from the raw latents at full depth, so the continuous path
+            # keeps training alongside the quantized one. Conditioning is
+            # set to full depth FIRST -- the decoder has to be told the
+            # tiers are all present, or it compensates for an absence
+            # that isn't there.
+            pt = None
+            if v.passthrough_frac > 0:
+                pt = torch.rand(x.shape[0], device=device) \
+                    < v.passthrough_frac
+                Ls = torch.where(pt[:, None], Ls_full.expand_as(Ls), Ls)
             with amp:
                 zs = model.encode_levels(x)
             zqs, commit, select = model.quantize(zs, Ls, loc=loc)
+            if pt is not None:
+                # straight replacement, not straight-through: these rows
+                # carry a clean gradient to the encoder
+                m3 = pt[:, None, None]
+                zqs = [torch.where(m3, z.to(zq.dtype), zq)
+                       for z, zq in zip(zs, zqs)]
             with amp:
                 out = model.decode(zqs, Ls)
             out = out.float()
