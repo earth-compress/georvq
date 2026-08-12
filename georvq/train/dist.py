@@ -27,6 +27,7 @@ Correctness notes, all of which are easy to get silently wrong:
 from __future__ import annotations
 
 import os
+from datetime import timedelta
 
 import torch
 import torch.distributed as dist
@@ -56,11 +57,19 @@ def setup(cfg):
     if "LOCAL_RANK" not in os.environ:
         return None, 0, 1
     lr = int(os.environ["LOCAL_RANK"])
+    # NCCL's default collective timeout is 10 minutes, which this trainer
+    # blows through before it ever reaches a training step: each rank
+    # prefills its own multi-hundred-GiB CPU chip pool from the same
+    # array, so whichever rank wins the disk can arrive at the first
+    # collective 10+ minutes ahead of the other and the weight broadcast
+    # dies. Rank skew here is expected and benign, so allow for it.
+    timeout = timedelta(minutes=int(os.environ.get("GEORVQ_NCCL_TIMEOUT_MIN",
+                                                   "90")))
     if torch.cuda.is_available():
         torch.cuda.set_device(lr)
-        dist.init_process_group(backend="nccl")
+        dist.init_process_group(backend="nccl", timeout=timeout)
     else:                                  # CPU path exists for the tests
-        dist.init_process_group(backend="gloo")
+        dist.init_process_group(backend="gloo", timeout=timeout)
     r, w = dist.get_rank(), dist.get_world_size()
     if w > 1 and cfg.model.vq is not None and not cfg.model.vq.freeze_books:
         raise RuntimeError(
