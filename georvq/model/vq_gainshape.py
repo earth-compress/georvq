@@ -68,8 +68,8 @@ class GainShapeVQ(VectorQuantizer):
         self.normalize_book()
 
     @torch.no_grad()
-    def _reset_dead(self, z_flat):
-        n = super()._reset_dead(z_flat)
+    def _reset_dead(self, z_flat, indices=None, z_q=None):
+        n = super()._reset_dead(z_flat, indices, z_q)
         if n:
             self.normalize_book()
         return n
@@ -145,10 +145,19 @@ class GainShapeVQ(VectorQuantizer):
                 new = gsum[live] / gc[live]
                 self.gain_book[live] = (self.decay * self.gain_book[live]
                                         + (1 - self.decay) * new)
+                if self.reset_mode == "split":
+                    # this forward carries its own copy of the EMA block,
+                    # so the distortion tracker must be maintained here
+                    # too or reset_mode degrades to random in silence
+                    se = (z_flat - z_q).pow(2).sum(1).float()
+                    self.ema_sse.mul_(self.decay).add_(
+                        torch.zeros_like(self.ema_sse).index_add_(
+                            0, indices, se), alpha=1 - self.decay)
                 self.step += 1
                 if self.reset_interval > 0 and \
                         (self.step.item() % self.reset_interval == 0):
-                    self._reset_dead(z_flat.detach())
+                    self._reset_dead(z_flat.detach(), indices,
+                                     z_q.detach())
 
         commit_loss = F.mse_loss(z_flat, z_q.detach())
         if self.grad_codebook:
