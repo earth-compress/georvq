@@ -479,6 +479,14 @@ def train(cfg: Config, gpu=0):
                 scalars.update({f"val/ccos_{k}": ccbt[tname(t)]
                                 for k, t in canon.items()
                                 if tname(t) in ccbt})
+                # per-(tier, level) codebook health as SCALARS, not just
+                # the figure. rvq/pyr{i}_ema_usage is a poor proxy: it
+                # counts entries above the dead threshold, so a book whose
+                # mass is concentrated in a few codes still reads ~100%
+                # while its effective size is a fraction of K. Perplexity
+                # is the honest number.
+                scalars.update({f"cb/{k}": val for k, val in vs.items()
+                                if k.startswith("pyr")})
                 scalars["val/cos_ceiling"] = vs["cos_ceiling"]
                 scalars["val/ccos_ceiling"] = vs["ccos_ceiling"]
                 scalars["val/cos_blockmean"] = vs["cos_blockmean"]
