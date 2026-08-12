@@ -117,7 +117,8 @@ class PyramidCodec(nn.Module):
                         dim=sp.dim, decay=v.ema_decay,
                         dead_threshold=v.dead_threshold,
                         grad_codebook=v.grad_codebook,
-                        bf16_scores=v.bf16_scores)
+                        bf16_scores=v.bf16_scores,
+                        reset_mode=v.reset_mode)
                 for sp in self.specs])
             self._skip_masked = v.skip_masked
             self._base_dead = v.dead_threshold

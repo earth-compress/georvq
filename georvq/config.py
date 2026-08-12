@@ -114,6 +114,11 @@ class VQConfig(StrictModel):
     passthrough_frac: float = 0.0
     gain_shape: bool = False       # unit-sphere shape book + scalar gain
     gain_bits: int = 5             # log-domain gain levels (gain_shape only)
+    # How a dead code is revived. "random" reseeds from a random encoder
+    # output (the historical behaviour); "split" sends it into the live
+    # cell with the largest distortion contribution, at that cell's
+    # worst-fitting point (LBG splitting).
+    reset_mode: Literal["random", "split"] = "random"
 
 
 class SigmaConfig(StrictModel):

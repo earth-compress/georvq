@@ -99,7 +99,8 @@ class QuantizedResidualVQ(ResidualVQ):
 
     def __init__(self, num_levels=8, num_codes=256, dim=128, decay=0.99,
                  kmeans_init=True, reset_interval=2500, dead_threshold=0.01,
-                 grad_codebook=False, bf16_scores=False, book_bits=8):
+                 grad_codebook=False, bf16_scores=False, book_bits=8,
+                 reset_mode="random"):
         nn.Module.__init__(self)
         self.num_levels = num_levels
         self.levels = nn.ModuleList([
@@ -109,7 +110,8 @@ class QuantizedResidualVQ(ResidualVQ):
                             dead_threshold=dead_threshold,
                             grad_codebook=grad_codebook,
                             bf16_scores=bf16_scores,
-                            book_bits=book_bits)
+                            book_bits=book_bits,
+                            reset_mode=reset_mode)
             for _ in range(num_levels)])
 
     @torch.no_grad()
