@@ -19,6 +19,19 @@
 # cascade to settle before the final checkpoint.
 inherit: tessera_vq8.yaml
 
+data:
+  pool:
+    # HOST-RAM CONSTRAINT, not a design choice. The default 38300-slot
+    # pool is 227.9 GiB, and this run shares a 503 GB box with the w32hd
+    # e2e run holding another 227.9 GiB; two full pools plus the two
+    # processes do not fit, and this machine has a history of host-OOM
+    # kills taking runs down. Halved to 114 GiB. The pool is a resident
+    # chip CACHE refreshed from disk at 100 chips/s, so this changes how
+    # many chips are held at once, not which chips the run can reach --
+    # all 40316 still cycle through. Flagged because it is a deviation
+    # from the tessera_vq8 baseline being compared against.
+    size: 19150
+
 model:
   vq:
     reset_mode: split
