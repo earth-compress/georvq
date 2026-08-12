@@ -68,6 +68,51 @@ def codebook_figure(vs, specs, step):
     return fig
 
 
+def reset_figure(rst, specs, step):
+    """One figure per reset event: what the reset actually did, per level.
+
+    Three panels per tier -- codes revived as a fraction of K, perplexity
+    before vs after, and residual before vs after -- all measured on the
+    SAME batch either side of the reset, so the bars isolate the reset
+    rather than a step of training.
+
+    This exists because the per-level detail is 7 numbers x 8 levels x 3
+    tiers; as individual wandb scalars that is 168 panels nobody can read.
+    """
+    n = len(specs)
+    fig, axes = plt.subplots(3, n, figsize=(4.2 * n, 8.4),
+                             constrained_layout=True, squeeze=False)
+    for i, sp in enumerate(specs):
+        Ls = np.arange(1, sp.depth + 1)
+        x = np.arange(len(Ls))
+
+        def g(metric):
+            return np.array([rst.get(f"reset/pyr{i}_L{L}_{metric}", np.nan)
+                             for L in Ls], dtype=float)
+
+        ax = axes[0][i]
+        ax.bar(x, 100 * g("frac_reset"), 0.6, color="crimson")
+        ax.set(title=f"tier {i} (K={sp.codes}) @ step {step}",
+               ylabel="% of K revived")
+        ax.set_xticks(x); ax.set_xticklabels(Ls); ax.grid(alpha=0.3, axis="y")
+
+        ax = axes[1][i]
+        pb, pa = g("perp_before") / sp.codes, g("perp_after") / sp.codes
+        ax.bar(x - 0.2, pb, 0.4, label="before", color="0.6")
+        ax.bar(x + 0.2, pa, 0.4, label="after", color="steelblue")
+        ax.set(ylabel="perplexity / K", ylim=(0, 1)); ax.legend(fontsize=7)
+        ax.set_xticks(x); ax.set_xticklabels(Ls); ax.grid(alpha=0.3, axis="y")
+
+        ax = axes[2][i]
+        rb, ra = g("resid_before"), g("resid_after")
+        ax.bar(x - 0.2, rb, 0.4, label="before", color="0.6")
+        ax.bar(x + 0.2, ra, 0.4, label="after", color="seagreen")
+        ax.set(xlabel="RVQ level", ylabel="residual (mean sq err)")
+        ax.legend(fontsize=7)
+        ax.set_xticks(x); ax.set_xticklabels(Ls); ax.grid(alpha=0.3, axis="y")
+    return fig
+
+
 def cosdist_figure(cosdist, baseline, specs, step):
     """Per-tier cos-dist vs cumulative RVQ level (solid: this model; dotted:
     an optional {tier_name: [dists]} baseline)."""
