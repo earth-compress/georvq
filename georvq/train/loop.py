@@ -27,7 +27,8 @@ from georvq.model.vq import kmeans_init_rvq
 from georvq.model.vqinit import residual_init_rvq
 from georvq.repro import (run_metadata, save_checkpoint, seed_all,
                           write_resolved_config)
-from georvq.train.figures import codebook_figure, cosdist_figure, rd_figure, recon_figure
+from georvq.train.figures import (codebook_figure, cosdist_figure,
+                                   rd_figure, recon_figure, reset_figure)
 from georvq.train.validate import canonical_tuples, load_rd_ref, tname, validate
 from georvq.train import dist as D
 from georvq.train.warmstart import (decoder_tail_names, freeze_books,
@@ -404,9 +405,21 @@ def train(cfg: Config, gpu=0):
             if rst:
                 n_tot = sum(val for k, val in rst.items()
                             if k.endswith("_n_reset"))
-                rst["reset/total_codes_reset"] = n_tot
                 if use_wandb:
-                    wandb.log(rst, step=step)
+                    # per-level detail as ONE figure, not 168 scalar
+                    # panels; only the aggregates stay as scalars so they
+                    # are still plottable over time
+                    fr = reset_figure(rst, specs, step)
+                    agg = {"reset/total_codes_reset": n_tot,
+                           "reset/mean_resid_gain": float(np.nanmean(
+                               [v for k, v in rst.items()
+                                if k.endswith("_resid_gain")])),
+                           "reset/mean_perp_gain": float(np.nanmean(
+                               [v for k, v in rst.items()
+                                if k.endswith("_perp_gain")])),
+                           "figs/reset": wandb.Image(fr)}
+                    wandb.log(agg, step=step)
+                    plt.close(fr)
                 worst = max((val, k) for k, val in rst.items()
                             if k.endswith("_n_reset"))
                 print(f"step {step}: reset {n_tot:.0f} codes "
@@ -485,8 +498,8 @@ def train(cfg: Config, gpu=0):
                 # mass is concentrated in a few codes still reads ~100%
                 # while its effective size is a fraction of K. Perplexity
                 # is the honest number.
-                scalars.update({f"cb/{k}": val for k, val in vs.items()
-                                if k.startswith("pyr")})
+                # per-level codebook health stays in figs/codebook; as
+                # scalars it is 72 more panels for no extra information
                 scalars["val/cos_ceiling"] = vs["cos_ceiling"]
                 scalars["val/ccos_ceiling"] = vs["ccos_ceiling"]
                 scalars["val/cos_blockmean"] = vs["cos_blockmean"]
