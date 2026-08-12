@@ -139,7 +139,7 @@ def sub_assigned_(r, C, a, chunk=1 << 20):
 def fit_rvq(fit, ev, K, levels, iters, bits, dev, tag, init="random"):
     """Sequential residual k-means; each level is quantized before the next
     level sees its residual."""
-    C_all, rows = [], []
+    C_all, rows, counts = [], [], []
     r_fit, r_ev = fit, ev
     e0 = float(r_ev.pow(2).sum(1).mean())
     N = r_fit.shape[0]
@@ -170,9 +170,10 @@ def fit_rvq(fit, ev, K, levels, iters, bits, dev, tag, init="random"):
         rows.append((l, perp, 100 * perp / K,
                      float(r_ev.pow(2).sum(1).mean()) / e0))
         C_all.append(C)
+        counts.append(cnt.cpu())
         print(f"  [{tag}] lvl {l}: perp {perp:8.0f} ({100*perp/K:5.1f}% of K) "
               f"resid {rows[-1][3]:.4f}", flush=True)
-    return C_all, rows
+    return C_all, rows, counts
 
 
 def main():
@@ -208,7 +209,7 @@ def main():
     rng = np.random.default_rng(0)
 
     want = {int(x) for x in args.tiers.split(",")} if args.tiers else None
-    books, report = {}, {}
+    books, report, counts = {}, {}, {}
     for t, (K, L) in enumerate(zip(Ks, Ls)):
         if want is not None and t not in want:
             continue
@@ -220,9 +221,10 @@ def main():
         print(f"tier {t}: K={K} L={L} fit {fit.shape[0]:,} "
               f"({fit.shape[0]/K:.0f}/centroid) eval {ev.shape[0]:,} "
               f"[{time.time()-t0:.0f}s io]", flush=True)
-        C_all, rows = fit_rvq(fit, ev, K, L, args.iters, args.bits,
-                              dev, f"t{t}", init=args.init)
+        C_all, rows, cts = fit_rvq(fit, ev, K, L, args.iters, args.bits,
+                                   dev, f"t{t}", init=args.init)
         books[t] = [c.cpu() for c in C_all]
+        counts[t] = cts
         report[f"tier{t}"] = rows
         del fit, ev
         torch.cuda.empty_cache()
@@ -239,7 +241,16 @@ def main():
             pre = f"rvqs.{t}.levels.{l}"
             sd[f"{pre}.codebook.weight"] = C
             sd[f"{pre}.ema_sum"] = C.clone()
-            sd[f"{pre}.ema_count"] = torch.ones(C.shape[0])
+            # Real assignment frequencies, scaled to a nominal batch --
+            # NOT ones. ema_usage() is (ema_count > dead_threshold), so a
+            # constant makes it read 100% forever, and under freeze_books
+            # (no EMA to correct it) that is exactly what happened: a flat
+            # 100% utilisation trace on a run whose finest tier was
+            # actually at 19.9% of K. It also delays the first real reset,
+            # since an unused code has to decay from the seeded value
+            # before it can register as dead.
+            cnt = counts[t][l].to(torch.float32)
+            sd[f"{pre}.ema_count"] = (cnt / cnt.sum() * 4096).clamp_min(1e-3)
             sd[f"{pre}.initialized"] = torch.tensor(True)
             sd[f"{pre}.step"] = torch.tensor(0)
     ck["model"] = sd
