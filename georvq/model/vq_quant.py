@@ -80,10 +80,20 @@ class QuantizedBookVQ(VectorQuantizer):
                 cs = (self.ema_count + self.eps) \
                     / (n + self.num_codes * self.eps) * n
                 self.codebook.weight.data.copy_(self.ema_sum / cs.unsqueeze(1))
+                if self.reset_mode == "split":
+                    # this forward duplicates the parent's EMA block, so
+                    # the distortion tracker has to be maintained here too
+                    # -- otherwise reset_mode silently degrades to random
+                    # on the QAT path while still reporting "split"
+                    se = (z_flat - z_q).pow(2).sum(1).float()
+                    self.ema_sse.mul_(self.decay).add_(
+                        torch.zeros_like(self.ema_sse).index_add_(
+                            0, indices, se), alpha=1 - self.decay)
                 self.step += 1
                 if self.reset_interval > 0 and \
                         (self.step.item() % self.reset_interval == 0):
-                    self._reset_dead(z_flat.detach())
+                    self._reset_dead(z_flat.detach(), indices,
+                                     z_q.detach())
         commit_loss = F.mse_loss(z_flat, z_q.detach())
         if self.grad_codebook:
             commit_loss = commit_loss + F.mse_loss(z_q, z_flat.detach())

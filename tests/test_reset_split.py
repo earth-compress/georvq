@@ -121,3 +121,24 @@ def test_end_to_end_through_the_model():
     for rvq in m.rvqs:
         for l in rvq.levels:
             assert torch.isfinite(l.codebook.weight).all()
+
+
+def test_split_is_live_on_every_quantizer_path():
+    """QuantizedBookVQ and GainShapeVQ each override forward() with their
+    own copy of the EMA block. If a copy omits the SSE tracker, reset_mode
+    reports "split" and silently behaves as "random" -- no error anywhere.
+    """
+    import pytest
+    for extra in ("book_bits: 8", "gain_shape: true, gain_bits: 4"):
+        cfg = load_config("configs/smoke.yaml", [
+            "model.tiers=['1:16:32:3','4:8:32:3']",
+            f"model.vq={{warmup_steps: 0, reset_mode: split, {extra}}}"])
+        m = build_model(cfg, "cpu")
+        m.train()
+        x = torch.randn(8, cfg.model.bands, cfg.model.window,
+                        cfg.model.window)
+        for _ in range(3):
+            m.forward_train(x, torch.tensor([[3, 3]] * 8))
+        tot = sum(float(l.ema_sse.sum())
+                  for rvq in m.rvqs for l in rvq.levels)
+        assert tot > 0, f"SSE tracker never filled with {extra}"
