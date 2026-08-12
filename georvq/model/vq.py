@@ -102,6 +102,18 @@ class VectorQuantizer(nn.Module):
         n_dead = int(dead.sum().item())
         if n_dead == 0:
             return 0
+        # before-state, measured on this batch with the pre-reset book
+        stats = None
+        if indices is not None and z_q is not None:
+            p_ = torch.bincount(indices, minlength=self.num_codes).float()
+            p_ = p_ / p_.sum().clamp_min(1)
+            stats = {
+                "n_reset": float(n_dead),
+                "frac_reset": n_dead / self.num_codes,
+                "perp_before": float(torch.exp(
+                    -(p_ * p_.clamp_min(1e-12).log()).sum())),
+                "resid_before": float((z_flat - z_q).pow(2).sum(1).mean()),
+            }
         if self.reset_mode == "split" and indices is not None:
             reps = self._split_targets(z_flat, indices, z_q, dead, n_dead)
         else:
@@ -110,6 +122,23 @@ class VectorQuantizer(nn.Module):
         self.codebook.weight.data[dead] = replacements
         self.ema_sum[dead] = replacements
         self.ema_count[dead] = 1.0
+        if stats is not None:
+            # after-state: re-assign the SAME batch to the revived book, so
+            # before/after differ only by the reset. One chunked pass every
+            # reset_interval steps -- negligible against 2500 training steps.
+            idx2 = _chunked_assign(z_flat.float(),
+                                   self.codebook.weight.data.float())
+            q2 = self.codebook.weight.data[idx2]
+            p2 = torch.bincount(idx2, minlength=self.num_codes).float()
+            p2 = p2 / p2.sum().clamp_min(1)
+            stats["perp_after"] = float(torch.exp(
+                -(p2 * p2.clamp_min(1e-12).log()).sum()))
+            stats["resid_after"] = float(
+                (z_flat.float() - q2).pow(2).sum(1).mean())
+            stats["perp_gain"] = stats["perp_after"] - stats["perp_before"]
+            stats["resid_gain"] = stats["resid_before"] - stats["resid_after"]
+            stats["step"] = int(self.step.item())
+            self.last_reset = stats           # plain attr: no state-dict impact
         return n_dead
 
     @torch.no_grad()

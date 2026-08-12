@@ -389,6 +389,31 @@ def train(cfg: Config, gpu=0):
             D.average_grads(base_p + rate_p)
         opt.step(); sched.step()
 
+        # reset diagnostics: emitted only on steps where a reset fired
+        if D.is_main() and not v.freeze_books:
+            rst = {}
+            for i, rvq in enumerate(model.rvqs):
+                for j, lev in enumerate(rvq.levels):
+                    st = getattr(lev, "last_reset", None)
+                    if st is None:
+                        continue
+                    lev.last_reset = None
+                    for k, val in st.items():
+                        if k != "step":
+                            rst[f"reset/pyr{i}_L{j+1}_{k}"] = val
+            if rst:
+                n_tot = sum(val for k, val in rst.items()
+                            if k.endswith("_n_reset"))
+                rst["reset/total_codes_reset"] = n_tot
+                if use_wandb:
+                    wandb.log(rst, step=step)
+                worst = max((val, k) for k, val in rst.items()
+                            if k.endswith("_n_reset"))
+                print(f"step {step}: reset {n_tot:.0f} codes "
+                      f"({v.reset_mode}); most in "
+                      f"{worst[1].split('/')[1].rsplit('_', 2)[0]} "
+                      f"({worst[0]:.0f})", flush=True)
+
         if step % 50 == 0 and D.is_main():
             dt = time.time() - t0; t0 = time.time()
             tok_s = 50 * batch * ddp_world / dt
