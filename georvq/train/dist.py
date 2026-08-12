@@ -67,7 +67,16 @@ def setup(cfg):
                                                    "90")))
     if torch.cuda.is_available():
         torch.cuda.set_device(lr)
-        dist.init_process_group(backend="nccl", timeout=timeout)
+        # Bind the rank to its device EXPLICITLY. Without this NCCL infers
+        # the device from the global rank on the first collective and
+        # warns that it "can cause a hang" -- which is exactly what a
+        # device-less barrier did here: both ranks present, neither
+        # returning. Also lets NCCL eagerly initialise the communicator.
+        try:
+            dist.init_process_group(backend="nccl", timeout=timeout,
+                                    device_id=torch.device(f"cuda:{lr}"))
+        except TypeError:            # older torch without device_id
+            dist.init_process_group(backend="nccl", timeout=timeout)
     else:                                  # CPU path exists for the tests
         dist.init_process_group(backend="gloo", timeout=timeout)
     r, w = dist.get_rank(), dist.get_world_size()
