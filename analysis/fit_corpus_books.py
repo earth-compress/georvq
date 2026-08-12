@@ -33,6 +33,8 @@ import time
 import numpy as np
 import torch
 
+from georvq.model.vqinit import tree_init
+
 STORE = "/data/tessera-samples/latents_w32hd_full"
 CKPT = "/home/ali/projects/ring-space/checkpoints/tessera_s1_w32hd/model.pt"
 
@@ -115,80 +117,6 @@ def quantize_book(C, bits=4):
 
 
 # ------------------------------------------------------------------- k-means
-def tree_init(X, K, dev, iters=8, chunk=1 << 20):
-    """Balanced PCA tree: recursively split each node at the MEDIAN of its
-    top principal direction, log2(K) times, and return the per-leaf means.
-
-    Why bother, when k-means starts from random data points: at K=16384 in
-    384-d we have ~977 fit vectors per centroid, which is badly
-    sample-starved -- almost certainly why tier 2's usable perplexity
-    collapses from 95% of K at level 2 to 20% at level 7. This estimates
-    14 successive medians and principal directions instead, each from a
-    huge number of points, and cannot produce a dead code by
-    construction.
-
-    It is also near-optimal here for a dimension-specific reason: Zador's
-    optimal fixed-rate codeword density goes as p(x)^(d/(d+2)), and at
-    d=384 that exponent is 0.995 -- essentially p(x), i.e. equal
-    probability mass per cell. Balanced partitions are close to what the
-    optimal quantizer looks like at this dimensionality (they would NOT
-    be at d=3).
-
-    Cells here are intersections of half-spaces rather than Voronoi
-    cells, so this is an INITIALIZER; Lloyd iterations follow.
-
-    Never gathers node sub-matrices (a single gather of the root would
-    copy the whole 24 GiB fit set); all per-node statistics are computed
-    by chunked scatter-reduction over the points.
-    """
-    N, D = X.shape
-    depth = int(math.ceil(math.log2(K)))
-    node = torch.zeros(N, dtype=torch.long, device=dev)
-    for d in range(depth):
-        n_nodes = 1 << d
-        cnt = torch.bincount(node, minlength=n_nodes).clamp_min(1).float()
-        MU = torch.zeros(n_nodes, D, device=dev)
-        for i in range(0, N, chunk):
-            MU.index_add_(0, node[i:i + chunk], X[i:i + chunk])
-        MU /= cnt[:, None]
-        # power iteration for the top principal direction of every node,
-        # all nodes advanced simultaneously
-        V = torch.randn(n_nodes, D, device=dev)
-        V /= V.norm(dim=1, keepdim=True)
-        for _ in range(iters):
-            A = torch.zeros(n_nodes, D, device=dev)
-            for i in range(0, N, chunk):
-                nb = node[i:i + chunk]
-                xc = X[i:i + chunk] - MU[nb]
-                s = (xc * V[nb]).sum(1)
-                A.index_add_(0, nb, xc * s[:, None])
-            V = A / A.norm(dim=1, keepdim=True).clamp_min(1e-12)
-        # project, then split each node at its own median
-        p = torch.empty(N, device=dev)
-        for i in range(0, N, chunk):
-            nb = node[i:i + chunk]
-            p[i:i + chunk] = ((X[i:i + chunk] - MU[nb]) * V[nb]).sum(1)
-        order = torch.argsort(node)
-        ps = p[order]
-        offs = torch.cat([torch.zeros(1, dtype=torch.long, device=dev),
-                          torch.bincount(node, minlength=n_nodes).cumsum(0)])
-        thr = torch.zeros(n_nodes, device=dev)
-        for nid in range(n_nodes):
-            seg = ps[offs[nid]:offs[nid + 1]]
-            if seg.numel():
-                thr[nid] = seg.median()
-        node = node + (p > thr[node]).long() * n_nodes
-        del p, order, ps
-    # leaf means (empty leaves are impossible: every split is at a median)
-    n_nodes = 1 << depth
-    cnt = torch.bincount(node, minlength=n_nodes).clamp_min(1).float()
-    C = torch.zeros(n_nodes, D, device=dev)
-    for i in range(0, N, chunk):
-        C.index_add_(0, node[i:i + chunk], X[i:i + chunk])
-    C /= cnt[:, None]
-    return C[:K]
-
-
 def assign(x, C, chunk=1 << 15):
     cn = C.pow(2).sum(1)
     out = []
@@ -218,7 +146,7 @@ def fit_rvq(fit, ev, K, levels, iters, bits, dev, tag, init="random"):
     ones = torch.ones(N, device=dev)
     for l in range(levels):
         if init == "tree":
-            C = tree_init(r_fit, K, dev)
+            C = tree_init(r_fit, K)
         else:
             C = r_fit[torch.randperm(N, device=dev)[:K]].clone()
         for it in range(iters):
