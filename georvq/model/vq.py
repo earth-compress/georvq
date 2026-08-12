@@ -23,8 +23,10 @@ class VectorQuantizer(nn.Module):
 
     def __init__(self, num_codes=512, dim=128, decay=0.99, eps=1e-5,
                  kmeans_init=True, reset_interval=2500, dead_threshold=0.01,
-                 grad_codebook=False, bf16_scores=False):
+                 grad_codebook=False, bf16_scores=False,
+                 reset_mode="random"):
         super().__init__()
+        self.reset_mode = reset_mode
         self.grad_codebook = grad_codebook
         self.num_codes = num_codes
         self.dim = dim
@@ -42,6 +44,15 @@ class VectorQuantizer(nn.Module):
         self.register_buffer("ema_sum", torch.zeros(num_codes, dim))
         self.register_buffer("initialized", torch.tensor(not kmeans_init, dtype=torch.bool))
         self.register_buffer("step", torch.zeros((), dtype=torch.long))
+        if reset_mode == "split":
+            # EMA of each code's total squared error: the distortion
+            # CONTRIBUTION (count x within-cell spread), which is what a
+            # split should be targeted at. Non-persistent, so the
+            # state-dict layout -- and therefore every existing
+            # checkpoint's strict load -- is untouched; it re-accumulates
+            # within a few hundred steps after a resume.
+            self.register_buffer("ema_sse", torch.zeros(num_codes),
+                                 persistent=False)
 
     @torch.no_grad()
     def _sample_from(self, z_flat, k):
@@ -67,8 +78,23 @@ class VectorQuantizer(nn.Module):
         self.initialized.fill_(True)
 
     @torch.no_grad()
-    def _reset_dead(self, z_flat):
-        """Replace codes with EMA mass below threshold with samples from z_flat.
+    def _reset_dead(self, z_flat, indices=None, z_q=None):
+        """Revive codes whose EMA mass has fallen below threshold.
+
+        reset_mode="random" (default, unchanged): reseed from random rows
+        of z_flat. Cheap, but a uniformly drawn point lands in a DENSE
+        region by construction -- usually one already well covered -- so
+        the revived code steals a few points from a healthy neighbour,
+        contributes little, and often dies again at the next reset.
+
+        reset_mode="split": send each dead code into the live cell with
+        the largest distortion CONTRIBUTION (EMA of summed squared
+        error), placing it at that cell's worst-fitting member in the
+        current batch. This is LBG splitting -- the new codeword lands
+        where the error actually is. Point count alone would be the wrong
+        target: a large but tight cluster gains nothing from a second
+        codeword, so what matters is count x spread, which is what the
+        SSE EMA measures.
 
         `replacements` is cast to the codebook dtype: z_flat may be bf16 under
         autocast while the codebook is fp32."""
@@ -76,11 +102,48 @@ class VectorQuantizer(nn.Module):
         n_dead = int(dead.sum().item())
         if n_dead == 0:
             return 0
-        replacements = self._sample_from(z_flat, n_dead).to(self.codebook.weight.data.dtype)
+        if self.reset_mode == "split" and indices is not None:
+            reps = self._split_targets(z_flat, indices, z_q, dead, n_dead)
+        else:
+            reps = self._sample_from(z_flat, n_dead)
+        replacements = reps.to(self.codebook.weight.data.dtype)
         self.codebook.weight.data[dead] = replacements
         self.ema_sum[dead] = replacements
         self.ema_count[dead] = 1.0
         return n_dead
+
+    @torch.no_grad()
+    def _split_targets(self, z_flat, indices, z_q, dead, n_dead):
+        """Worst-fitting member of each of the top-SSE live cells.
+
+        Any dead code that cannot be paired with a live cell holding at
+        least one point in this batch falls back to a random row, so the
+        behaviour degrades to the old one rather than failing."""
+        se = (z_flat - z_q).pow(2).sum(1).float()
+        # per-code worst member: sort ascending by error and scatter the
+        # row ids, so each code keeps its highest-error row (written last)
+        order = torch.argsort(se)
+        worst = torch.full((self.num_codes,), -1, dtype=torch.long,
+                           device=z_flat.device)
+        worst[indices[order]] = order
+        score = self.ema_sse.clone()
+        score[dead] = -1.0                    # never split a dead cell
+        score[worst < 0] = -1.0               # nothing in this batch to use
+        srcs = torch.argsort(score, descending=True)[:n_dead]
+        ok = score[srcs] > 0
+        reps = torch.empty(n_dead, self.dim, device=z_flat.device,
+                           dtype=z_flat.dtype)
+        if bool(ok.any()):
+            src_ok = srcs[ok]
+            reps[ok] = z_flat[worst[src_ok]]
+            # halve the source's mass and error: the pair now shares the
+            # cell, and one hot cell must not win every slot in a round
+            self.ema_count[src_ok] *= 0.5
+            self.ema_sum[src_ok] *= 0.5
+            self.ema_sse[src_ok] *= 0.5
+        if bool((~ok).any()):
+            reps[~ok] = self._sample_from(z_flat, int((~ok).sum()))
+        return reps
 
     def forward(self, z):
         """
@@ -133,9 +196,18 @@ class VectorQuantizer(nn.Module):
                 count_stable = (self.ema_count + self.eps) / (n + self.num_codes * self.eps) * n
                 self.codebook.weight.data.copy_(self.ema_sum / count_stable.unsqueeze(1))
 
+                if self.reset_mode == "split":
+                    # per-code EMA of TOTAL squared error = the distortion
+                    # contribution a split would recover
+                    se = (z_flat - z_q).pow(2).sum(1).float()
+                    self.ema_sse.mul_(self.decay).add_(
+                        torch.zeros_like(self.ema_sse).index_add_(
+                            0, indices, se), alpha=1 - self.decay)
+
                 self.step += 1
                 if self.reset_interval > 0 and (self.step.item() % self.reset_interval == 0):
-                    self._reset_dead(z_flat.detach())
+                    self._reset_dead(z_flat.detach(), indices,
+                                     z_q.detach())
 
         # Commitment loss: encoder outputs should be close to codebook entries
         commit_loss = F.mse_loss(z_flat, z_q.detach())
@@ -190,9 +262,18 @@ class VectorQuantizer(nn.Module):
                 n = self.ema_count.sum()
                 cs = (self.ema_count + self.eps) / (n + self.num_codes * self.eps) * n
                 self.codebook.weight.data.copy_(self.ema_sum / cs.unsqueeze(1))
+                if self.reset_mode == "split":
+                    # per-code EMA of TOTAL squared error = the distortion
+                    # contribution a split would recover
+                    se = (z_flat - z_q).pow(2).sum(1).float()
+                    self.ema_sse.mul_(self.decay).add_(
+                        torch.zeros_like(self.ema_sse).index_add_(
+                            0, indices, se), alpha=1 - self.decay)
+
                 self.step += 1
                 if self.reset_interval > 0 and (self.step.item() % self.reset_interval == 0):
-                    self._reset_dead(z_flat.detach())
+                    self._reset_dead(z_flat.detach(), indices,
+                                     z_q.detach())
 
         # selector gradient: one cell per window (B rows, all locations). The
         # soft subset mask is folded into the softmax LOGITS (log space) so the
@@ -260,7 +341,8 @@ class ResidualVQ(nn.Module):
 
     def __init__(self, num_levels=8, num_codes=256, dim=128, decay=0.99,
                  kmeans_init=True, reset_interval=2500, dead_threshold=0.01,
-                 grad_codebook=False, bf16_scores=False):
+                 grad_codebook=False, bf16_scores=False,
+                 reset_mode="random"):
         super().__init__()
         self.num_levels = num_levels
         self.levels = nn.ModuleList([
@@ -269,7 +351,8 @@ class ResidualVQ(nn.Module):
                             reset_interval=reset_interval,
                             dead_threshold=dead_threshold,
                             grad_codebook=grad_codebook,
-                            bf16_scores=bf16_scores)
+                            bf16_scores=bf16_scores,
+                            reset_mode=reset_mode)
             for _ in range(num_levels)
         ])
 
