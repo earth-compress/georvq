@@ -216,13 +216,44 @@ class PixelAE(nn.Module):
 
 
 def run(X, Xv, dim, quant, steps, lr, batch, device, commit=0.25,
-        harmonics=0):
+        harmonics=0, drift_every=200):
     m = PixelAE(X.shape[1], dim, quant=quant, harmonics=harmonics,
                 q_levels=getattr(quant, 'levels', None)).to(device)
     opt = torch.optim.AdamW(m.parameters(), lr=lr, weight_decay=0.01)
     sch = torch.optim.lr_scheduler.CosineAnnealingLR(opt, steps)
     g = torch.Generator(device=device).manual_seed(0)
+    is_rvq = isinstance(quant, RVQQuant)
+    # drift probe drawn from TRAIN data: Xv must stay untouched by anything
+    # that influences the model, including the EMA schedule
+    probe_x = X[:4096] if is_rvq else None
+    prev_z, prev_s = None, 0
     for s in range(steps):
+        if is_rvq and not quant.inited and s >= quant.warmup:
+            with torch.no_grad():
+                zs = torch.cat([m.enc(X[torch.randint(0, X.shape[0], (batch,),
+                                                      device=device)])
+                                for _ in range(8)])
+            quant.tree_init(zs)
+            del zs
+        if is_rvq and quant.inited and drift_every and s % drift_every == 0:
+            with torch.no_grad():
+                z_now = m.enc(probe_x)
+                if prev_z is not None and s > prev_s:
+                    lev0 = quant.rvq.levels[0]
+                    C = lev0.codebook.weight.data.float()
+                    d = (z_now.pow(2).sum(1, keepdim=True) - 2 * z_now @ C.t()
+                         + C.pow(2).sum(1)[None])
+                    sig = float((z_now - C[d.argmin(1)]).pow(2)
+                                .sum(1).mean().sqrt())
+                    delta = float((z_now - prev_z).norm(dim=-1).mean()) \
+                        / (s - prev_s)
+                    if delta > 0 and sig > 0:
+                        W = (2 * sig ** 2 * quant.codes
+                             / (delta ** 2 * batch)) ** (1 / 3)
+                        dec = min(0.9995, max(0.5, (W - 1) / (W + 1)))
+                        for lv in quant.rvq.levels:
+                            lv.decay = dec
+                prev_z, prev_s = z_now, s
         i = torch.randint(0, X.shape[0], (batch,), device=device, generator=g)
         xb = X[i]
         out, aux = m(xb)
@@ -230,8 +261,17 @@ def run(X, Xv, dim, quant, steps, lr, batch, device, commit=0.25,
         opt.zero_grad(set_to_none=True)
         loss.backward()
         opt.step(); sch.step()
+    if is_rvq and not quant.inited:
+        raise RuntimeError("RVQ never initialised -- the run was UNQUANTIZED")
     m.eval()
     with torch.no_grad():
+        # prove the quantizer is actually engaged: quantized output must
+        # differ from the continuous bottleneck
+        if quant is not None:
+            zc = m.enc(Xv[:1024])
+            zq, _ = quant(zc)
+            if float((zq - zc).abs().mean()) == 0.0:
+                raise RuntimeError("quantizer is a pass-through")
         cs, ms = [], []
         for j in range(0, Xv.shape[0], 65536):
             xb = Xv[j:j + 65536]
