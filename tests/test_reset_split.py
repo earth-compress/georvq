@@ -142,3 +142,23 @@ def test_split_is_live_on_every_quantizer_path():
         tot = sum(float(l.ema_sse.sum())
                   for rvq in m.rvqs for l in rvq.levels)
         assert tot > 0, f"SSE tracker never filled with {extra}"
+
+
+def test_healthy_level_still_reports_diagnostics():
+    """A level with nothing dead must still emit before/after stats. If it
+    stays silent, the reset figure cannot distinguish 'perfectly healthy'
+    from 'no data', and the healthiest levels look like broken ones."""
+    torch.manual_seed(0)
+    vq = _vq("split", K=4, D=2)
+    vq.initialized.fill_(True)
+    vq.train()
+    z = torch.randn(256, 2)
+    for _ in range(4):
+        vq(z)
+    vq.ema_count.fill_(1.0)                # nothing is dead
+    n = vq._reset_dead(z, *_assign(vq, z))
+    assert n == 0
+    st = vq.last_reset
+    assert st is not None and st["n_reset"] == 0
+    assert st["perp_after"] == st["perp_before"] > 0
+    assert st["resid_gain"] == 0.0

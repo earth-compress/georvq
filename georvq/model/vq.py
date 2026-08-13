@@ -100,9 +100,11 @@ class VectorQuantizer(nn.Module):
         autocast while the codebook is fp32."""
         dead = self.ema_count < self.dead_threshold
         n_dead = int(dead.sum().item())
-        if n_dead == 0:
-            return 0
-        # before-state, measured on this batch with the pre-reset book
+        # Before-state, measured on this batch with the pre-reset book.
+        # Recorded even when NOTHING is dead: otherwise a level that never
+        # loses a code emits no diagnostic at all and is indistinguishable
+        # in the figure from one that is broken -- which is exactly
+        # backwards, since it is the healthiest level in the model.
         stats = None
         if indices is not None and z_q is not None:
             p_ = torch.bincount(indices, minlength=self.num_codes).float()
@@ -114,6 +116,15 @@ class VectorQuantizer(nn.Module):
                     -(p_ * p_.clamp_min(1e-12).log()).sum())),
                 "resid_before": float((z_flat - z_q).pow(2).sum(1).mean()),
             }
+        if n_dead == 0:
+            if stats is not None:              # nothing changed: after == before
+                stats["perp_after"] = stats["perp_before"]
+                stats["resid_after"] = stats["resid_before"]
+                stats["perp_gain"] = 0.0
+                stats["resid_gain"] = 0.0
+                stats["step"] = int(self.step.item())
+                self.last_reset = stats
+            return 0
         if self.reset_mode == "split" and indices is not None:
             reps = self._split_targets(z_flat, indices, z_q, dead, n_dead)
         else:
