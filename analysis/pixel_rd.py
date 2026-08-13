@@ -70,17 +70,29 @@ def sample_pixels(store_dir, n_chips, per_chip, seed=0, device="cuda"):
 
 
 class FSQ(nn.Module):
-    """Bounded scalar quantization: tanh then a uniform L-level grid."""
+    """Bounded scalar quantization: tanh then a uniform L-level grid.
 
-    def __init__(self, levels):
+    The offset/shift for EVEN L is load-bearing, not cosmetic. Without it,
+    round(tanh(z) * (L-1)/2) reaches only L-1 distinct values -- and at
+    L=2 exactly ONE, a constant, delivering 0 bits while the rate
+    accounting claims 1. That silently made two different rates produce
+    identical models.
+    """
+
+    def __init__(self, levels, eps=1e-3):
         super().__init__()
         self.levels = levels
-        self.half = (levels - 1) / 2
+        self.half_l = (levels - 1) * (1 - eps) / 2
+        self.offset = 0.5 if levels % 2 == 0 else 0.0
+        self.shift = math.tan(self.offset / self.half_l) if self.offset \
+            else 0.0
+        self.norm = levels // 2
 
     def forward(self, z):
-        z = torch.tanh(z)
-        q = torch.round(z * self.half) / self.half
-        return z + (q - z).detach(), torch.zeros((), device=z.device)
+        zb = torch.tanh(z + self.shift) * self.half_l - self.offset
+        q = torch.round(zb)
+        zq = zb + (q - zb).detach()
+        return zq / self.norm, torch.zeros((), device=z.device)
 
     def bits(self, dim):
         return dim * math.log2(self.levels)
