@@ -39,6 +39,19 @@ from georvq.train.warmstart import (decoder_tail_names, freeze_books,
                                     set_params_frozen, trainable_params)
 
 
+def _reset_offset(reset_interval, val_interval):
+    """Global step at which the first reset should fire.
+
+    Reset steps land at {r + k*R} which, mod the validation interval V,
+    takes values spaced by g = gcd(R, V). Landing on a validation means it
+    scores books whose codes were moved in that very step; landing halfway
+    between two is the safest. For R=2500, V=1000 that is g=500 and an
+    offset of 250, so resets sit at 250 and 750 mod 1000 -- always 250
+    steps clear of a validation."""
+    from math import gcd
+    return max(1, gcd(reset_interval, val_interval) // 2)
+
+
 def resolve_device(gpu):
     if torch.cuda.is_available() and gpu is not None and gpu >= 0:
         return torch.device(f"cuda:{gpu}")
@@ -138,6 +151,15 @@ def train(cfg: Config, gpu=0):
             for lev in rvq.levels:
                 lev.decay = v.ema_decay
                 lev.reset_interval = 2500
+                # Zero the inherited step counters. They come from the
+                # source checkpoint -- already tens of thousands of steps
+                # in, and desynchronised across levels by skip_masked --
+                # so resets would fire at arbitrary offsets in this run.
+                # Observed: resets at 464 / 803 / 2963, the last landing 37
+                # steps before the validation at 3000, which then scored
+                # books with 6828 codes just moved (cos 0.9572 -> 0.9550).
+                lev.step.fill_(2500 - _reset_offset(2500,
+                                                    cfg.train.val_interval))
         print(f"warm-started books kept LIVE: decay {v.ema_decay}, "
               f"resets every 2500 steps, reset_mode={v.reset_mode}",
               flush=True)
