@@ -252,12 +252,16 @@ def train(cfg: Config, gpu=0):
     if v.drift_interval:
         # a FIXED batch, drawn once: drift must be measured on the same
         # windows every time or it is confounded with sampling noise
-        px = pool.sample_batch(min(v.drift_windows, batch), cfg.model.window,
-                               align=align)
+        # NB: `batch` / `align` are bound below, so read the config here
+        px = pool.sample_batch(
+            min(v.drift_windows, cfg.train.batch_windows), cfg.model.window,
+            align=cfg.data.pool.align_crops)
         probe_x, _ = source.prep(px, device)
-        probe = DriftProbe(probe_x, v.drift_interval,
-                           tier_codes=[sp.codes for sp in specs],
-                           vecs_per_step=[batch * sp.cells for sp in specs])
+        probe = DriftProbe(
+            probe_x, v.drift_interval,
+            tier_codes=[sp.codes for sp in specs],
+            vecs_per_step=[(cfg.train.batch_windows // max(ddp_world, 1))
+                           * sp.cells for sp in specs])
         print(f"drift probe: {probe_x.shape[0]} fixed windows every "
               f"{v.drift_interval} steps", flush=True)
 
