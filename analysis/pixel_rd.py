@@ -114,8 +114,58 @@ class SimpleRVQ(nn.Module):
         return len(self.books) * math.log2(self.codes)
 
 
+class FourierExpand(nn.Module):
+    """Per-dimension harmonic expansion of the quantized code.
+
+    [x, sin(w1 x), cos(w1 x), sin(w2 x), cos(w2 x), ...] with w_j = j*w0,
+    applied INDEPENDENTLY to each bottleneck dimension.
+
+    Why this should matter for FSQ specifically: the decoder's first
+    Linear reads each dimension affinely, so its response to a level index
+    is a straight line, while the optimal reconstruction for L discrete
+    levels is an arbitrary function of that index. Harmonics span a
+    Fourier basis on the interval, so with J >= L/2 pairs the decoder can
+    realise ANY per-level mapping -- i.e. it learns the companding a
+    scalar quantizer would otherwise need a fitted level set for.
+
+    sin alone is an odd basis and cannot represent even functions, so the
+    cos terms are not optional.
+
+    This recovers the SHAPING gain (matching the source density per
+    dimension). It cannot recover the space-filling gain -- optimal cell
+    SHAPE is inherently multi-dimensional -- so it should close part of
+    the FSQ-vs-VQ gap, not all of it.
+    """
+
+    def __init__(self, dim, n_harm, levels=None, w0=None):
+        """`levels` sets the harmonic spacing to avoid ALIASING.
+
+        On L equally-spaced levels, sin(j*pi*x) and sin((L-j)*pi*x) are the
+        SAME function -- the naive series w_j = j*pi wastes half its basis
+        and comes out rank-deficient. Spacing the harmonics so the top one
+        lands on the grid's Nyquist frequency, w0 = pi*(L-1)/(2J), makes
+        the expansion complete instead."""
+        super().__init__()
+        self.dim, self.n_harm = dim, n_harm
+        if w0 is None:
+            w0 = (math.pi * (levels - 1) / (2 * n_harm)) if levels \
+                else math.pi
+        self.w0 = w0
+        self.register_buffer("w", w0 * torch.arange(1, n_harm + 1).float())
+
+    @property
+    def out_dim(self):
+        return self.dim * (1 + 2 * self.n_harm)
+
+    def forward(self, z):
+        zf = z[..., None] * self.w                       # (B, d, J)
+        return torch.cat([z, torch.sin(zf).flatten(1),
+                          torch.cos(zf).flatten(1)], dim=-1)
+
+
 class PixelAE(nn.Module):
-    def __init__(self, bands, dim, hidden=512, depth=3, quant=None):
+    def __init__(self, bands, dim, hidden=512, depth=3, quant=None,
+                 harmonics=0, q_levels=None):
         super().__init__()
         def mlp(i, o):
             L, c = [], i
@@ -123,18 +173,25 @@ class PixelAE(nn.Module):
                 L += [nn.Linear(c, hidden), nn.GELU()]
                 c = hidden
             return nn.Sequential(*L, nn.Linear(c, o))
-        self.enc, self.dec, self.q = mlp(bands, dim), mlp(dim, bands), quant
+        self.exp = FourierExpand(dim, harmonics, levels=q_levels) \
+            if harmonics else None
+        din = self.exp.out_dim if self.exp is not None else dim
+        self.enc, self.dec, self.q = mlp(bands, dim), mlp(din, bands), quant
 
     def forward(self, x):
         z = self.enc(x)
         aux = torch.zeros((), device=x.device)
         if self.q is not None:
             z, aux = self.q(z)
+        if self.exp is not None:
+            z = self.exp(z)
         return self.dec(z), aux
 
 
-def run(X, Xv, dim, quant, steps, lr, batch, device, commit=0.25):
-    m = PixelAE(X.shape[1], dim, quant=quant).to(device)
+def run(X, Xv, dim, quant, steps, lr, batch, device, commit=0.25,
+        harmonics=0):
+    m = PixelAE(X.shape[1], dim, quant=quant, harmonics=harmonics,
+                q_levels=getattr(quant, 'levels', None)).to(device)
     opt = torch.optim.AdamW(m.parameters(), lr=lr, weight_decay=0.01)
     sch = torch.optim.lr_scheduler.CosineAnnealingLR(opt, steps)
     g = torch.Generator(device=device).manual_seed(0)
@@ -170,6 +227,11 @@ def main():
     ap.add_argument("--lr", type=float, default=2e-3)
     ap.add_argument("--dims", default="2,4,8,16,32,64")
     ap.add_argument("--bits", default="1,2,3,4,6")
+    ap.add_argument("--harmonics", default="",
+                    help="'auto' for J=L/2 (a complete per-level basis "
+                         "given the decoder bias), or an integer. When "
+                         "set, every FSQ point is run twice -- plain and "
+                         "expanded -- so the A/B is like-for-like.")
     ap.add_argument("--rvq", action="store_true",
                     help="also run rate-matched RVQ points")
     ap.add_argument("--out", default=None)
@@ -200,15 +262,24 @@ def main():
                      "bits": None, "cos": cos, "mse": mse})
 
     for d, b in itertools.product(dims, bits):
-        q = FSQ(2 ** b)
-        t = time.time()
-        cos, mse = run(X, Xv, d, q, args.steps, args.lr, args.batch, dev)
-        print(f"{'fsq':>6} {d:>5} {b:>6} {q.bits(d):>7.0f} {cos:>8.4f} "
-              f"{mse:>9.5f} {time.time()-t:>5.0f}", flush=True)
-        rows.append({"quant": "fsq", "dim": d, "bits_per_dim": b,
-                     "bits": q.bits(d), "cos": cos, "mse": mse})
-        if args.out:
-            json.dump(rows, open(args.out, "w"), indent=1)
+        L = 2 ** b
+        hs = [0]
+        if args.harmonics:
+            hs.append(L // 2 if args.harmonics == "auto"
+                      else int(args.harmonics))
+        for h in hs:
+            q = FSQ(L)
+            t = time.time()
+            cos, mse = run(X, Xv, d, q, args.steps, args.lr, args.batch, dev,
+                           harmonics=h)
+            tag = "fsq" if not h else f"fsq+f{h}"
+            print(f"{tag:>6} {d:>5} {b:>6} {q.bits(d):>7.0f} {cos:>8.4f} "
+                  f"{mse:>9.5f} {time.time()-t:>5.0f}", flush=True)
+            rows.append({"quant": tag, "dim": d, "bits_per_dim": b,
+                         "harmonics": h, "bits": q.bits(d), "cos": cos,
+                         "mse": mse})
+            if args.out:
+                json.dump(rows, open(args.out, "w"), indent=1)
 
     if args.rvq:
         for d, b in itertools.product(dims, bits):
