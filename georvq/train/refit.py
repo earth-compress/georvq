@@ -139,6 +139,7 @@ def refit_level(r, C, dead_frac=0.02, recycle_frac=0.05, lloyd_iters=3,
     score[victim] = -1.0
     donors = torch.argsort(score, descending=True)[:n_rec]
     n_split = 0
+    pairs = []
     for j in range(n_rec):
         d = int(donors[j])
         if score[d] <= 0:
@@ -148,7 +149,33 @@ def refit_level(r, C, dead_frac=0.02, recycle_frac=0.05, lloyd_iters=3,
             continue
         C[d] = C[d] + eps * sig * v               # classical LBG pair
         C[int(vict[j])] = C[d] - 2 * eps * sig * v
+        pairs.append((d, int(vict[j])))
         n_split += 1
+
+    # --- leeching -----------------------------------------------------
+    # Naively, a donor cell's points should end up in one of the two
+    # children of its split. On a curved high-dimensional manifold a third
+    # codeword can be nearer than either child, so the pair both LOSES
+    # points to outsiders and GAINS points from them. Measured twice:
+    # straight after the split, and again after Lloyd has settled.
+    pair_of = torch.full((K,), -1, dtype=torch.long, device=r.device)
+    for j in range(len(pairs)):
+        pair_of[pairs[j][0]] = j
+        pair_of[pairs[j][1]] = j
+    old_pair = pair_of[a]
+
+    def _leech(a_now):
+        new_pair = pair_of[a_now]
+        S = old_pair >= 0                      # was in some donor cell
+        P = new_pair >= 0                      # is now in some split pair
+        ret = float((new_pair[S] == old_pair[S]).float().mean()) \
+            if bool(S.any()) else float("nan")
+        lin = float((old_pair[P] != new_pair[P]).float().mean()) \
+            if bool(P.any()) else float("nan")
+        return ret, lin
+
+    a_split = _chunked_assign(r, C)
+    st["retention_split"], st["leech_in_split"] = _leech(a_split)
 
     for _ in range(lloyd_iters):
         a2 = _chunked_assign(r, C)
@@ -159,6 +186,7 @@ def refit_level(r, C, dead_frac=0.02, recycle_frac=0.05, lloyd_iters=3,
         C[live] = sums[live] / c2[live, None]
 
     a3, cnt3, _ = _cell_stats(r, C)
+    st["retention_final"], st["leech_in_final"] = _leech(a3)
     st.update({
         "n_recycled": float(n_rec), "frac_recycled": n_rec / K,
         "n_split": float(n_split),
