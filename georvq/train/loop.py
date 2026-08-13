@@ -28,9 +28,11 @@ from georvq.model.vqinit import residual_init_rvq
 from georvq.repro import (run_metadata, save_checkpoint, seed_all,
                           write_resolved_config)
 from georvq.train.figures import (codebook_figure, cosdist_figure,
-                                   rd_figure, recon_figure, reset_figure)
+                                   rd_figure, recon_figure, refit_figure,
+                                   reset_figure)
 from georvq.train.validate import canonical_tuples, load_rd_ref, tname, validate
 from georvq.train import dist as D
+from georvq.train.refit import collect_latents, refit_phase
 from georvq.train.warmstart import (decoder_tail_names, freeze_books,
                                     load_partial, set_encoder_frozen,
                                     set_params_frozen, trainable_params)
@@ -263,6 +265,41 @@ def train(cfg: Config, gpu=0):
             enc_frozen = False
             print(f"step {step}: unfroze encoder (co-adaptation begins)",
                   flush=True)
+        # ---- periodic offline refit phase ----------------------------
+        # Fires one step AFTER a validation, so a validation never scores
+        # a book that was replaced moments earlier.
+        if v.refit_interval and step % v.refit_interval == v.refit_offset:
+            t_rf = time.time()
+            model.eval()
+            zs_fit, n_b = collect_latents(model, source, pool, cfg, device,
+                                          per_code=v.refit_per_code)
+            model.train()
+            if v.freeze_books:
+                freeze_books(model)
+            rst = refit_phase(model, zs_fit, cfg,
+                              lloyd_iters=v.refit_lloyd_iters,
+                              dead_frac=v.refit_dead_frac,
+                              recycle_frac=v.refit_recycle_frac)
+            n_rec = sum(val for k, val in rst.items()
+                        if k.endswith("_n_recycled"))
+            dt_rf = time.time() - t_rf
+            if D.is_main():
+                print(f"step {step}: REFIT on {n_b} batches "
+                      f"({sum(z.shape[0] for z in zs_fit):,} vectors), "
+                      f"{n_rec:.0f} codes recycled, {dt_rf:.0f}s",
+                      flush=True)
+            if use_wandb:
+                ff = refit_figure(rst, specs, step)
+                wandb.log({"figs/refit": wandb.Image(ff),
+                           "refit/total_recycled": n_rec,
+                           "refit/seconds": dt_rf,
+                           "refit/vectors": sum(z.shape[0] for z in zs_fit)},
+                          step=step)
+                plt.close(ff)
+            del zs_fit
+            torch.cuda.empty_cache()
+            t0 = time.time()          # don't bill the refit to tokens/s
+
         if head_names and step > cfg.train.freeze_head_steps:
             set_params_frozen(model, head_names, False)
             print(f"step {step}: unfroze decoder tail", flush=True)
