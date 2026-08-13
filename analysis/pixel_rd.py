@@ -98,32 +98,47 @@ class FSQ(nn.Module):
         return dim * math.log2(self.levels)
 
 
-class SimpleRVQ(nn.Module):
-    """Plain EMA-free RVQ with gradient codebooks -- deliberately the
-    simplest thing that works, so the comparison is about the quantizer's
-    STRUCTURE and not about codebook-maintenance machinery."""
+class RVQQuant(nn.Module):
+    """RVQ using the project's real machinery, so the FSQ comparison is
+    against our BEST vector quantizer rather than a strawman.
 
-    def __init__(self, n_levels, codes, dim):
+    A naive gradient-codebook RVQ with random init collapses: on this same
+    sweep it produced non-monotonic rate-distortion (dim 16 at 32 bits
+    scored 0.5564, WORSE than the same book at 16 bits), because most
+    codewords are never selected. Comparing a well-conditioned scalar
+    quantizer against that would be the mirror image of the unfairness
+    this whole experiment exists to avoid.
+
+    So: balanced-PCA-tree init after a short VQ-free warmup, EMA
+    codebooks, and distortion-ranked LBG splitting for dead codes.
+    """
+
+    def __init__(self, n_levels, codes, dim, decay=0.99, reset_interval=500,
+                 warmup=300):
         super().__init__()
-        self.books = nn.ParameterList([
-            nn.Parameter(torch.randn(codes, dim) * 0.1)
-            for _ in range(n_levels)])
-        self.codes = codes
+        from georvq.model.vq import ResidualVQ
+        self.rvq = ResidualVQ(num_levels=n_levels, num_codes=codes, dim=dim,
+                              decay=decay, kmeans_init=False,
+                              reset_interval=reset_interval,
+                              dead_threshold=0.000625, reset_mode="split")
+        self.codes, self.n_levels, self.warmup = codes, n_levels, warmup
+        self.inited = False
+
+    @torch.no_grad()
+    def tree_init(self, z):
+        from georvq.model.vqinit import residual_init_rvq
+        residual_init_rvq(self.rvq, z, mode="tree", iters=4,
+                          expected_batch=z.shape[0])
+        self.inited = True
 
     def forward(self, z):
-        r, out, loss = z, torch.zeros_like(z), 0.0
-        for B in self.books:
-            d = (r.pow(2).sum(1, keepdim=True) - 2 * r @ B.t()
-                 + B.pow(2).sum(1)[None])
-            i = d.argmin(1)
-            q = B[i]
-            loss = loss + F.mse_loss(q, r.detach())
-            out = out + q
-            r = r - q.detach()
-        return z + (out - z).detach(), loss
+        if not self.inited:                    # VQ-free warmup
+            return z, torch.zeros((), device=z.device)
+        zq, _, commit = self.rvq(z)
+        return zq, commit
 
     def bits(self, dim):
-        return len(self.books) * math.log2(self.codes)
+        return self.n_levels * math.log2(self.codes)
 
 
 class FourierExpand(nn.Module):
@@ -298,7 +313,7 @@ def main():
             total = d * b
             for kbits in (8, 10, 12):
                 nl = max(1, round(total / kbits))
-                q = SimpleRVQ(nl, 2 ** kbits, d)
+                q = RVQQuant(nl, 2 ** kbits, d)
                 t = time.time()
                 cos, mse = run(X, Xv, d, q, args.steps, args.lr, args.batch,
                                dev)
