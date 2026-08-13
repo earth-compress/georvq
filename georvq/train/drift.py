@@ -71,32 +71,35 @@ class DriftProbe:
 
         out = None
         if self.hist:
-            # multi-lag: drift against every retained snapshot
-            lags, dmean = [], []
-            for (s0, z0) in self.hist:
-                lag = step - s0
-                if lag <= 0:
-                    continue
-                lags.append(lag)
-                dmean.append(float(sum(
-                    float((a - b).norm(dim=-1).mean())
-                    for a, b in zip(zs, z0)) / len(zs)))
-            if len(lags) >= 2:
-                import math
-                lx = [math.log(l) for l in lags]
-                ly = [math.log(max(d, 1e-12)) for d in dmean]
-                mx, my = sum(lx) / len(lx), sum(ly) / len(ly)
-                den = sum((v - mx) ** 2 for v in lx)
-                alpha = (sum((a_ - mx) * (b_ - my)
-                             for a_, b_ in zip(lx, ly)) / den) if den else 0.0
-            else:
-                alpha = float("nan")
+            import math
+            # PER-TIER scaling exponent. A single global alpha would
+            # average L2 norms across tiers of different dimensionality --
+            # not a coherent quantity -- and would hide the case that
+            # matters: a coarse tier moving systematically while a fine
+            # one only jitters. W* is applied per tier, so alpha must be
+            # per tier too.
+            lags = [step - s0 for (s0, _) in self.hist if step > s0]
+            out = {}
+            alphas = []
+            for i in range(len(zs)):
+                dm = [float((zs[i] - z0[i]).norm(dim=-1).mean())
+                      for (s0, z0) in self.hist if step > s0]
+                for lg, d in zip(lags, dm):
+                    out[f"drift/pyr{i}_lag{lg}_l2"] = d
+                if len(lags) >= 2:
+                    lx = [math.log(l) for l in lags]
+                    ly = [math.log(max(d, 1e-12)) for d in dm]
+                    mx, my = sum(lx) / len(lx), sum(ly) / len(ly)
+                    den = sum((v - mx) ** 2 for v in lx)
+                    al = (sum((p - mx) * (q - my)
+                              for p, q in zip(lx, ly)) / den) if den else 0.0
+                else:
+                    al = float("nan")
+                out[f"drift/pyr{i}_alpha"] = al
+                alphas.append(al)
 
             s_prev, z_prev = self.hist[-1]
             dt = step - s_prev
-            out = {"drift/alpha": alpha}
-            for k, (lg, dm) in enumerate(zip(lags, dmean)):
-                out[f"drift/lag{lg}_l2"] = dm
             for i, (a, b) in enumerate(zip(zs, z_prev)):
                 d = (a - b).norm(dim=-1)
                 per_step = float(d.mean()) / dt
@@ -117,6 +120,12 @@ class DriftProbe:
                         W_diff = (sig * (self.codes[i]
                                          / self.vps[i]) ** 0.5) / per_step
                         out[f"drift/pyr{i}_optimal_window_diffusive"] = W_diff
+                        # use whichever form this tier's own exponent
+                        # supports (alpha nearer 1 -> ballistic)
+                        al = alphas[i] if i < len(alphas) else float("nan")
+                        if al == al:
+                            out[f"drift/pyr{i}_window_selected"] = (
+                                W if abs(al - 1.0) <= abs(al - 0.5) else W_diff)
                         # W < 1 means the encoder outruns any averaging:
                         # the honest reading is 'an EMA cannot help here',
                         # so clamp rather than report a negative decay
