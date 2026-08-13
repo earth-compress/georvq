@@ -154,15 +154,30 @@ class VectorQuantizer(nn.Module):
 
     @torch.no_grad()
     def _split_targets(self, z_flat, indices, z_q, dead, n_dead):
-        """Worst-fitting member of each of the top-SSE live cells.
+        """LBG split of the top-SSE live cells: the pair straddles the
+        donor centroid, offset along a data-driven direction.
 
-        Any dead code that cannot be paired with a live cell holding at
-        least one point in this batch falls back to a random row, so the
-        behaviour degrades to the old one rather than failing."""
+        The previous version put the revived code on the donor's
+        WORST-FITTING point. That is an outlier by construction, so the
+        new codeword served almost nobody and died again -- measured on
+        this model, the instantaneous residual drop was 91% at tier1 L8
+        and ~100% of it evaporated before the next reset, every reset, for
+        23000 steps (resid_before 86.1 -> 85.1). Classical LBG splits the
+        CENTROID into c +/- eps*delta so both members are viable.
+
+        `delta` is (random member - centroid): a TYPICAL offset for that
+        cell, which gives both a direction and a scale for free and stays
+        fully vectorized. A per-cell principal direction would be better
+        in principle, but at K=16384 a batch gives a donor ~16 points in
+        256 dims, so that estimate is mostly noise.
+
+        Any dead code that cannot be paired with a live cell holding a
+        point in this batch falls back to a random row."""
+        eps = 0.5
         se = (z_flat - z_q).pow(2).sum(1).float()
-        # per-code worst member: sort ascending by error and scatter the
-        # row ids, so each code keeps its highest-error row (written last)
-        order = torch.argsort(se)
+        # one RANDOM member per code: shuffle, then scatter row ids so the
+        # last write per code is an arbitrary member (not the worst one)
+        order = torch.randperm(z_flat.shape[0], device=z_flat.device)
         worst = torch.full((self.num_codes,), -1, dtype=torch.long,
                            device=z_flat.device)
         worst[indices[order]] = order
@@ -175,11 +190,16 @@ class VectorQuantizer(nn.Module):
                            dtype=z_flat.dtype)
         if bool(ok.any()):
             src_ok = srcs[ok]
-            reps[ok] = z_flat[worst[src_ok]]
+            C = self.codebook.weight.data
+            delta = z_flat[worst[src_ok]].to(C.dtype) - C[src_ok]
+            # pair straddles the old centroid: donor moves +eps*delta, the
+            # revived code takes -eps*delta
+            reps[ok] = (C[src_ok] - eps * delta).to(reps.dtype)
+            C[src_ok] = C[src_ok] + eps * delta
             # halve the source's mass and error: the pair now shares the
             # cell, and one hot cell must not win every slot in a round
             self.ema_count[src_ok] *= 0.5
-            self.ema_sum[src_ok] *= 0.5
+            self.ema_sum[src_ok] = C[src_ok] * self.ema_count[src_ok, None]
             self.ema_sse[src_ok] *= 0.5
         if bool((~ok).any()):
             reps[~ok] = self._sample_from(z_flat, int((~ok).sum()))
