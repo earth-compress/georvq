@@ -47,23 +47,35 @@ def test_sse_ema_tracks_distortion_contribution():
     assert vq.ema_sse[0] > 10 * vq.ema_sse[1], vq.ema_sse[:2]
 
 
-def test_split_puts_the_dead_code_at_the_worst_fitting_point():
+def test_split_pair_straddles_the_donor_centroid():
+    """LBG geometry: donor and revived code end up on OPPOSITE sides of
+    the donor's old centroid, both at a typical member offset.
+
+    The old behaviour teleported the revived code onto the donor's
+    worst-fitting point -- an outlier, which served almost nobody and died
+    again. Measured on tessera_vq8_split, ~100% of each reset's residual
+    gain evaporated before the next reset, every reset, for 23k steps."""
     torch.manual_seed(0)
     vq = _vq("split", K=3, D=2)
     vq.codebook.weight.data.copy_(torch.tensor([[0., 0.], [50., 0.],
                                                 [99., 99.]]))
     vq.initialized.fill_(True)
     vq.train()
-    z = torch.cat([torch.randn(100, 2), torch.tensor([[6., 6.]])])  # outlier
+    z = torch.cat([torch.randn(400, 2), torch.tensor([[9., 9.]])])  # outlier
     for _ in range(4):
         vq(z)
+    donor = int(vq.ema_sse.argmax())
+    c_old = vq.codebook.weight.data[donor].clone()
     vq.ema_count[2] = 0.0                       # declare code 2 dead
-    n = vq._reset_dead(z, *_assign(vq, z))
-    assert n == 1
-    # the revived code should sit on the far outlier, not a random point
-    assert torch.allclose(vq.codebook.weight.data[2],
-                          torch.tensor([6., 6.]), atol=1e-4), \
-        vq.codebook.weight.data[2]
+    assert vq._reset_dead(z, *_assign(vq, z)) == 1
+
+    d_new = vq.codebook.weight.data[donor] - c_old
+    v_new = vq.codebook.weight.data[2] - c_old
+    assert torch.dot(d_new, v_new) < 0, "pair did not straddle the centroid"
+    assert torch.allclose(d_new, -v_new, atol=1e-4), "pair is asymmetric"
+    # and it must NOT have landed on the outlier
+    assert (vq.codebook.weight.data[2]
+            - torch.tensor([9., 9.])).norm() > 1.0
 
 
 def _assign(vq, z):

@@ -130,6 +130,13 @@ class VQConfig(StrictModel):
     # recycle at least this fraction of K per phase even if nothing is
     # underused, so high-distortion splitting keeps happening
     refit_recycle_frac: float = 0.05
+    # Encoder drift probe: push a FIXED batch through the encoder every
+    # N steps and compare with the previous reading, giving the encoder's
+    # velocity through latent space. 0 = off. Cheap (encoder-only, no
+    # decode/backward) and it is what turns the EMA decay from a
+    # hyperparameter into something derivable -- see georvq/train/drift.py
+    drift_interval: int = 0
+    drift_windows: int = 256          # windows in the fixed probe batch
     # How a dead code is revived. "random" reseeds from a random encoder
     # output (the historical behaviour); "split" sends it into the live
     # cell with the largest distortion contribution, at that cell's

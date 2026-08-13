@@ -32,6 +32,7 @@ from georvq.train.figures import (codebook_figure, cosdist_figure,
                                    reset_figure)
 from georvq.train.validate import canonical_tuples, load_rd_ref, tname, validate
 from georvq.train import dist as D
+from georvq.train.drift import DriftProbe
 from georvq.train.refit import collect_latents, refit_phase
 from georvq.train.warmstart import (decoder_tail_names, freeze_books,
                                     load_partial, set_encoder_frozen,
@@ -247,6 +248,19 @@ def train(cfg: Config, gpu=0):
         wandb.init(project=cfg.log.wandb_project, name=cfg.log.run_tag,
                    config=cfg.model_dump(mode="json") | run_metadata(cfg))
 
+    probe = None
+    if v.drift_interval:
+        # a FIXED batch, drawn once: drift must be measured on the same
+        # windows every time or it is confounded with sampling noise
+        px = pool.sample_batch(min(v.drift_windows, batch), cfg.model.window,
+                               align=align)
+        probe_x, _ = source.prep(px, device)
+        probe = DriftProbe(probe_x, v.drift_interval,
+                           tier_codes=[sp.codes for sp in specs],
+                           vecs_per_step=[batch * sp.cells for sp in specs])
+        print(f"drift probe: {probe_x.shape[0]} fixed windows every "
+              f"{v.drift_interval} steps", flush=True)
+
     select_weight = (cfg.model.conditioning.weight
                      if cfg.model.conditioning is not None
                      and cfg.model.conditioning.kind == "select" else 0.0)
@@ -426,6 +440,18 @@ def train(cfg: Config, gpu=0):
             # average (not sum) so the LR keeps its single-GPU meaning
             D.average_grads(base_p + rate_p)
         opt.step(); sched.step()
+
+        if probe is not None:
+            dstat = probe(model, step)
+            if dstat and use_wandb:
+                wandb.log(dstat, step=step)
+            if dstat and step % (v.drift_interval * 10) == 0 and D.is_main():
+                k0 = "drift/pyr0_per_step_over_sigma"
+                w0 = "drift/pyr0_optimal_ema_decay"
+                if k0 in dstat:
+                    print(f"step {step}: drift {dstat[k0]:.2e} sigma/step "
+                          f"(tier0), optimal ema_decay "
+                          f"{dstat.get(w0, float('nan')):.5f}", flush=True)
 
         # reset diagnostics: emitted only on steps where a reset fired
         if D.is_main() and not v.freeze_books:
