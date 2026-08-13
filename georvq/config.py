@@ -114,6 +114,22 @@ class VQConfig(StrictModel):
     passthrough_frac: float = 0.0
     gain_shape: bool = False       # unit-sphere shape book + scalar gain
     gain_bits: int = 5             # log-domain gain levels (gain_shape only)
+    # Periodic offline refit phases (georvq/train/refit.py). Every
+    # `refit_interval` steps, training pauses, ~`refit_per_code` latent
+    # vectors PER CODEWORD are gathered from the encoder, and every tier
+    # is refitted level by level in cascade order. 0 = off. Intended with
+    # freeze_books, so the books are static except in these phases.
+    refit_interval: int = 0
+    # Fire one step AFTER a validation so a validation never scores a book
+    # that was replaced moments earlier.
+    refit_offset: int = 1
+    refit_per_code: int = 100
+    refit_lloyd_iters: int = 3
+    # underused := count < this fraction of the mean count
+    refit_dead_frac: float = 0.02
+    # recycle at least this fraction of K per phase even if nothing is
+    # underused, so high-distortion splitting keeps happening
+    refit_recycle_frac: float = 0.05
     # How a dead code is revived. "random" reseeds from a random encoder
     # output (the historical behaviour); "split" sends it into the live
     # cell with the largest distortion contribution, at that cell's
