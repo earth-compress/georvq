@@ -124,14 +124,27 @@ class DriftProbe:
                         # supports (alpha nearer 1 -> ballistic)
                         al = alphas[i] if i < len(alphas) else float("nan")
                         if al == al:
-                            out[f"drift/pyr{i}_window_selected"] = (
-                                W if abs(al - 1.0) <= abs(al - 0.5) else W_diff)
+                            Wsel = (W if abs(al - 1.0) <= abs(al - 0.5)
+                                    else W_diff)
+                            out[f"drift/pyr{i}_window_selected"] = Wsel
+                            # derive the decay from the SELECTED window --
+                            # reporting it from the ballistic form while
+                            # selecting the diffusive one had the two
+                            # charts giving opposite advice (shorten to
+                            # 0.963 vs lengthen to 0.993)
+                            out[f"drift/pyr{i}_optimal_ema_decay"] = min(
+                                0.9999, max(0.0, (Wsel - 1) / (Wsel + 1)))
+                            # alpha near 0 means displacement SATURATES:
+                            # neither form applies, the EMA's bias is capped
+                            # at the confinement radius regardless of decay,
+                            # and no decay can remove it. Flagged so the
+                            # window is not read as actionable when it is
+                            # not.
+                            out[f"drift/pyr{i}_confined"] = float(al < 0.25)
                         # W < 1 means the encoder outruns any averaging:
                         # the honest reading is 'an EMA cannot help here',
                         # so clamp rather than report a negative decay
                         out[f"drift/pyr{i}_optimal_ema_window"] = W
-                        out[f"drift/pyr{i}_optimal_ema_decay"] = min(
-                            0.9999, max(0.0, (W - 1) / (W + 1)))
         self.hist.append((step, zs))
         if len(self.hist) > self.n_lags:
             self.hist.pop(0)
