@@ -21,8 +21,9 @@ from georvq.config import Config
 from georvq.data.pool import ChipPool, fixed_val_tokens
 from georvq.data.store import ChipStore
 from georvq.factory import build_model
-from georvq.model.codec import (monotone_tuples, sample_monotone_depths,
-                                tuple_bits)
+from georvq.model.codec import (monotone_tuples, path_tuples,
+                                sample_monotone_depths,
+                                sample_path_depths, tuple_bits)
 from georvq.model.vq import kmeans_init_rvq
 from georvq.model.vqinit import residual_init_rvq
 from georvq.repro import (run_metadata, save_checkpoint, seed_all,
@@ -420,9 +421,15 @@ def train(cfg: Config, gpu=0):
             out = out.float()
             commit = torch.zeros((), device=device)
         else:
-            Ls = sample_monotone_depths(x.shape[0], specs, device,
-                                        mins=mins,
-                                        full_frac=cfg.model.full_frac)
+            if cfg.model.depth_sampling == "path":
+                Ls = sample_path_depths(x.shape[0], specs, device, mins=mins,
+                                        full_frac=cfg.model.full_frac,
+                                        path_frac=1.0 - cfg.model.full_frac
+                                        - v.passthrough_frac)
+            else:
+                Ls = sample_monotone_depths(x.shape[0], specs, device,
+                                            mins=mins,
+                                            full_frac=cfg.model.full_frac)
             # quantization pass-through: a slice of the batch is decoded
             # from the raw latents at full depth, so the continuous path
             # keeps training alongside the quantized one. Conditioning is
