@@ -136,7 +136,11 @@ def fit_level(r, C, r_val, recycle_frac=0.05, dead_frac=0.02, lloyd=2,
     """Iterate split-and-settle on ONE level until held-out residual stops
     improving. Returns (C, history)."""
     hist = []
-    best, bad = float("inf"), 0
+    # NOT float("inf"): the test below computes best - tol*abs(best), which
+    # is inf - inf = nan, and `v < nan` is always False -- so `bad` would
+    # increment from iteration 1 and every level would stop at exactly
+    # `patience` iterations, never on actual convergence.
+    best, bad = None, 0
     K = C.shape[0]
     for it in range(1, max_iters + 1):
         st, a, cnt, sse = book_stats(r, C)
@@ -147,7 +151,7 @@ def fit_level(r, C, r_val, recycle_frac=0.05, dead_frac=0.02, lloyd=2,
         hist.append(st)
         if log:
             log(it, st)
-        if st["val_resid"] < best - tol * abs(best):
+        if best is None or st["val_resid"] < best - tol * abs(best):
             best, bad = st["val_resid"], 0
         else:
             bad += 1
