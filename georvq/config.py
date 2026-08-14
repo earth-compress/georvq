@@ -235,6 +235,14 @@ class ModelConfig(StrictModel):
     tiers: list[TierSpec]
     min_depths: Optional[list[int]] = None
     full_frac: float = 0.0
+    # "nested": draw the coarse depth uniformly and each finer tier
+    # conditionally. Weights the R-D curve toward the high-rate end, but
+    # starves deep fine-tier books -- measured P(active)=0.006 for tier-2
+    # level 14, i.e. those books see 0.6% of rows.
+    # "path": spread uniformly along the monotone truncation path, one
+    # step per codebook, so every book gets an equal share (same level
+    # rises to 0.197).
+    depth_sampling: Literal["nested", "path"] = "nested"
     ff_ratio: float = 2.0
     tokenizer: TokenizerConfig = Field(default_factory=TokenizerConfig)
     decoder: DecoderConfig = Field(default_factory=DecoderConfig)

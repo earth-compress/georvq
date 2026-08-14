@@ -54,6 +54,62 @@ def sample_monotone_depths(batch, specs, device, mins=None, full_frac=0.0):
     return Ls
 
 
+def path_tuples(specs, mins=None):
+    """The canonical monotone truncation PATH: add one codebook at a time.
+
+    Fill the coarsest tier to its depth, then the next, and so on --
+    (1,0,0), (2,0,0) ... (L,0,0), (L,1,0) ... (L,L,0), (L,L,1) ... So each
+    step adds exactly one book, and the path has sum(depths) points.
+
+    `mins[0]` sets where the path STARTS -- there is no point training a
+    1-0-0 point, which spends 8 bits on a 64x64 patch of 128-d vectors.
+
+    Sampling uniformly along this path gives every codebook an equal share
+    of the training signal. Nested sampling does not: it draws the coarse
+    depth uniformly and each finer tier conditionally, which makes deep
+    fine-tier levels vanishingly rare -- measured at P(active)=0.006 for
+    tier-2 level 14, i.e. those books train on 0.6% of rows.
+    """
+    mins = mins or [0] * len(specs)
+    cur = [mins[i] for i in range(len(specs))]
+    out = []
+    if cur[0] > 0:
+        # include the starting point itself, so mins[0]=4 means the path
+        # BEGINS at (4,0,0) rather than at (5,0,0)
+        out.append(tuple(cur))
+    for i, sp in enumerate(specs):
+        while cur[i] < sp.depth:
+            cur[i] += 1
+            # keep the tuple monotone: a finer tier can never exceed a
+            # coarser one, so clamp downstream entries as we grow
+            t = list(cur)
+            for j in range(1, len(t)):
+                t[j] = min(t[j], t[j - 1])
+            out.append(tuple(t))
+    return out
+
+
+def sample_path_depths(batch, specs, device, mins=None, full_frac=0.15,
+                       path_frac=0.70):
+    """Depth tuples: `full_frac` at full depth, the rest spread uniformly
+    along the monotone path so every codebook trains equally often.
+
+    (The remaining 1 - full_frac - path_frac of the batch is left for the
+    caller's unquantized pass-through rows, which never reach here.)
+    """
+    path = path_tuples(specs, mins)
+    P = torch.tensor(path, device=device, dtype=torch.long)
+    full = torch.tensor([sp.depth for sp in specs], device=device,
+                        dtype=torch.long)
+    u = torch.rand(batch, device=device)
+    denom = max(full_frac + path_frac, 1e-9)
+    is_full = u < (full_frac / denom)
+    pick = torch.randint(0, P.shape[0], (batch,), device=device)
+    Ls = P[pick]
+    Ls[is_full] = full
+    return Ls
+
+
 def monotone_tuples(specs):
     """All (L_0..L_n) with L_0>=1 and 0 <= L_i <= min(L_{i-1}, d_i)."""
     tuples = [[L] for L in range(1, specs[0].depth + 1)]

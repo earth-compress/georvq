@@ -56,25 +56,31 @@ def collect(m, cfg, pool, dev, n_batches, caps, tag=""):
     """Encoder-only pass, kept in fp16 on the GPU. The encoder is frozen,
     so this is done ONCE and reused for every level and every iteration."""
     specs = cfg.model.tiers
-    bufs = [[] for _ in specs]
+    # PREALLOCATE and fill. Accumulating a list and torch.cat-ing at the
+    # end needs a second contiguous copy of the whole buffer at once --
+    # which is what killed a 3-hour collection at the final step, and is
+    # the same failure refit_sweep.py hit before it.
+    out = [torch.empty(c, sp.dim, dtype=torch.float16, device=dev)
+           for c, sp in zip(caps, specs)]
+    pos = [0] * len(specs)
     t0 = time.time()
     for b in range(n_batches):
+        if all(p >= c for p, c in zip(pos, caps)):
+            break
         s = pool.sample_batch(cfg.train.batch_windows, cfg.model.window,
                               align=cfg.data.pool.align_crops)
         x, _ = m.source.prep(s, dev)
         for i, z in enumerate(m.encode_levels(x)):
-            if len(bufs[i]) * cfg.train.batch_windows * specs[i].cells \
-                    < caps[i]:
-                bufs[i].append(z.reshape(-1, z.shape[-1]).half())
+            if pos[i] >= caps[i]:
+                continue
+            zf = z.reshape(-1, z.shape[-1])
+            n = min(zf.shape[0], caps[i] - pos[i])
+            out[i][pos[i]:pos[i] + n] = zf[:n].half()
+            pos[i] += n
         if (b + 1) % 200 == 0:
             print(f"    {tag}{b+1}/{n_batches} batches "
                   f"[{time.time()-t0:.0f}s]", flush=True)
-    out = []
-    for i, bl in enumerate(bufs):
-        z = torch.cat(bl)[:caps[i]]
-        out.append(z)
-        del bl
-    return out
+    return [o[:p] for o, p in zip(out, pos)]
 
 
 @torch.no_grad()
