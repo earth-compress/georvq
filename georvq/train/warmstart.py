@@ -34,7 +34,13 @@ def load_partial(model, path, device):
                 own[k][:, :v.shape[1]].copy_(v)
                 copied += 1
     model.load_state_dict(own)
-    loaded_cb = any(k.startswith("rvqs") and k in own
+    # Test the CODEBOOK WEIGHTS specifically. `k.startswith("rvqs")` also
+    # matches each level's `step` and `initialized`, which are 0-dim
+    # scalars and therefore shape-match ANY checkpoint -- so a model whose
+    # books share nothing with the source (different K, different depth)
+    # still reported "codebooks loaded" and got matured: resets disabled
+    # and decay forced to 0.9995, silently overriding the config.
+    loaded_cb = any(k.endswith("codebook.weight") and k in own
                     and own[k].shape == sd[k].shape for k in sd)
     if loaded_cb and getattr(model, "rvqs", None) is not None:
         mature_codebooks(model)

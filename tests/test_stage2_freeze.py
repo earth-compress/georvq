@@ -110,3 +110,27 @@ def test_decoder_tail_names_picks_the_last_blocks():
               for n in got if n.startswith("decoder.blocks.")}
     assert blocks == set(idx[-2:])
     assert any(n.startswith("decoder.head.") for n in got)
+
+
+def test_loaded_cb_ignores_scalar_bookkeeping_buffers():
+    """A model whose codebooks share NOTHING with the source checkpoint
+    must not be reported as having loaded codebooks.
+
+    Each VQ level carries `step` and `initialized` as 0-dim buffers, which
+    shape-match any checkpoint. Keying on `startswith("rvqs")` therefore
+    returned True on those alone, and mature_codebooks() then disabled
+    resets and forced decay to 0.9995 -- silently overriding the config on
+    a run whose whole point was live books with splitting."""
+    import tempfile, os, torch
+    from georvq.repro import save_checkpoint
+    from georvq.train.warmstart import load_partial
+    src_cfg, src = _smoke_model(["model.tiers=['1:16:32:3','4:8:32:3']"])
+    dst_cfg, dst = _smoke_model(["model.tiers=['1:16:8:5','4:8:8:5']"])  # new K, new depth
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "src.pt")
+        save_checkpoint(p, src, src_cfg, 0)
+        _, loaded_cb = load_partial(dst, p, "cpu")
+    assert loaded_cb is False, "scalar buffers made a K-mismatch look loaded"
+    for rvq in dst.rvqs:
+        for l in rvq.levels:
+            assert l.reset_interval < 1 << 20, "books were matured anyway"
