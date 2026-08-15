@@ -1,8 +1,10 @@
-# Same rate, 16x smaller codebook: K=256 x 14 levels instead of
+# Small books, deep ladder: K=256 x 20 levels instead of
 # K=2048/8192/16384 x 8.
 #
-# 30,576 bits/window (7.46 b/px) against the baseline's 30,424 (7.43),
-# so +0.5% rate -- but the codebook falls from 72 MiB to 4.4 MiB at int8.
+# Full depth is 43,680 bits/window (10.66 b/px) against the baseline's
+# 30,424 (7.43), so the ladder reaches 44% HIGHER at the top -- but it is
+# a superset, and 20-20-13 sits at 7.16 b/px for a like-for-like read
+# against the 0.9678 baseline. Codebook: 6.25 MiB vs 72 MiB at int8.
 #
 # Three independent measurements point here:
 #
@@ -29,7 +31,7 @@ data:
     size: 19150          # 114 GiB
 
 model:
-  tiers: ["1:512:256:14", "4:512:256:14", "16:256:256:14"]
+  tiers: ["1:512:256:20", "4:512:256:20", "16:256:256:20"]
   # Path sampling: every codebook trains equally often. Nested sampling
   # gave tier-2 level 14 P(active)=0.006; path gives 0.197 (32x). The
   # path starts at (4,0,0) -- 32 bits for a 64x64 patch of 128-d vectors
@@ -48,6 +50,10 @@ model:
     skip_masked: true
     warmup_steps: 500    # VQ-free warmup, then the init below
     kmeans_sample: 32768
+    # Belt and braces: the books here share nothing with the source
+    # checkpoint, so they must not be matured. (The scalar-shape bug above
+    # is fixed, but this makes the intent explicit.)
+    mature_warmstart: false
     init_mode: tree      # 92.9% vs 40.0% of K at deep levels
     init_per_code: 2000  # per-tier budget; K=256 makes this cheap
     reset_mode: split    # LBG centroid split, not outlier placement
@@ -62,6 +68,17 @@ train:
   init_from: checkpoints/tessera_vq8_split2/model_best.pt
   optim: {lr: 5.0e-5, wd: 0.01, warmup: 2000, lr0_steps: 100}
   save_interval: 2500
+
+eval:
+  # The inherited tuples (8-1-0 ... 8-8-8) are invalid at depth 20. These
+  # are chosen to sit at nearly the same bits/px as the old figure points,
+  # so the recon panels stay comparable, plus the new full-depth top:
+  #   20-1-0   0.070 b/px  (was 8-1-0  0.072)
+  #   20-13-0  0.445       (was 8-8-0  0.428)
+  #   20-20-3  2.164       (was 8-8-2  2.178)
+  #   20-20-13 7.164       (was 8-8-8  7.428)
+  #   20-20-20 10.664      (new)
+  recon_tuples: ["20-1-0", "20-13-0", "20-20-3", "20-20-13", "20-20-20"]
 
 log:
   run_tag: tessera_vq8_k256
