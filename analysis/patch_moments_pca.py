@@ -89,6 +89,34 @@ def collect(store, rows, n_chips, win, min_valid, workers):
     return M, S
 
 
+def load_or_collect(store_dir, cache, n_chips, n_val_chips, win, min_valid,
+                    workers):
+    """(M, S, Mv, Sv) — train moments and GEOGRAPHICALLY held-out val ones.
+
+    The val windows come from the store's own held-out geographic cells,
+    not from a random split of the same windows: windows cut from one chip
+    are spatially correlated, so a random split would leak and every
+    held-out number would read too well.
+    """
+    import os
+    if cache and os.path.exists(cache):
+        z = np.load(cache)
+        print(f"loaded {z['M'].shape[0]:,} train / {z['Mv'].shape[0]:,} val "
+              f"windows from {cache}")
+        return z["M"], z["S"], z["Mv"], z["Sv"]
+    store = ChipStore(store_dir)
+    tr, va = store.split(0.04, 0)
+    print(f"{store_dir}: {len(store.index):,} chips, sampling {n_chips} of "
+          f"{len(tr):,} train and {n_val_chips} of {len(va):,} val chips")
+    M, S = collect(store, tr, n_chips, win, min_valid, workers)
+    print("  -- val split --", flush=True)
+    Mv, Sv = collect(store, va, n_val_chips, win, min_valid, workers)
+    if cache:
+        np.savez(cache, M=M, S=S, Mv=Mv, Sv=Sv)
+        print(f"cached to {cache}")
+    return M, S, Mv, Sv
+
+
 def pca_report(name, A, ks, cosine=False, back=None, ref=None):
     """Fit on half, score on the other half. A: (N, D) float64 torch.
 
@@ -192,6 +220,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--store", default="/data/tessera-samples/chips_512")
     ap.add_argument("--chips", type=int, default=750)
+    ap.add_argument("--val-chips", type=int, default=150)
     ap.add_argument("--win", type=int, default=64)
     ap.add_argument("--min-valid", type=float, default=0.9)
     ap.add_argument("--workers", type=int, default=8)
@@ -201,19 +230,9 @@ def main():
     args = ap.parse_args()
 
     torch.set_grad_enabled(False)
-    if args.cache and __import__("os").path.exists(args.cache):
-        z = np.load(args.cache)
-        M, S = z["M"], z["S"]
-        print(f"loaded {M.shape[0]:,} windows from {args.cache}")
-    else:
-        store = ChipStore(args.store)
-        tr, _ = store.split(0.04, 0)
-        print(f"{args.store}: {len(store.index):,} chips, "
-              f"sampling {args.chips} from the {len(tr):,} train chips")
-        M, S = collect(store, tr, args.chips, args.win, args.min_valid,
-                       args.workers)
-        if args.cache:
-            np.savez(args.cache, M=M, S=S)
+    M, S, _, _ = load_or_collect(args.store, args.cache, args.chips,
+                                 args.val_chips, args.win, args.min_valid,
+                                 args.workers)
     print(f"\ncollected {M.shape[0]:,} windows of {args.win}px "
           f"({M.shape[1]} bands)")
 
