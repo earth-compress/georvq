@@ -82,7 +82,8 @@ def evaluate(m, Xn, X, mu, sd, nb):
 
 
 def train_one(X, Xv, dim, quant, steps, lr, batch, device, commit=0.25,
-              loss_space="raw", drift_every=200, log_every=0):
+              loss_space="raw", drift_every=200, log_every=0,
+              return_model=False):
     """X, Xv: original-unit (N, 256) tensors on `device`."""
     mu, sd = X.mean(0), X.std(0).clamp_min(1e-6)
     Xn, Xvn = (X - mu) / sd, (Xv - mu) / sd
@@ -142,7 +143,8 @@ def train_one(X, Xv, dim, quant, steps, lr, batch, device, commit=0.25,
         if log_every and (s + 1) % log_every == 0:
             print(f"    step {s+1}/{steps} loss={float(loss):.5f}",
                   flush=True)
-    return evaluate(m, Xvn, Xv, mu, sd, nb)
+    r = evaluate(m, Xvn, Xv, mu, sd, nb)
+    return (r, m, mu, sd) if return_model else r
 
 
 def gauss_bits(X, rel_targets, blocks=None):
