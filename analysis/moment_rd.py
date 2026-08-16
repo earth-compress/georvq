@@ -189,6 +189,13 @@ def main():
     ap.add_argument("--batch", type=int, default=4096)
     ap.add_argument("--lr", type=float, default=1e-3)
     ap.add_argument("--loss-space", default="raw", choices=["raw", "norm"])
+    ap.add_argument("--train-frac", type=float, default=1.0,
+                    help="use a leading fraction of the train windows. The "
+                         "cache is in chip order, so a prefix drops whole "
+                         "CHIPS -- thinning at random would keep every chip "
+                         "represented and, since windows within a chip are "
+                         "highly correlated, would barely reduce the "
+                         "effective sample size at all")
     ap.add_argument("--out", default="")
     args = ap.parse_args()
 
@@ -199,6 +206,8 @@ def main():
     X = torch.from_numpy(np.concatenate([M, S], 1)).float().to(dev)
     Xv = torch.from_numpy(np.concatenate([Mv, Sv], 1)).float().to(dev)
     nb = M.shape[1]
+    if args.train_frac < 1.0:
+        X = X[:max(1, int(args.train_frac * X.shape[0]))].contiguous()
     print(f"train {X.shape[0]:,} windows, val {Xv.shape[0]:,} "
           f"(geographically disjoint), d={X.shape[1]}")
 
