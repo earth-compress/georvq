@@ -218,6 +218,24 @@ def _pca_rgb(t, basis):
 def recon_figure(model, source, val_s, step, n=8, mins=None, tuples=None,
                  val_loc=None):
     """Original vs reconstructions at named depth tuples, PCA-RGB rendered."""
+    # eval() is load-bearing, not hygiene: VectorQuantizer.forward runs its
+    # lazy `_data_init` under `self.training`, so drawing this figure in
+    # train mode INITIALISES the codebooks -- from 8 val windows, by random
+    # sampling rather than the configured init_mode, and at whatever step
+    # the first figure lands on. It also lets an EMA update and a step
+    # increment run on validation data. (stage1_recon_figure below has
+    # always done this correctly; this one never did.)
+    was_training = model.training
+    model.eval()
+    try:
+        return _recon_figure(model, source, val_s, step, n, mins, tuples,
+                             val_loc)
+    finally:
+        if was_training:
+            model.train()
+
+
+def _recon_figure(model, source, val_s, step, n, mins, tuples, val_loc):
     val_x, val_valid = source.prep(val_s[:n], val_s.device)
     loc = val_loc[:n] if val_loc is not None else None
     if tuples:
