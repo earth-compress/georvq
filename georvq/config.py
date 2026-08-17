@@ -379,6 +379,15 @@ class OptimConfig(StrictModel):
     # get its final LR. "constant" holds `lr` after warmup, so the run can
     # be stopped at any point without leaving the schedule half-applied.
     schedule: Literal["cosine", "constant"] = "cosine"
+    # Global grad-norm clip; 0 disables. ON by default because its absence
+    # is a live failure mode, not a tuning choice: with no clip a single
+    # bad batch blew up a run at step 1900 (loss 0.035 -> 0.148, centred
+    # ceiling cosine 0.807 -> 0.036, i.e. collapse to emitting only the
+    # transmitted mean) and Adam did not recover, because the enormous
+    # gradient inflates the second moment and suppresses every subsequent
+    # update. Small batches make this more likely, so it matters most
+    # exactly where we want to run.
+    grad_clip: float = 1.0
 
 
 class BatchRamp(StrictModel):
