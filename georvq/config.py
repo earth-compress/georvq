@@ -160,6 +160,19 @@ class VQConfig(StrictModel):
     # the run is to keep them live, because it silently overrides
     # ema_decay and disables reset_mode entirely.
     mature_warmstart: bool = True
+    # Matryoshka truncation DURING the VQ-free warmup. The warmup branch
+    # otherwise decodes at full depth every step, so the model has no
+    # reason to make the coarse tiers informative -- the decoder always
+    # has the fine tier available -- and "ignore tier 0" is a perfectly
+    # good solution to the warmup objective. Measured on a run with an
+    # 11k-step warmup: tier 0's latent fell to 1.16 effective dimensions
+    # of 512 with its first codebook level at perplexity 1 (one codeword
+    # for every window), while tiers 1 and 2 rose to 5.2 and 7.3. It was
+    # the RICHEST tier at step 5000 and atrophied from there.
+    # With this on, a random prefix of tiers is kept and the rest are
+    # zeroed to true informational absence, so a coarse-only row has to be
+    # reconstructed from the coarse tier alone.
+    warmup_truncate: bool = True
 
 
 class StatsCondConfig(StrictModel):
