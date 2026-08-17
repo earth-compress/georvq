@@ -83,6 +83,65 @@ def chip_patches(store, sh, slot, win, min_valid, source="tessera"):
     return out
 
 
+S2_10M = ["B02", "B03", "B04", "B08"]
+S2_20M = ["B05", "B06", "B07", "B8A", "B11", "B12"]
+S2_60M = ["B01", "B09", "B10"]
+
+
+def s2_scene_patches(scene, win, min_valid, max_cloud=0.02):
+    """13-band Sentinel-2 windows on the 10m lattice, in reflectance units.
+
+    The three native grids divide exactly (1068 = 2*534 = 6*178), so each
+    group is nearest-upsampled onto the 10m lattice and the 13 bands are
+    stacked. Reflectance is a common physical unit across bands, so no
+    per-band rescaling is applied -- that would be an arbitrary reweighting
+    of the PCA, and the embeddings this is compared against are used raw.
+
+    Cloudy windows are rejected: cloud is an enormous, spectrally flat
+    variance source that would dominate the within-patch covariance and
+    make the scene look SIMPLER than it is.
+    """
+    import rasterio
+    planes, ref = [], None
+    for names, up in ((S2_10M, 1), (S2_20M, 2), (S2_60M, 6)):
+        for b in names:
+            with rasterio.open(f"{scene}/{b}.tif") as d:
+                a = d.read(1).astype(np.float32) / 10000.0
+            if up > 1:
+                a = np.repeat(np.repeat(a, up, 0), up, 1)
+            ref = a.shape[0] if ref is None else ref
+            planes.append(a[:ref, :ref])
+    x = np.stack(planes)                       # (13, px, px)
+    with rasterio.open(f"{scene}/cloud_mask.tif") as d:
+        cm = d.read(1)[:ref, :ref]
+    ok = (cm == 0) & (x > 0).all(0)
+    out = []
+    for r in range(0, ref - win + 1, win):
+        for c in range(0, ref - win + 1, win):
+            v = ok[r:r + win, c:c + win].reshape(-1)
+            if v.mean() < 1.0 - max_cloud or v.sum() < min_valid * win * win:
+                continue
+            out.append(x[:, r:r + win, c:c + win].reshape(13, -1)[:, v].T
+                       [:4096].copy())
+    return out
+
+
+def collect_s2(root, win, min_valid, max_patches, n_scenes, workers):
+    import glob
+    scenes = sorted(glob.glob(f"{root}/*/*/*/B02.tif"))
+    rng = np.random.default_rng(0)
+    sel = rng.choice(len(scenes), min(n_scenes, len(scenes)), replace=False)
+    out = []
+    with ThreadPoolExecutor(workers) as ex:
+        for res in ex.map(lambda i: s2_scene_patches(
+                scenes[int(i)].rsplit("/", 1)[0], win, min_valid), sel):
+            out.extend(res)
+            print(f"  {len(out)} patches", flush=True)
+            if len(out) >= max_patches:
+                break
+    return out[:max_patches]
+
+
 def collect(store, rows, n_chips, win, min_valid, workers, max_patches,
             source="tessera"):
     sel = rows.sample(n=min(n_chips, len(rows)), random_state=0)
@@ -146,7 +205,9 @@ def pca_ve(X, ks):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--store", default="/data/tessera-samples/chips_512")
-    ap.add_argument("--source", default="tessera", choices=["tessera", "ae"])
+    ap.add_argument("--source", default="tessera",
+                    choices=["tessera", "ae", "s2"])
+    ap.add_argument("--scenes", type=int, default=60)
     ap.add_argument("--chips", type=int, default=120)
     ap.add_argument("--patches", type=int, default=384)
     ap.add_argument("--win", type=int, default=64)
@@ -157,10 +218,14 @@ def main():
 
     torch.set_grad_enabled(False)
     torch.set_num_threads(args.threads)
-    store = ChipStore(args.store)
-    tr, _ = store.split(0.04, 0)
-    pats = collect(store, tr, args.chips, args.win, args.min_valid,
-                   args.workers, args.patches, args.source)
+    if args.source == "s2":
+        pats = collect_s2(args.store, args.win, args.min_valid,
+                          args.patches, args.scenes, args.workers)
+    else:
+        store = ChipStore(args.store)
+        tr, _ = store.split(0.04, 0)
+        pats = collect(store, tr, args.chips, args.win, args.min_valid,
+                       args.workers, args.patches, args.source)
     print(f"{len(pats)} patches of {args.win}px "
           f"({pats[0].shape[0]} valid px x {pats[0].shape[1]} bands each)\n")
 
