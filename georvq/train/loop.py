@@ -122,6 +122,10 @@ def train(cfg: Config, gpu=0):
           f"{tuple_bits(specs, canon['full']):.0f} bits/window", flush=True)
 
     model = build_model(cfg, device)
+    if model.side_bits():
+        print(f"stats channel: +{model.side_bits():.0f} bits/window "
+              f"({model.side_bits() / cfg.model.window ** 2:.3f} b/px) "
+              f"charged at every depth", flush=True)
     source = model.source
     store, train_rows, val_rows, val_s, pool = setup_data(cfg, source, device)
     val_rows.to_parquet(os.path.join(run_dir, "val_chips.parquet"))
@@ -176,8 +180,13 @@ def train(cfg: Config, gpu=0):
                 s = pool.sample_batch(
                     min(cfg.train.batch_windows, max(need)),
                     cfg.model.window, align=cfg.data.pool.align_crops)
-                x0, _ = source.prep(s, device)
-                for i, z in enumerate(model.encode_levels(x0)):
+                x0, v0 = source.prep(s, device)
+                # must match the training distribution: with stats
+                # conditioning the encoder sees a mean-SUBTRACTED field, so
+                # books fitted on un-centred latents would be fitted to
+                # vectors the model never produces
+                for i, z in enumerate(
+                        model.encode_levels(x0, model._stats_of(x0, v0), v0)):
                     if got[i] < need[i]:
                         samples[i].append(z)
                         got[i] += z.shape[0]
@@ -295,7 +304,14 @@ def train(cfg: Config, gpu=0):
     # batch_windows is the GLOBAL batch: splitting it keeps the effective
     # batch, the LR schedule and the step count identical to a single-GPU
     # run, so extra ranks buy wall-clock rather than changing the recipe.
-    batch = cfg.train.batch_windows // ddp_world
+    batch_full = cfg.train.batch_windows // ddp_world
+    batch = batch_full
+    _ramp = cfg.train.batch_ramp
+    if _ramp is not None:
+        assert batch_full % _ramp.divisor == 0, \
+            "train.batch_windows must divide by batch_ramp.divisor"
+        print(f"batch ramp: {batch_full // _ramp.divisor} windows for the "
+              f"first {_ramp.until} steps, then {batch_full}", flush=True)
     align = cfg.data.pool.align_crops
     t0, data_ms = time.time(), 0.0
     best_cos = -1.0
@@ -374,10 +390,12 @@ def train(cfg: Config, gpu=0):
                 samples = [[] for _ in specs]
                 got = [0] * len(specs)
                 while any(g < w for g, w in zip(got, want)):
-                    xs, _ = source.prep(
+                    xs, vs = source.prep(
                         pool.sample_batch(batch, cfg.model.window, align=align),
                         device)
-                    for i, z in enumerate(model.encode_levels(xs)):
+                    for i, z in enumerate(
+                            model.encode_levels(xs, model._stats_of(xs, vs),
+                                                vs)):
                         if got[i] >= want[i]:
                             continue
                         zf = z.reshape(-1, z.shape[-1])
@@ -403,6 +421,9 @@ def train(cfg: Config, gpu=0):
                   f"{v.init_mode} init", flush=True)
 
         td = time.time()
+        if _ramp is not None:
+            batch = (batch_full // _ramp.divisor if step <= _ramp.until
+                     else batch_full)
         loc = None
         if needs_loc:
             s, rows = pool.sample_batch(batch, cfg.model.window, align=align,
@@ -411,13 +432,15 @@ def train(cfg: Config, gpu=0):
         else:
             s = pool.sample_batch(batch, cfg.model.window, align=align)
         x, valid = source.prep(s, device)
+        st = model._stats_of(x, valid)   # None unless stats_cond is on
         data_ms = 0.9 * data_ms + 0.1 * (time.time() - td) * 1000
         amp = torch.autocast(device.type, torch.bfloat16, enabled=amp_on)
         select = torch.zeros((), device=device)
         if v.warmup_steps and step <= v.warmup_steps:
             with amp:
-                zs = model.encode_levels(x)
-                out = model.decode(zs, Ls_full.expand(x.shape[0], -1))
+                zs = model.encode_levels(x, st, valid)
+                out = model.decode(zs, Ls_full.expand(x.shape[0], -1),
+                                   st, valid)
             out = out.float()
             commit = torch.zeros((), device=device)
         else:
@@ -442,7 +465,7 @@ def train(cfg: Config, gpu=0):
                     < v.passthrough_frac
                 Ls = torch.where(pt[:, None], Ls_full.expand_as(Ls), Ls)
             with amp:
-                zs = model.encode_levels(x)
+                zs = model.encode_levels(x, st, valid)
             zqs, commit, select = model.quantize(zs, Ls, loc=loc)
             if pt is not None:
                 # straight replacement, not straight-through: these rows
@@ -451,7 +474,7 @@ def train(cfg: Config, gpu=0):
                 zqs = [torch.where(m3, z.to(zq.dtype), zq)
                        for z, zq in zip(zs, zqs)]
             with amp:
-                out = model.decode(zqs, Ls)
+                out = model.decode(zqs, Ls, st, valid)
             out = out.float()
         recon_loss, m = source.recon_stats(out, x, valid)
         loss = recon_loss + commit_weight * commit + select_weight * select
@@ -599,11 +622,14 @@ def train(cfg: Config, gpu=0):
                 scalars["val/cos_ceiling"] = vs["cos_ceiling"]
                 scalars["val/ccos_ceiling"] = vs["ccos_ceiling"]
                 scalars["val/cos_blockmean"] = vs["cos_blockmean"]
+                sb = model.side_bits()
                 f1 = rd_figure(cbt, vs, specs, val_ts, step,
-                               ref_fronts=ref_fronts, px=cfg.model.window ** 2)
+                               ref_fronts=ref_fronts, px=cfg.model.window ** 2,
+                               side_bits=sb)
                 f1b = rd_figure(cbt, vs, specs, val_ts, step,
                                 ref_fronts=ref_fronts,
-                                px=cfg.model.window ** 2, dist_log=True)
+                                px=cfg.model.window ** 2, dist_log=True,
+                                side_bits=sb)
                 f2 = codebook_figure(vs, specs, step)
                 scalars["figs/rd"] = wandb.Image(f1)
                 scalars["figs/rd_log"] = wandb.Image(f1b)

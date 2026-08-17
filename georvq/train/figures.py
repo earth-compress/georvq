@@ -13,9 +13,9 @@ from georvq.train.validate import canonical_tuples, tname
 
 
 def rd_figure(cos_by_tuple, vs, specs, tuples, step, ref_fronts=(), px=256,
-              dist_log=False):
+              dist_log=False, side_bits=0.0):
     """dist_log=True: y = 1 - cos on a log scale (separates the 0.99x's)."""
-    bits = np.array([tuple_bits(specs, t) for t in tuples]) / px
+    bits = np.array([tuple_bits(specs, t, side_bits) for t in tuples]) / px
     cos = np.array([cos_by_tuple[tname(t)] for t in tuples])
     L0s = np.array([t[0] for t in tuples])
     Y = (lambda c: 1.0 - np.asarray(c)) if dist_log else \

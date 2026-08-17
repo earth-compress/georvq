@@ -162,6 +162,35 @@ class VQConfig(StrictModel):
     mature_warmstart: bool = True
 
 
+class StatsCondConfig(StrictModel):
+    """Transmit the per-window mean as a side channel; code what is left.
+
+    The mean is subtracted before the encoder and added back after the
+    decoder, so loss and metrics stay on the full field. Both encoder and
+    decoder are conditioned on it. See georvq/model/stats_cond.py.
+
+    use_std is off and untested: matching the std was measured to HURT
+    (full-depth cosine 0.9700 -> 0.9678), unlike the S2 version this is
+    ported from, whose bands have genuinely different physical scales.
+
+    bits_per_band is rate accounting only -- it does not quantize anything
+    during training. 6 bits/band reaches cos 0.9767 against 0.9769 for the
+    exact mean, and below 4 the channel is worse than nothing."""
+    subtract_mean: bool = True
+    cond_encoder: bool = True
+    cond_decoder: bool = True
+    use_std: bool = False
+    bits_per_band: int = 6
+
+    @model_validator(mode="after")
+    def _check(self):
+        assert not self.use_std, "stats_cond.use_std is not implemented"
+        assert self.subtract_mean or self.cond_encoder or self.cond_decoder, \
+            "stats_cond does nothing with every option off"
+        assert self.bits_per_band > 0
+        return self
+
+
 class SigmaConfig(StrictModel):
     """Stage-1 continuous mode: no codebooks; the decoder is conditioned on a
     per-tier additive-noise level instead of the matryoshka depth.
@@ -255,6 +284,7 @@ class ModelConfig(StrictModel):
     # and the bitstream contract are unaffected.
     normalize_latents: bool = False
     sigma: Optional[SigmaConfig] = None
+    stats_cond: Optional[StatsCondConfig] = None
     conditioning: Optional[Conditioning] = None
     rate: Optional[RateConfig] = None
     # hierarchical local attention: per-tier radius in own-tier cells
@@ -351,9 +381,28 @@ class OptimConfig(StrictModel):
     schedule: Literal["cosine", "constant"] = "cosine"
 
 
+class BatchRamp(StrictModel):
+    """Run the opening steps at a fraction of the batch, then step up.
+
+    Early training is an easy problem -- getting through many parameter
+    updates matters more than the gradient quality of any one of them --
+    so a small batch buys more progress per unit of wall-clock. Note the
+    learning rate is NOT rescaled: a quarter batch at the same lr means
+    ~2x the gradient noise, which is usually benign (and mildly helpful)
+    this early, and the lr warmup covers the first steps regardless."""
+    until: int = 5000
+    divisor: int = 4
+
+    @model_validator(mode="after")
+    def _check(self):
+        assert self.until > 0 and self.divisor > 1
+        return self
+
+
 class TrainConfig(StrictModel):
     steps: int = 20000
     batch_windows: int = 512
+    batch_ramp: Optional[BatchRamp] = None
     amp: bool = True
     grad_ckpt: bool = False
     tf32: bool = True
