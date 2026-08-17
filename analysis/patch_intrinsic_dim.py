@@ -38,15 +38,38 @@ import torch
 from georvq.data.store import ChipStore
 
 SCALE_MAX = 1.0
+AE_NODATA = -128
 
 
-def chip_patches(store, sh, slot, win, min_valid):
-    """Valid-enough windows of one chip as (n, npix, bands) float32."""
+def _dequant(store, sh, slot, source):
+    """(x, valid) for one chip: (bands, px, px) float32 and (px, px) bool.
+
+    tessera: int8 * per-pixel float16 scale, nodata = all-bands-zero.
+    ae:      signed-square dequant of int8, then per-pixel L2 NORMALISATION
+             -- AlphaEarth pixels are unit vectors, so they lie on a sphere.
+             That is a real difference for this measurement: the radial
+             direction carries no information, so one of the 64 dimensions
+             is spent by construction and the within-patch variation is
+             purely angular.
+    """
     a = np.asarray(store.open_shard(sh)[slot])
+    if source == "ae":
+        valid = a[0] != AE_NODATA
+        x = (a.astype(np.float32) / 127.5)
+        x = np.square(x) * np.sign(x)
+        x = x * valid[None]
+        n = np.linalg.norm(x, axis=0, keepdims=True)
+        x = x / np.maximum(n, 1e-6)
+        return x, valid
     sc = np.asarray(np.load(f"{store.dir}/scales_{int(sh):04d}.npy",
                             mmap_mode="r")[slot]).astype(np.float32)
     valid = (a != 0).any(0) & (sc > 0) & (sc < SCALE_MAX)
-    x = a.astype(np.float32) * np.where(valid, sc, 0.0)[None]
+    return a.astype(np.float32) * np.where(valid, sc, 0.0)[None], valid
+
+
+def chip_patches(store, sh, slot, win, min_valid, source="tessera"):
+    """Valid-enough windows of one chip as (n, npix, bands) float32."""
+    x, valid = _dequant(store, sh, slot, source)
     B, px, _ = x.shape
     out = []
     for r in range(0, px - win + 1, win):
@@ -60,13 +83,14 @@ def chip_patches(store, sh, slot, win, min_valid):
     return out
 
 
-def collect(store, rows, n_chips, win, min_valid, workers, max_patches):
+def collect(store, rows, n_chips, win, min_valid, workers, max_patches,
+            source="tessera"):
     sel = rows.sample(n=min(n_chips, len(rows)), random_state=0)
     jobs = [(int(r["shard"]), int(r["slot"])) for _, r in sel.iterrows()]
     out = []
     with ThreadPoolExecutor(workers) as ex:
         for res in ex.map(lambda j: chip_patches(store, j[0], j[1], win,
-                                                 min_valid), jobs):
+                                                 min_valid, source), jobs):
             out.extend(res)
             if len(out) >= max_patches:
                 break
@@ -122,6 +146,7 @@ def pca_ve(X, ks):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--store", default="/data/tessera-samples/chips_512")
+    ap.add_argument("--source", default="tessera", choices=["tessera", "ae"])
     ap.add_argument("--chips", type=int, default=120)
     ap.add_argument("--patches", type=int, default=384)
     ap.add_argument("--win", type=int, default=64)
@@ -135,7 +160,7 @@ def main():
     store = ChipStore(args.store)
     tr, _ = store.split(0.04, 0)
     pats = collect(store, tr, args.chips, args.win, args.min_valid,
-                   args.workers, args.patches)
+                   args.workers, args.patches, args.source)
     print(f"{len(pats)} patches of {args.win}px "
           f"({pats[0].shape[0]} valid px x {pats[0].shape[1]} bands each)\n")
 
