@@ -442,8 +442,24 @@ def train(cfg: Config, gpu=0):
         if v.warmup_steps and step <= v.warmup_steps:
             with amp:
                 zs = model.encode_levels(x, st, valid)
-                out = model.decode(zs, Ls_full.expand(x.shape[0], -1),
-                                   st, valid)
+                Lw = Ls_full.expand(x.shape[0], -1)
+                if v.warmup_truncate and len(specs) > 1:
+                    # keep a random PREFIX of tiers, zero the rest. Depth
+                    # within a tier is meaningless here (nothing is
+                    # quantized), so truncation is per-tier presence --
+                    # the same "true informational absence" the stage-1
+                    # path uses. Conditioning says full depth for the
+                    # tiers that are present and 0 for the absent ones,
+                    # which is exactly what the decoder is being handed.
+                    keep = torch.randint(1, len(specs) + 1,
+                                         (x.shape[0],), device=device)
+                    ti = torch.arange(len(specs), device=device)[None]
+                    present = ti < keep[:, None]              # (B, tiers)
+                    Lw = torch.where(present, Ls_full,
+                                     torch.zeros_like(Ls_full))
+                    zs = [z * present[:, i].view(-1, 1, 1).to(z.dtype)
+                          for i, z in enumerate(zs)]
+                out = model.decode(zs, Lw, st, valid)
             out = out.float()
             commit = torch.zeros((), device=device)
         else:
