@@ -1,0 +1,48 @@
+# Resume of the stats-conditioning run after a system OOM kill at step
+# 19000 (no traceback, no CUDA error -- the kernel killed the process:
+# swap was 100% full and two other users held ~140 GB of RSS).
+#
+# The 114 GiB CPU-resident chip pool made this run the largest single RSS
+# on a shared box, i.e. the OOM killer's first choice. The pool is a
+# sampling RESERVOIR, not the dataset: reader threads refresh it at the
+# same rate regardless of size, so a smaller pool costs instantaneous
+# diversity but not streaming throughput. Half size = ~57 GiB.
+#
+# Warm start, so the step counter restarts at 0 and this run covers the
+# remaining 52,000 of the original 71,000:
+#   * warmup_steps 0   -- the codebooks are already fitted; a nonzero
+#                         value would re-run the tree init and throw away
+#                         19k steps of co-adaptation.
+#   * batch_ramp null  -- the ramp ended at step 10,000, long past.
+#   * lr 1.25e-4       -- what the original cosine schedule had reached at
+#                         step 19000 of 71000, so the decay continues
+#                         roughly where it left off rather than restarting
+#                         hot at 1.5e-4.
+#   * short optim warmup -- Adam's moments do not survive a warm start, so
+#                         they need a few hundred steps to refill, but the
+#                         1000-step schedule of a cold start is wasteful.
+#
+# mature_warmstart is false (inherited), so the loaded books stay LIVE at
+# decay 0.98 with resets every 2500 steps rather than being frozen.
+inherit: tessera_vq8_k256_statscond.yaml
+
+data:
+  pool:
+    size: 9575           # half of 19150; ~57 GiB down from 114
+
+model:
+  vq:
+    warmup_steps: 0      # books already fitted -- do NOT re-init
+
+train:
+  # resume from a COPY: this run reuses the run_tag, so it would
+  # otherwise overwrite the checkpoint it is resuming from.
+  init_from: /home/ali/.claude/jobs/10ba9216/tmp/statscond_step19000.pt
+  steps: 52000           # 71000 - 19000
+  batch_windows: 1024
+  batch_ramp: null
+  optim: {lr: 1.25e-4, wd: 0.01, warmup: 200, lr0_steps: 50}
+  save_interval: 2500
+
+log:
+  run_tag: tessera_vq8_k256_statscond
