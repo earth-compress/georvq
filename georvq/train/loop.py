@@ -315,6 +315,7 @@ def train(cfg: Config, gpu=0):
     align = cfg.data.pool.align_crops
     t0, data_ms = time.time(), 0.0
     best_cos = -1.0
+    best_is_quantized = False   # warmup selects on the ceiling; see below
     vs, cbt = {}, {}
     for step in range(1, cfg.train.steps + 1):
         if enc_frozen and step > cfg.train.freeze_encoder_steps:
@@ -589,23 +590,33 @@ def train(cfg: Config, gpu=0):
                                      vrng.choice(len(others), k,
                                                  replace=False)]
             canon_names = {tname(t) for t in canon.values()}
+            # During the VQ-free warmup the books are still whatever
+            # nn.Embedding was initialised with, so every quantized tuple
+            # would score the model against random vectors. Measure the
+            # ceiling only -- it is the sole meaningful number until the
+            # books are fitted, and it also keeps model_best.pt from
+            # tracking noise.
+            vq_live = not (v.warmup_steps and step <= v.warmup_steps)
             vs, cbt = validate(model, source, val_s, val_ts, canon_names,
-                               val_loc=val_loc)
+                               val_loc=val_loc, quantized=vq_live)
             if cfg.train.freeze_codec:    # keep the codec frozen (no EMA)
                 model.eval()
             if v.freeze_books:            # validate() leaves the model in
                 freeze_books(model)       # train() -- re-assert the freeze
             ccbt = vs.pop("_ccos", {})
             print(f"step {step} VAL: "
+                  + ("" if vq_live else "[warmup: ceiling only] ")
                   + " ".join(f"{k}({tname(t)})={cbt[tname(t)]:.4f}"
-                             for k, t in canon.items())
+                             for k, t in canon.items() if tname(t) in cbt)
                   + f" ceil={vs['cos_ceiling']:.4f}"
+                  + f" ccos_ceil={vs['ccos_ceiling']:.3f}"
                   + f" blockmean={vs['cos_blockmean']:.4f}"
-                  + f" ccos_full={ccbt.get(tname(canon['full']), 0):.3f}",
+                  + (f" ccos_full={ccbt.get(tname(canon['full']), 0):.3f}"
+                     if vq_live else ""),
                   flush=True)
             if use_wandb:
                 scalars = {f"val/cos_{k}": cbt[tname(t)]
-                           for k, t in canon.items()}
+                           for k, t in canon.items() if tname(t) in cbt}
                 scalars.update({k: val for k, val in vs.items()
                                 if k.startswith("sel_")})
                 scalars.update({f"val/ccos_{k}": ccbt[tname(t)]
@@ -622,37 +633,54 @@ def train(cfg: Config, gpu=0):
                 scalars["val/cos_ceiling"] = vs["cos_ceiling"]
                 scalars["val/ccos_ceiling"] = vs["ccos_ceiling"]
                 scalars["val/cos_blockmean"] = vs["cos_blockmean"]
-                sb = model.side_bits()
-                f1 = rd_figure(cbt, vs, specs, val_ts, step,
-                               ref_fronts=ref_fronts, px=cfg.model.window ** 2,
-                               side_bits=sb)
-                f1b = rd_figure(cbt, vs, specs, val_ts, step,
-                                ref_fronts=ref_fronts,
-                                px=cfg.model.window ** 2, dist_log=True,
-                                side_bits=sb)
-                f2 = codebook_figure(vs, specs, step)
-                scalars["figs/rd"] = wandb.Image(f1)
-                scalars["figs/rd_log"] = wandb.Image(f1b)
-                scalars["figs/codebook"] = wandb.Image(f2)
-                f4 = None
-                if "cosdist" in vs:
-                    f4 = cosdist_figure(vs["cosdist"], None, specs, step)
-                    scalars["figs/cosdist_by_level"] = wandb.Image(f4)
-                wandb.log(scalars, step=step)
-                plt.close(f1); plt.close(f1b); plt.close(f2)
-                if f4 is not None:
-                    plt.close(f4)
-                if step % cfg.train.fig_interval == 0 \
-                        or step == cfg.train.steps:
-                    rt = ([[int(x_) for x_ in t.split("-")]
-                           for t in cfg.eval.recon_tuples]
-                          if cfg.eval.recon_tuples else None)
-                    f3 = recon_figure(model, source, val_s, step, mins=mins,
-                                      tuples=rt, val_loc=val_loc)
-                    wandb.log({"figs/recon": wandb.Image(f3)}, step=step)
-                    plt.close(f3)
+                # Every figure below is a view of QUANTIZED behaviour --
+                # the R-D front, per-level codebook health, reconstructions
+                # at depth tuples. During the VQ-free warmup they would all
+                # be drawn against unfitted books, so log the scalars and
+                # skip them.
+                if not vq_live:
+                    wandb.log(scalars, step=step)
+                else:
+                    sb = model.side_bits()
+                    f1 = rd_figure(cbt, vs, specs, val_ts, step,
+                                   ref_fronts=ref_fronts,
+                                   px=cfg.model.window ** 2, side_bits=sb)
+                    f1b = rd_figure(cbt, vs, specs, val_ts, step,
+                                    ref_fronts=ref_fronts,
+                                    px=cfg.model.window ** 2, dist_log=True,
+                                    side_bits=sb)
+                    f2 = codebook_figure(vs, specs, step)
+                    scalars["figs/rd"] = wandb.Image(f1)
+                    scalars["figs/rd_log"] = wandb.Image(f1b)
+                    scalars["figs/codebook"] = wandb.Image(f2)
+                    f4 = None
+                    if "cosdist" in vs:
+                        f4 = cosdist_figure(vs["cosdist"], None, specs, step)
+                        scalars["figs/cosdist_by_level"] = wandb.Image(f4)
+                    wandb.log(scalars, step=step)
+                    plt.close(f1); plt.close(f1b); plt.close(f2)
+                    if f4 is not None:
+                        plt.close(f4)
+                    if step % cfg.train.fig_interval == 0 \
+                            or step == cfg.train.steps:
+                        rt = ([[int(x_) for x_ in t.split("-")]
+                               for t in cfg.eval.recon_tuples]
+                              if cfg.eval.recon_tuples else None)
+                        f3 = recon_figure(model, source, val_s, step,
+                                          mins=mins, tuples=rt,
+                                          val_loc=val_loc)
+                        wandb.log({"figs/recon": wandb.Image(f3)}, step=step)
+                        plt.close(f3)
 
-            full_cos = cbt[tname(canon["full"])]
+            # Track the ceiling during warmup: cos_full would be the
+            # model scored against unfitted books, so model_best.pt would
+            # be selected on noise. The two scales differ, so reset the
+            # running best when the books go live and the criterion
+            # switches.
+            if vq_live and not best_is_quantized:
+                best_cos, best_is_quantized = -1.0, True
+            full_cos = (cbt[tname(canon["full"])] if vq_live
+                        else vs["cos_ceiling"])
             metrics = {"cos_full": full_cos,
                        "cos_ceiling": vs["cos_ceiling"]}
             if full_cos > best_cos:
