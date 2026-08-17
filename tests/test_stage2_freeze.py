@@ -134,3 +134,17 @@ def test_loaded_cb_ignores_scalar_bookkeeping_buffers():
     for rvq in dst.rvqs:
         for l in rvq.levels:
             assert l.reset_interval < 1 << 20, "books were matured anyway"
+
+
+def test_grad_clip_is_on_by_default_and_bounds_the_update():
+    """Absence of clipping is a live failure mode, not a tuning choice: an
+    unclipped batch blew up a run at step 1900 and Adam never recovered."""
+    from georvq.config import load_config
+    cfg = load_config("configs/smoke.yaml", [])
+    assert cfg.train.optim.grad_clip == 1.0, "clipping must default ON"
+
+    ps = [torch.nn.Parameter(torch.zeros(4))]
+    ps[0].grad = torch.full((4,), 1e6)          # a pathological gradient
+    n = float(torch.nn.utils.clip_grad_norm_(ps, cfg.train.optim.grad_clip))
+    assert n > 1e6, "clip_grad_norm_ must report the PRE-clip norm"
+    assert abs(float(ps[0].grad.norm()) - 1.0) < 1e-4, "grad not clipped"

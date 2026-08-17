@@ -8,6 +8,7 @@ fp32 outside it. VQ state must never see reduced precision.
 from __future__ import annotations
 
 import json
+import math
 import os
 import time
 
@@ -315,6 +316,7 @@ def train(cfg: Config, gpu=0):
     align = cfg.data.pool.align_crops
     t0, data_ms = time.time(), 0.0
     best_cos = -1.0
+    nonfinite_steps = 0
     best_is_quantized = False   # warmup selects on the ceiling; see below
     vs, cbt = {}, {}
     for step in range(1, cfg.train.steps + 1):
@@ -496,6 +498,21 @@ def train(cfg: Config, gpu=0):
         if ddp_world > 1:
             # average (not sum) so the LR keeps its single-GPU meaning
             D.average_grads(base_p + rate_p)
+        # clip AFTER the all-reduce, so the norm is the one actually applied
+        gnorm = None
+        if cfg.train.optim.grad_clip > 0:
+            gnorm = float(torch.nn.utils.clip_grad_norm_(
+                base_p + rate_p, cfg.train.optim.grad_clip))
+            if not math.isfinite(gnorm):
+                # a non-finite gradient would write NaN/inf into Adam's
+                # moments and poison every later step, so drop it entirely
+                opt.zero_grad(set_to_none=True)
+                nonfinite_steps += 1
+                if nonfinite_steps <= 10 and D.is_main():
+                    print(f"step {step}: non-finite grad norm, step SKIPPED "
+                          f"({nonfinite_steps} so far)", flush=True)
+                sched.step()
+                continue
         opt.step(); sched.step()
 
         if probe is not None:
@@ -557,6 +574,13 @@ def train(cfg: Config, gpu=0):
                    "perf/tokens_per_s": tok_s,
                    "perf/data_wait_ms": data_ms,
                    "perf/pool_chips_loaded": pool.chips_loaded}
+            if gnorm is not None:
+                # PRE-clip norm: the diagnostic that would have shown the
+                # step-1900 blow-up coming
+                log["train/grad_norm"] = gnorm
+                log["train/grad_clipped"] = float(
+                    gnorm > cfg.train.optim.grad_clip)
+                log["train/nonfinite_steps"] = nonfinite_steps
             log.update({f"train/{k}": float(val) for k, val in m.items()})
             if pool.cycle:
                 log["data/epochs"] = pool.epochs
