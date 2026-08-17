@@ -55,7 +55,7 @@ def validate(model, source, val_s, tuples, canon_names=(), val_loc=None):
     cd_sum = [np.zeros(sp.depth + 1) for sp in specs] if track_cd else None
     cd_n = 0
     for cx, cv, cloc in chunks:
-        zs, cums = model.level_cumsums(cx, loc=cloc)
+        zs, cums = model.level_cumsums(cx, loc=cloc, valid=cv)
         if track_cd:       # per-tier cos-dist by cumulative level (0 = prior)
             for ti, sp in enumerate(specs):
                 z = zs[ti].float(); b = z.shape[0]
@@ -65,12 +65,12 @@ def validate(model, source, val_s, tuples, canon_names=(), val_loc=None):
             cd_n += zs[0].shape[0]
         n = int(cv.sum())
         for t in tuples:
-            o = model.eval_tuple(cums, t, cx)
+            o = model.eval_tuple(cums, t, cx, valid=cv)
             c = source.recon_stats(o, cx, cv)[1]["cos"]
             s = sums[tname(t)]; s[0] += float(c) * n; s[1] += n
             if tname(t) in canon_names:
                 s[2] += float(centered_cos(o, cx, cv)) * n
-        o = model.eval_ceiling(cx)
+        o = model.eval_ceiling(cx, valid=cv)
         c = source.recon_stats(o, cx, cv)[1]["cos"]
         ceil_sum[0] += float(c) * n; ceil_sum[1] += n
         ceil_sum[2] += float(centered_cos(o, cx, cv)) * n

@@ -119,20 +119,14 @@ class PyramidAttnDecoder(nn.Module):
         fdim = suffix_dim or dim
         return fdim + (dim * (len(specs) - 1) if cls_bridge else 0)
 
-    def forward(self, zqs, cond_arg):
+    def forward(self, zqs, cond_arg, stats=None):
         """zqs: list of (B, cells_i, dim_i). cond_arg: (B, n_tiers) integer
         depths (depth mode), or (B, n_tiers) per-tier sigma (sigma_cond)."""
         if self.suffix_dim:
-            return self._forward_suffix(zqs, cond_arg)
+            return self._forward_suffix(zqs, cond_arg, stats)
         toks = torch.cat([proj(z) for proj, z in zip(self.projs, zqs)], 1)
         x = toks + self.pos
-        if self.sigma_cond:
-            cond = sigma_embed(cond_arg, self.sigma_freqs)
-        else:
-            Ls = cond_arg
-            cond = torch.cat([thermometer(Ls[:, i], sp.depth, Ls.device)
-                              for i, sp in enumerate(self.specs)], -1)
-        c = self.cond_mlp(cond)
+        c = self._cond(cond_arg, stats)
 
         def run(h, blocks):
             m = getattr(self, "attn_mask", None)
@@ -166,20 +160,26 @@ class PyramidAttnDecoder(nn.Module):
             fine = torch.cat(parts, -1)
         return self.head(fine)
 
-    def _cond(self, cond_arg):
+    def _cond(self, cond_arg, stats=None):
+        """AdaLN conditioning. `stats` (B, dim) is the patch-mean embedding,
+        added to the depth/sigma conditioning rather than concatenated, so
+        cond_in is unchanged and a checkpoint without stats conditioning
+        keeps exactly its current geometry."""
         if self.sigma_cond:
-            return self.cond_mlp(sigma_embed(cond_arg, self.sigma_freqs))
-        Ls = cond_arg
-        return self.cond_mlp(torch.cat(
-            [thermometer(Ls[:, i], sp.depth, Ls.device)
-             for i, sp in enumerate(self.specs)], -1))
+            c = self.cond_mlp(sigma_embed(cond_arg, self.sigma_freqs))
+        else:
+            Ls = cond_arg
+            c = self.cond_mlp(torch.cat(
+                [thermometer(Ls[:, i], sp.depth, Ls.device)
+                 for i, sp in enumerate(self.specs)], -1))
+        return c if stats is None else c + stats
 
-    def _forward_suffix(self, zqs, cond_arg):
+    def _forward_suffix(self, zqs, cond_arg, stats=None):
         """Narrow-suffix path: base tiers through the full AdaLN stack (few
         tokens), fine tier through neighborhood cross blocks at suffix_dim."""
         from torch.utils.checkpoint import checkpoint
         ckpt = self.grad_ckpt and self.training
-        c = self._cond(cond_arg)
+        c = self._cond(cond_arg, stats)
         base = torch.cat([proj(z) for proj, z in
                           zip(self.projs[:-1], zqs[:-1])], 1) + self.pos
         for blk in self.blocks:

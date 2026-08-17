@@ -86,8 +86,13 @@ class ViTTokenizer(nn.Module):
                 fine = layer(fine, base)
         return fine
 
-    def forward(self, x):
+    def forward(self, x, stats_bias=None):
+        # stats_bias: (B, dim) added to the CLS token, as ring-space's
+        # `stats_proj` does. The CLS token is the coarsest tier's readout,
+        # so this is where knowing the patch mean is most directly useful.
         streams = [self.cls.expand(x.shape[0], -1, -1)]
+        if stats_bias is not None:
+            streams[0] = streams[0] + stats_bias.unsqueeze(1)
         streams += [pe(x).flatten(2).transpose(1, 2) for pe in self.patches]
         if self.suffix_dim:
             # base tiers: full self-attention stack on few tokens; finest

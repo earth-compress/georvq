@@ -1,0 +1,89 @@
+# Stats conditioning: send the patch mean, let the pyramid code the rest.
+#
+# THE HYPOTHESIS. Tier 0's grid is 1x1, so its cell IS the 64px window and
+# it currently spends its 160 bits largely locating the patch in embedding
+# space -- measured on the k256 checkpoint, 20-0-0 recovers the window mean
+# to rel 0.154 / cos 0.9646, while conveying almost nothing about spread
+# (std rel 0.835, WORSE than the 0.384 a constant predictor gets, because
+# one token decodes to a nearly flat patch). Hand the mean over as a side
+# channel and tier 0 is free to encode low-frequency SHAPE instead, which
+# should push each tier's job up in frequency and raise fidelity at every
+# depth -- while the output is mean-corrected for free.
+#
+# EVIDENCE IT IS WORTH TRYING (analysis/moment_match.py, k256 checkpoint):
+# forcing the reconstruction to match the true window mean lifts
+# full-depth cosine 0.9700 -> 0.9769, where spending an extra 3.5 b/px
+# inside the pyramid (7.164 -> 10.664) buys only +0.0021. A crude uniform
+# 6-bit/band channel captures nearly all of it (0.9767).
+#
+# MEAN ONLY, NO STD. The S2 version this is ported from (ring-space,
+# `_normalize_bands`) standardises by mean AND std. Matching the std was
+# measured to HURT here (0.9700 -> 0.9678) and to give back a third of the
+# mean's gain when applied on top of it (0.9747). S2 bands have different
+# physical scales and per-scene illumination; Tessera's 128 dims are a
+# learned embedding already on comparable scales.
+#
+# RATE. Charged, not free: 128 bands x 6 bits = 768 bits = 0.188 b/px at
+# EVERY depth, via tuple_bits(side_bits=...). The ring-space lesson is
+# that an uncharged stats channel silently became 34% of the bitstream at
+# L=1. Compare against k256 as 10.664 b/px @ 0.9722; this run must beat
+# that at 10.852 b/px to be a real win.
+inherit: tessera_vq8.yaml
+
+data:
+  pool:
+    size: 19150          # 114 GiB, as k256
+
+model:
+  tiers: ["1:512:256:20", "4:512:256:20", "16:256:256:20"]
+  depth_sampling: path
+  min_depths: [4, 0, 0]
+  full_frac: 0.15
+  stats_cond:
+    subtract_mean: true
+    cond_encoder: true   # the encoder cannot see the mean once subtracted
+    cond_decoder: true
+    bits_per_band: 6     # rate accounting only; training uses the true mean
+  vq:
+    commit_weight: 0.25
+    dead_threshold: 0.000625
+    ema_decay: 0.98
+    bf16_scores: true
+    skip_masked: true
+    # 20k unquantized: the encoder/decoder must first learn to work on a
+    # mean-REMOVED field, which is a different distribution from anything
+    # we have trained on. Fitting books before that would fit them to
+    # latents the converged model never produces.
+    warmup_steps: 20000
+    kmeans_sample: 32768
+    mature_warmstart: false
+    init_mode: tree
+    init_per_code: 2000
+    reset_mode: split
+    book_bits: 8
+    passthrough_frac: 0.15
+
+train:
+  steps: 80000           # 20k unquantized + 60k quantized (k256 got 60k)
+  batch_windows: 1024
+  # Early training is easy: more parameter updates beat better gradients.
+  # Quarter batch for the first 5k steps, then the full 1024. lr is NOT
+  # rescaled -- ~2x the gradient noise, which is benign this early.
+  batch_ramp: {until: 5000, divisor: 4}
+  # FROM SCRATCH. The input distribution changes when the mean is removed,
+  # so warm-starting an encoder trained on un-centred data is unsound.
+  # lr follows the proven from-scratch recipe for this exact geometry
+  # (tessera_stage1_4x: tok 512/14, dec 576/12), not k256's warm-start 5e-5.
+  init_from: null
+  optim: {lr: 1.5e-4, wd: 0.01, warmup: 1000, lr0_steps: 100}
+  save_interval: 2500
+
+eval:
+  # 20-0-0 is the hypothesis test: with the mean handed over, the coarse
+  # tier's own reconstruction should stop being a flat patch and start
+  # showing low-frequency structure.
+  recon_tuples: ["20-0-0", "20-1-0", "20-13-0", "20-20-3", "20-20-13",
+                 "20-20-20"]
+
+log:
+  run_tag: tessera_vq8_k256_statscond
