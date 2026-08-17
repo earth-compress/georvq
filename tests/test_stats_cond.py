@@ -146,3 +146,50 @@ def test_disabled_by_default_and_use_std_rejected():
     with pytest.raises(Exception, match="use_std"):
         load_config("configs/smoke.yaml",
                     [TIERS, "model.stats_cond={use_std: true}"])
+
+
+def test_recon_figure_never_runs_the_model_in_train_mode():
+    """Regression: recon_figure was @torch.no_grad() but not eval(), so
+    drawing it INITIALISED the codebooks from 8 val windows -- by random
+    sampling instead of the configured init_mode, at whatever step the
+    first figure landed on, and with an EMA update on validation data."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import torch as T
+    from georvq.train.figures import recon_figure
+
+    seen = {}
+
+    class SpyModel:
+        specs = None
+
+        def __init__(self, real):
+            self.real, self.training = real, True
+
+        def eval(self):
+            self.training = False
+
+        def train(self):
+            self.training = True
+
+        def level_cumsums(self, x, loc=None, valid=None):
+            seen["training"] = self.training
+            return None, None
+
+        def eval_tuple(self, cums, t, ref, valid=None):
+            return T.randn_like(ref)
+
+    cfg, m = _model(stats="null")
+    spy = SpyModel(m)
+    SpyModel.specs = m.specs
+    x, v = _batch(cfg, B=8, nodata=False)
+
+    class Src:
+        def prep(self, raw, device):
+            return x, v
+
+    raw = T.zeros(8, 1, 1, 1)
+    fig = recon_figure(spy, Src(), raw, step=2000, n=8, tuples=[[3, 3]])
+    assert seen["training"] is False, \
+        "recon_figure ran the model in train mode -> lazy _data_init fires"
+    assert spy.training is True, "recon_figure left the model in eval mode"
