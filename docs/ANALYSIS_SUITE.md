@@ -45,6 +45,17 @@ config by ~14%).
 spans 4.16×; S2 DN==0 rate is 0.0000%), and the mean/std anti-correlation
 (−0.533) that says coherent patches have long means and little spread.
 
+`data_probe.py` is the entry point for a new source (validity, magnitude
+spread, lossless rate from spatial prediction, autocorrelation). Measured:
+Tessera is 95.9% valid, magnitude spread 1.57x, lossless floor **672
+b/px** with spatial prediction saving only 9.7%, correlation below 0.5 by
+lag 4. AlphaEarth is 81.5% valid, exactly unit-norm, lossless floor **131
+b/px**, prediction saving 44.9%, correlation above 0.5 past lag 32 --
+though much of that predictability is 20m data on a 10m lattice, where the
+left-neighbour predictor is exact by construction. The lossless floor is
+the denominator for "is the distortion worth it": the Tessera codec at
+10.85 b/px buys 62x beyond lossless.
+
 ## B. Bound what is achievable, before training a codec
 
 | tool | question |
@@ -138,6 +149,19 @@ promoting, because each caught a real defect:
 - **Cross-run comparison from wandb**, and **relative gap-closure trends**
   — `Δ(1−ccos)/(1−ccos)` per 1k steps, which is the right unit for a
   bounded metric and reveals gradients that absolute deltas flatten.
+
+**Now formalised.** `extract_shell_history.py` recovers these from a
+session transcript (454 analysis invocations -> 147 unique multi-line
+ones; `shell_analysis_catalogue.md` holds the triage, 32 judged worth
+promoting). `run_compare.py` absorbs the largest family -- 25 wandb
+queries that were five questions: `trace`, `rates`, `leaderboard`,
+`outliers`. `data_probe.py` covers the source-side checks in (A).
+
+Still to promote: codebook health (16 blocks -- perplexity/utilisation,
+distortion vs K, bf16 vs fp32 assignment, k-means sample size, EMA
+degradation), latent health (within- vs between-window variance and
+effective rank per tier, extending `tier_collapse.py`), and the
+loss-spike / batch-LR-scaling diagnostics.
 
 ## F. Infrastructure
 
