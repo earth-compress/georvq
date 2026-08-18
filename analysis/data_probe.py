@@ -41,6 +41,8 @@ from patch_intrinsic_dim import _dequant, S2_10M, S2_20M, S2_60M   # noqa: E402
 from georvq.data.store import ChipStore                       # noqa: E402
 
 DEM_NODATA, DEM_VALID_MIN = -32767.0, -1000.0
+S1_NODATA, S1_DB_STEP = -32768.0, 0.1
+S1_BANDS = ["vv", "vh"]
 
 
 def iter_chips(source, path, n_chips, seed=0):
@@ -53,6 +55,34 @@ def iter_chips(source, path, n_chips, seed=0):
       s2          uint16 DN, three native grids upsampled onto the 10m
                   lattice (1068 = 2*534 = 6*178, so this is exact)
     """
+    if source == "s1":
+        # SAR gamma0 is stored as LINEAR power, where speckle is
+        # multiplicative and the distribution spans orders of magnitude.
+        # Both the statistics and any real codec belong in dB, where
+        # speckle is additive -- so the field is analysed in dB and the
+        # "lossless" integer is dB at 0.1 dB precision, which is the
+        # precision a practitioner archives. Quoting linear-power entropy
+        # instead would be measuring the storage format, not the data.
+        import glob
+        import rasterio
+        scenes = sorted(glob.glob(f"{path}/*/*/*/vv.tif"))
+        rng = np.random.default_rng(seed)
+        for i in rng.choice(len(scenes), min(n_chips, len(scenes)),
+                            replace=False):
+            d = scenes[int(i)].rsplit("/", 1)[0]
+            planes = []
+            for b in S1_BANDS:
+                with rasterio.open(f"{d}/{b}.tif") as r:
+                    planes.append(r.read(1).astype(np.float32))
+            lin = np.stack(planes)
+            valid = np.isfinite(lin).all(0) & (lin > 0).all(0) & \
+                (lin != S1_NODATA).all(0)
+            db = np.zeros_like(lin)
+            np.log10(lin, out=db, where=valid[None])
+            db = 10.0 * db * valid[None]
+            yield db, valid, np.round(db / S1_DB_STEP).astype(np.int32)
+        return
+
     if source == "s2":
         import glob
         import rasterio
@@ -153,7 +183,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--store", required=True)
     ap.add_argument("--source", default="tessera",
-                    choices=["tessera", "ae", "dem", "s2"])
+                    choices=["tessera", "ae", "dem", "s2", "s1"])
     ap.add_argument("--chips", type=int, default=40)
     ap.add_argument("--entropy-bands", type=int, default=16,
                     help="bands to histogram (extrapolated); the full set is "
@@ -206,7 +236,10 @@ def main():
         print("  -> wide: magnitude is real signal, an absolute loss is "
               "justified")
 
-    print(f"\nLOSSLESS RATE from spatial prediction (bits/pixel, all bands)")
+    unit = {"s1": "dB @0.1dB", "dem": "integer metre",
+            "s2": "uint16 DN"}.get(args.source, "int8 as stored")
+    print(f"\nLOSSLESS RATE from spatial prediction (bits/pixel, all bands)"
+          f"\n  [lossless unit: {unit}]")
     for k in ("raw", "left", "avg"):
         if ent[k]:
             m = float(np.mean(ent[k]))
