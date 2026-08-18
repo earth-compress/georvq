@@ -36,9 +36,59 @@ import numpy as np
 import torch
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from patch_intrinsic_dim import _dequant                      # noqa: E402
+from patch_intrinsic_dim import _dequant, S2_10M, S2_20M, S2_60M   # noqa: E402
 
 from georvq.data.store import ChipStore                       # noqa: E402
+
+DEM_NODATA, DEM_VALID_MIN = -32767.0, -1000.0
+
+
+def iter_chips(source, path, n_chips, seed=0):
+    """Yield (x, valid, q) per chip: dequantized float (bands,H,W), a
+    validity mask, and the INTEGER representation a lossless coder would
+    actually see -- which differs per source and is easy to get wrong.
+
+      tessera/ae  int8 as stored
+      dem         float32 metres; the lossless unit is the integer metre
+      s2          uint16 DN, three native grids upsampled onto the 10m
+                  lattice (1068 = 2*534 = 6*178, so this is exact)
+    """
+    if source == "s2":
+        import glob
+        import rasterio
+        scenes = sorted(glob.glob(f"{path}/*/*/*/B02.tif"))
+        rng = np.random.default_rng(seed)
+        for i in rng.choice(len(scenes), min(n_chips, len(scenes)),
+                            replace=False):
+            d = scenes[int(i)].rsplit("/", 1)[0]
+            planes, ref = [], None
+            for names, up in ((S2_10M, 1), (S2_20M, 2), (S2_60M, 6)):
+                for b in names:
+                    with rasterio.open(f"{d}/{b}.tif") as r:
+                        a = r.read(1)
+                    if up > 1:
+                        a = np.repeat(np.repeat(a, up, 0), up, 1)
+                    ref = a.shape[0] if ref is None else ref
+                    planes.append(a[:ref, :ref])
+            q = np.stack(planes).astype(np.int32)
+            with rasterio.open(f"{d}/cloud_mask.tif") as r:
+                cm = r.read(1)[:ref, :ref]
+            valid = (cm == 0) & (q > 0).all(0)
+            yield q.astype(np.float32) / 10000.0, valid, q
+        return
+
+    store = ChipStore(path)
+    rows = store.index.sample(n=min(n_chips, len(store.index)),
+                              random_state=seed)
+    for _, r in rows.iterrows():
+        sh, slot = int(r["shard"]), int(r["slot"])
+        if source == "dem":
+            a = np.asarray(store.open_shard(sh)[slot]).astype(np.float32)
+            valid = (a[0] > DEM_VALID_MIN) & (a[0] != DEM_NODATA)
+            yield a * valid[None], valid, np.round(a).astype(np.int32)
+        else:
+            x, valid = _dequant(store, sh, slot, source)
+            yield x, valid, np.asarray(store.open_shard(sh)[slot])
 
 
 def entropy_bits(counts):
@@ -102,7 +152,8 @@ def autocorr(x, valid, lags):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--store", required=True)
-    ap.add_argument("--source", default="tessera", choices=["tessera", "ae"])
+    ap.add_argument("--source", default="tessera",
+                    choices=["tessera", "ae", "dem", "s2"])
     ap.add_argument("--chips", type=int, default=40)
     ap.add_argument("--entropy-bands", type=int, default=16,
                     help="bands to histogram (extrapolated); the full set is "
@@ -110,18 +161,14 @@ def main():
     args = ap.parse_args()
 
     torch.set_grad_enabled(False)
-    store = ChipStore(args.store)
-    rows = store.index.sample(n=min(args.chips, len(store.index)),
-                              random_state=0)
     lags = [1, 2, 4, 8, 16, 32]
 
     n_px = n_valid = 0
     mags, ent, ac = [], {"raw": [], "left": [], "avg": []}, []
     bmin, bmax = None, None
-    for _, r in rows.iterrows():
-        sh, slot = int(r["shard"]), int(r["slot"])
-        x, valid = _dequant(store, sh, slot, args.source)
-        q = np.asarray(store.open_shard(sh)[slot])
+    nchip = 0
+    for x, valid, q in iter_chips(args.source, args.store, args.chips):
+        nchip += 1
         n_px += valid.size
         n_valid += int(valid.sum())
         if not valid.any():
@@ -137,27 +184,45 @@ def main():
         ac.append(autocorr(x, valid, lags))
 
     mags = np.concatenate(mags)
-    print(f"{args.store}  ({args.source})")
-    print(f"  {len(rows)} chips, {n_px:,} pixels, "
+    nb = bmin.shape[0]
+    print(f"{args.store}  ({args.source}, {nb} band"
+          f"{'s' if nb > 1 else ''})")
+    print(f"  {nchip} chips, {n_px:,} pixels, "
           f"{100*n_valid/max(n_px,1):.2f}% valid\n")
 
     p = np.percentile(mags, [1, 10, 50, 90, 99])
-    print("PER-PIXEL VECTOR MAGNITUDE")
+    print("PER-PIXEL VALUE" if nb == 1 else "PER-PIXEL VECTOR MAGNITUDE")
+    # p99/p1 is uninformative when p1 sits at a physical floor (DEM sea
+    # level is exactly 0), so report the interdecile ratio too
     print(f"  p1 {p[0]:.4f}  p10 {p[1]:.4f}  p50 {p[2]:.4f}  "
-          f"p90 {p[3]:.4f}  p99 {p[4]:.4f}   p99/p1 = {p[4]/max(p[0],1e-9):.2f}x")
-    print(f"  -> {'near-constant: direction carries the information'
-                 if p[4]/max(p[0],1e-9) < 1.6 else
-                 'wide: magnitude is real signal, an absolute loss is justified'}")
+          f"p90 {p[3]:.4f}  p99 {p[4]:.4f}   p90/p10 = "
+          f"{p[3]/max(p[1],1e-9):.2f}x")
+    if nb == 1 or p[0] <= 0:
+        print("  -> single band: direction is not a concept here; only the "
+              "value distribution and its spatial structure matter")
+    elif p[4] / max(p[0], 1e-9) < 1.6:
+        print("  -> near-constant: direction carries the information")
+    else:
+        print("  -> wide: magnitude is real signal, an absolute loss is "
+              "justified")
 
     print(f"\nLOSSLESS RATE from spatial prediction (bits/pixel, all bands)")
     for k in ("raw", "left", "avg"):
         if ent[k]:
             m = float(np.mean(ent[k]))
             print(f"  {k:>5} predictor: {m:>8.2f} b/px")
-    if ent["raw"] and ent["avg"]:
-        r, a = float(np.mean(ent["raw"])), float(np.mean(ent["avg"]))
-        print(f"  -> spatial prediction saves {100*(1-a/r):.1f}%; a lossy "
-              f"codec must beat {a:.1f} b/px to be worth its distortion")
+    if ent["raw"]:
+        r = float(np.mean(ent["raw"]))
+        # take the BEST predictor, not a favoured one: which wins is
+        # source-dependent. On Sentinel-2 `left` beats `avg`, the reverse
+        # of DEM and Tessera, because the 20m/60m bands are nearest-
+        # upsampled onto the 10m lattice so the horizontal neighbour is
+        # often an exact duplicate while the vertical average is not.
+        best_k = min((k for k in ("left", "avg") if ent[k]),
+                     key=lambda k: float(np.mean(ent[k])))
+        bv = float(np.mean(ent[best_k]))
+        print(f"  -> best predictor is '{best_k}': saves {100*(1-bv/r):.1f}%; "
+              f"a lossy codec must beat {bv:.1f} b/px to justify distortion")
 
     print(f"\nSOURCE SPATIAL AUTOCORRELATION")
     mean_ac = {d: float(np.mean([a[d] for a in ac])) for d in lags}
