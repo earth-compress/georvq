@@ -95,10 +95,11 @@ def main():
             x = x.float()
             if not int(v.sum()):
                 continue
-            zs = m.encode_levels(x)
+            st = m._stats_of(x, v)      # None unless stats_cond is on
+            zs = m.encode_levels(x, st, v)
             Ls = torch.tensor(tup, device=dev)[None].expand(x.shape[0], -1)
             zq, _, _ = m.quantize(zs, Ls)
-            out = m.decode(zq, Ls).float()
+            out = m.decode(zq, Ls, st, v).float()
             dx, do = deviation(x, v), deviation(out, v)
             num += float(do.pow(2).sum(1)[v].sum())
             den += float(dx.pow(2).sum(1)[v].sum())
