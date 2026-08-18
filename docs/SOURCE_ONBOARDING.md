@@ -78,26 +78,58 @@ and each further level costs 0.5 b/px.
 
 ## 4. Use-case drivers — what the codec is *for*
 
-**The weakest axis, and the one that should arguably come first**, since
-it decides which metric everything else optimises.
+**[have] — and it already overturns the default objective.**
+`scripts/eval_rate_sweep.py`, with datasets built for both sources
+(`/data/tessera-samples/eval` 42 GB, `/data/AE-samples/eval` 122 GB:
+ASTER GED, LUCAS LC/LU, LCMAP LC/LU). Reported in
+`tessera_downstream_interim.pdf`.
 
-| measurement | decides | status |
-|---|---|---|
-| Downstream task eval on decoded vs original | the objective; the rate at which quality stops mattering | **[missing]** |
-| Per-band reconstruction quality | whether users taking band subsets are served; per-band loss weighting | **[missing]** |
-| Metric audit: cosine vs MSE vs task | whether `cos` is flattering us | **[missing]** |
-| Structured-use patterns (band subsets, coarse-only decode) | whether the matryoshka ladder matches real access | **[missing]** |
+Protocol: encode each labelled pixel's 64x64 context window, decode at a
+rate tuple, read the reconstructed embedding at the label pixel; fit 1-NN,
+3-NN and linear probes; split train/test by source tile (~82 km blocks) so
+spatial autocorrelation cannot leak; report the delta against the same
+probe on the uncompressed embedding. Every rate point is re-probed under
+repeated split seeds, giving a noise floor of +/-0.017 on LUCAS and
++/-0.023 on LCMAP — so LCMAP cannot resolve anything below ~0.05 and its
+"compression beats the original" readings are artefacts.
 
-**Why this matters concretely.** We currently optimise masked MSE in
-absolute units and *report* cosine. Those disagree: at cos 0.959 the
-relative L2 error is 0.256. If downstream users consume direction, we are
-spending capacity on a magnitude nobody scores; if they consume the raw
-vector, cosine is flattering us and 0.256 is the honest number. **We have
-not checked**, and it changes three decisions at once: input
-normalisation, absolute-vs-relative loss, and whether the scalar-gain
-channel is a fix or a distraction.
+**What it establishes, and it is the most consequential result we have:**
 
----
+1. **Cosine does not transfer across sources.** At matched or slightly
+   worse reconstruction cosine, the Tessera codec costs LESS downstream
+   accuracy than the AlphaEarth codec. LUCAS land cover: AE at cos 0.9532
+   loses 0.043 balanced accuracy; Tessera at cos 0.9475 loses 0.005.
+2. **Tessera is downstream-transparent above ~1 b/px, at cos ~0.93.**
+   AlphaEarth needs cos ~0.99 for the same verdict.
+3. **Below ~0.5 b/px Tessera degrades about twice as fast** (LUCAS
+   -0.108 vs -0.052), established on LUCAS only; LCMAP is noise-dominated.
+4. **The mechanism.** Tessera carries ~2.5x more independent variation per
+   pixel — per-tier PCA d95 of **51/91/71** against tier dims 512/512/256,
+   versus AlphaEarth's **19/34/28** — much of it fine-scale and weakly
+   correlated with land cover. Discarding it costs cosine but not task
+   accuracy. AlphaEarth's field is smoother and more nearly low-rank, so a
+   given cosine error eats the dimensions the probes actually read.
+
+**Two consequences that change what we are building.**
+
+*The rate target is wrong by an order of magnitude.* These tasks stop
+caring at ~1 b/px. The current run sits at 10.85 b/px and cos 0.978 —
+roughly 10x past transparency — so the R-D gains we have been tracking may
+be downstream-irrelevant. A cosine target transplanted from AlphaEarth
+(0.998) is, in the report's words, the wrong specification for Tessera.
+
+*L is measurably over-provisioned.* d95 of 51/91/71 in tiers of
+512/512/256 says the latent widths could be several times narrower before
+the probes would notice.
+
+**The gap that matters.** All five benchmarks are coarse thematic labels
+at a single point — the regime AlphaEarth was designed for. Tessera's
+per-pixel information may well pay on tasks with finer spatial or temporal
+structure, and **none are in the suite**. So "transparent above 1 b/px" is
+established for point-thematic use and unestablished for anything else;
+optimising to it could be optimising for the wrong customer. A
+fine-spatial or temporal benchmark is the single highest-value addition to
+this axis.
 
 ## The derivation chain
 
@@ -105,10 +137,10 @@ Ordered so each step consumes the previous ones.
 
 | # | parameter | derived from | current evidence |
 |---|---|---|---|
-| 0 | **objective** | use-case: task eval, band subsetting | **unmeasured** |
+| 0 | **objective** | use-case: task eval, band subsetting | downstream transparency at ~1 b/px, cos ~0.93; cosine is NOT transferable across sources |
 | 1 | **W** (window) | autocorrelation range; between/within variance vs W | 64 px, unjustified |
 | 2 | **P**, **G** (tiers, grids) | power spectrum; autocorrelation scale breaks | fine cell 4 px matches lag-0.5 point |
-| 3 | **L** (latent dims/tier) | global PCA d95; ~4 bits/dim saturation | tier 2 L=256 for 160 bits/cell — likely over-provisioned |
+| 3 | **L** (latent dims/tier) | global PCA d95; ~4 bits/dim saturation | measured d95 51/91/71 of 512/512/256 — over-provisioned several fold |
 | 4 | **K** | sample-budget: batch x cells x window / K >= 450 | K=256 verified healthy |
 | 5 | **N** (levels) | per-level residual decay to a target rate | tier 2 not saturated at 20 |
 | 6 | **X** (attention) | ceiling vs capacity; where the ceiling stops moving | unmeasured |
@@ -135,8 +167,10 @@ Ordered so each step consumes the previous ones.
 
 ## What to build next, in priority order
 
-1. **Use-case axis (§4)** — nothing exists, and it sets the objective every
-   other choice inherits.
+1. **A fine-spatial or temporal downstream task (§4).** The existing
+   suite is five coarse thematic point labels, so it cannot see the
+   per-pixel detail that is Tessera's whole advantage. Everything else on
+   this list optimises against a target that may not be the real one.
 2. **Power spectrum + patch-size sweep (§2)** — the only principled route
    to P, G and W, which are currently inherited by habit.
 3. **Band cross-correlation + global pixel PCA (§1)** — cheap, and gives
