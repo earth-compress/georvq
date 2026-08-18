@@ -37,7 +37,7 @@ model:
 train:
   # resume from a COPY: this run reuses the run_tag, so it would
   # otherwise overwrite the checkpoint it is resuming from.
-  init_from: /home/ali/.claude/jobs/10ba9216/tmp/statscond_step19000.pt
+  init_from: /home/ali/projects/georvq/checkpoints/_handoff/statscond_step19000.pt
   steps: 52000           # 71000 - 19000
   batch_windows: 1024
   batch_ramp: null
