@@ -45,6 +45,10 @@ import time
 
 import numpy as np
 
+from georvq.inference.refine import RefinementSpec
+from georvq.inference.refine import pack as refine_pack
+from georvq.inference.refine import unpack as refine_unpack
+
 NODATA = -128
 FORMAT = "georvq-ae/2"
 
@@ -94,27 +98,27 @@ def check_fill(a, valid, fill=NODATA):
 
 STAR_BITS, STAR_SIGMA = 2, 2.0
 
+#: The AlphaEarth release refines the COARSE tier: its coarse codebook
+#: carries the OOD error tail, while the mid and fine books already sit at
+#: their ceiling, where a sidecar is worthless-to-harmful. Other models
+#: leave their slack elsewhere and refine a different tier — the shared
+#: mechanism is georvq.inference.refine.
+STAR_SPEC = RefinementSpec(tier=0, bits=STAR_BITS, quantizer="uniform",
+                           sigma=STAR_SIGMA)
+
 
 def pack_star(res):
     """(N, cells, dim) float residuals -> (codes uint8 packed, step f16).
-    Symmetric mid-rise uniform quantizer, 4 levels at (+-0.5, +-1.5)*step,
-    step = STAR_SIGMA*std/1.5 per window. Retains 98% of the float-star
-    gain incl. the OOD tail (per-window scale adapts to outliers)."""
-    r = res.reshape(res.shape[0], -1).astype(np.float32)
-    step = (STAR_SIGMA * r.std(axis=1, keepdims=True) / 1.5)         .clip(min=1e-12)
-    c = np.clip(np.round(r / step - 0.5) + 0.5, -1.5, 1.5) + 1.5  # {0..3}
-    packed = np.packbits(
-        ((c.astype(np.uint8)[:, :, None] >> np.arange(1, -1, -1)) & 1)
-        .reshape(c.shape[0], -1), axis=1)
-    return packed, step[:, 0].astype(np.float16)
+
+    The shipped `star.tif` payload. Retains 98% of the float-star gain
+    incl. the OOD tail, because the per-window scale adapts to outliers.
+    Byte-frozen: this release is public."""
+    return refine_pack(res, STAR_SPEC)
 
 
 def unpack_star(packed, step, cells, dim):
     """Inverse of pack_star -> (N, cells, dim) float32."""
-    bits = np.unpackbits(packed, axis=1, count=cells * dim * 2)         .reshape(packed.shape[0], -1, 2)
-    c = (bits[:, :, 0] << 1 | bits[:, :, 1]).astype(np.float32)
-    r = (c - 1.5) * step.astype(np.float32)[:, None]
-    return r.reshape(-1, cells, dim)
+    return refine_unpack(packed, step, STAR_SPEC, cells, dim)
 
 
 # --------------------------------------------------------------------------
@@ -240,7 +244,7 @@ class TorchBackend:
         res_np = res0.cpu().numpy() if res0 is not None else None
         packets = [Packet(
             indices=[a[b] for a in idxs],
-            coarse_residual=res_np[b] if res_np is not None else None)
+            refinements=({0: res_np[b]} if res_np is not None else None))
             for b in range(x.shape[0])]
         return packets, dcos
 
@@ -426,7 +430,7 @@ def read_container(path, depths=None):
         star = unpack_star(z["t0star"][:], z["t0star_step"][:],
                            sig[0][0], dim)
     packets = [Packet(indices=[a[i] for a in tiers],
-                      coarse_residual=star[i] if star is not None else None)
+                      refinements=({0: star[i]} if star is not None else None))
                for i in range(n)]
     valid = None
     if "mask" in z:

@@ -222,6 +222,6 @@ def read_assets(indir, depths=None, expect_bitstream=None):
         star = unpack_star(codes, step, cells, nb * 8 // (2 * cells))
 
     packets = [Packet(indices=[t[i] for t in tiers],
-                      coarse_residual=star[i] if star is not None else None)
+                      refinements=({0: star[i]} if star is not None else None))
                for i in range(len(keep))]
     return meta, packets, keep, valid

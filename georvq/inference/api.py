@@ -24,11 +24,28 @@ class Packet:
     indices: list  # per tier: (cells, depth) int64 ndarray
     loc: Optional[np.ndarray] = None      # location embedding (conditioned models)
     stats: Optional[bytes] = None         # packed normalization stats
-    coarse_residual: Optional[np.ndarray] = None  # 8*: (cells, dim) float
-    # residual of the coarse tier after its full RVQ depth. Optional
-    # refinement ("8*"): decoders add it to the coarse tokens when the
-    # coarse tier is decoded at full depth; it recovers the coarse
-    # quantizer gap, which measurably carries the OOD error tail.
+    refinements: Optional[dict] = None
+    # {tier: (cells, dim) float} — that tier's residual after its full RVQ
+    # depth. Optional additive refinements: a decoder adds one to its
+    # tier's tokens when that tier is decoded at full depth, buying back
+    # the quantizer gap the codebooks left behind. Which tier is worth
+    # refining differs by model (see georvq.inference.refine); dropping a
+    # refinement always yields a valid decode.
+
+    @property
+    def coarse_residual(self):
+        """The tier-0 refinement, under the name the AlphaEarth release
+        gave it ('8*'). Retained because that release is frozen."""
+        return (self.refinements or {}).get(0)
+
+    @coarse_residual.setter
+    def coarse_residual(self, v):
+        if self.refinements is None:
+            self.refinements = {}
+        if v is None:
+            self.refinements.pop(0, None)
+        else:
+            self.refinements[0] = v
 
 
 def load_codec(ckpt_path, device="cpu"):
@@ -56,19 +73,24 @@ class Codec:
     # ---- encode ----
 
     @torch.no_grad()
-    def encode(self, x, loc=None, coarse_residual=False) -> list[Packet]:
+    def encode(self, x, loc=None, refine_tiers=(),
+               coarse_residual=False) -> list[Packet]:
         """x: (B, C, W, W) prepared model-space input -> one Packet per
         window, at full depth (truncate at decode time for lower rates).
-        coarse_residual: also carry the tier-0 post-quantization residual
-        (the 8* refinement; plain models only)."""
+
+        refine_tiers: tier indices whose post-RVQ residual to carry as an
+        additive refinement (see georvq.inference.refine). Which tier is
+        worth refining is model-specific. `coarse_residual=True` is the
+        AlphaEarth release's name for `refine_tiers=(0,)`.
+        """
         m = self.model
         zs = m.encode_levels(x)
         B = x.shape[0]
-        if coarse_residual and (m.selector is not None
-                                or m.conditioner is not None):
+        want = set(refine_tiers) | ({0} if coarse_residual else set())
+        if want and (m.selector is not None or m.conditioner is not None):
             raise NotImplementedError(
-                "coarse_residual is supported for plain codecs only")
-        res0 = None
+                "refinements are supported for plain codecs only")
+        res = {}
         if m.selector is not None:
             scores = m.selector(loc)
             idxs = [m.rvqs[i].all_levels_gated(z.float(), scores[i],
@@ -87,15 +109,16 @@ class Codec:
                     residual = residual - q
                     per.append(idx)
                 idxs.append(per)
-                if t == 0 and coarse_residual:
-                    res0 = residual.cpu().numpy()
+                if t in want:
+                    res[t] = residual.cpu().numpy()
         # idxs: per tier, list of depth (B, cells) tensors -> (B, cells, depth)
         stacked = [torch.stack(per, -1).cpu().numpy() for per in idxs]
         loc_np = (loc.cpu().numpy() if isinstance(loc, torch.Tensor)
                   else loc) if loc is not None else None
         return [Packet(indices=[t[b] for t in stacked],
                        loc=loc_np[b] if loc_np is not None else None,
-                       coarse_residual=res0[b] if res0 is not None else None)
+                       refinements=({t: r[b] for t, r in res.items()}
+                                    if res else None))
                 for b in range(B)]
 
     # ---- decode ----
@@ -129,12 +152,15 @@ class Codec:
             return m.decode(zqs, Ls)
         for rvq, tier_idx, L in zip(m.rvqs, idx, depths):
             zqs.append(self._lookup(rvq, tier_idx, L))
-        # 8*: add the coarse residual when the coarse tier is at full depth
-        if depths[0] == self.specs[0].depth \
-                and packets[0].coarse_residual is not None:
-            star = torch.from_numpy(
-                np.stack([p.coarse_residual for p in packets])).to(dev)
-            zqs[0] = zqs[0] + star
+        # additive refinements: applied per tier, and only where that tier
+        # is at full depth — a refinement codes the residual left after
+        # ALL of its tier's levels, so it is meaningless against a prefix
+        for t in sorted(packets[0].refinements or {}):
+            if depths[t] != self.specs[t].depth:
+                continue
+            r = torch.from_numpy(
+                np.stack([p.refinements[t] for p in packets])).to(dev)
+            zqs[t] = zqs[t] + r
         Ls = torch.tensor(depths, device=dev)[None].expand(B, -1)
         return m.decode(zqs, Ls)
 
