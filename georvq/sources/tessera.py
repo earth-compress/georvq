@@ -61,6 +61,11 @@ class TesseraSource(Source):
         return nn.Identity()
 
     def build_head(self, model_cfg, in_dim) -> nn.Module:
+        """Dense pixel head WITHOUT unit normalization: Tessera vectors carry
+        real magnitude (p1-p99 spread 1.57x), so normalizing the output
+        would discard a component of the signal. Compare
+        `AESource.build_head`, whose field is unit-norm by construction.
+        """
         fine = model_cfg.tiers[-1]
         return DenseHead(in_dim, grid=fine.grid,
                          p=model_cfg.window // fine.grid,

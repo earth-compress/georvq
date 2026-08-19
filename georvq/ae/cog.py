@@ -174,6 +174,13 @@ def read_assets(indir, depths=None, expect_bitstream=None):
     H, Wd = meta["shape"][1:]
 
     def openr(name):
+        """Open one asset, refusing a bitstream_id mismatch.
+
+        This check is load-bearing rather than defensive: codebooks of the
+        same tier layout will happily decode each other's indices into
+        plausible-looking garbage, so a mismatch cannot be detected
+        downstream by looking at the output.
+        """
         ds = rasterio.open(os.path.join(indir, f"{name}.tif"))
         tag = ds.tags().get("BITSTREAM_ID")
         if expect_bitstream and tag and tag != expect_bitstream:

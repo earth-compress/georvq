@@ -197,6 +197,13 @@ class StatsCondConfig(StrictModel):
 
     @model_validator(mode="after")
     def _check(self):
+        """Refuse the combinations that would silently do nothing, or
+        something measured to be harmful.
+
+        `use_std` is blocked rather than merely defaulted off: matching the
+        reconstruction's standard deviation to the source's was measured to
+        HURT (0.9700 -> 0.9678), because the decoder is already smoother
+        than the truth and rescaling amplifies its error."""
         assert not self.use_std, "stats_cond.use_std is not implemented"
         assert self.subtract_mean or self.cond_encoder or self.cond_decoder, \
             "stats_cond does nothing with every option off"
@@ -313,6 +320,16 @@ class ModelConfig(StrictModel):
 
     @model_validator(mode="after")
     def _check(self):
+        """Reject model geometries the rest of the stack assumes away.
+
+        The pyramid contract is strictly ascending grids starting at 1, each
+        dividing the window: the coarsest tier's single cell IS the window,
+        and `level_cumsums` and the decoder both index cells by that
+        relationship. `vq` xor `sigma` separates quantized training from
+        stage-1 continuous mode -- they are different objectives, not a
+        flag. The rate-model warning is not pedantry: with EMA codebooks
+        dR/dC is identically zero, so a rate model trains against a codebook
+        it cannot move."""
         assert self.tiers, "at least one tier required"
         grids = [t.grid for t in self.tiers]
         assert grids == sorted(grids) and len(set(grids)) == len(grids), \
@@ -458,6 +475,14 @@ class LogConfig(StrictModel):
 
 
 class Config(StrictModel):
+    """The whole of a run, validated.
+
+    This object is the reproducibility spine: it is embedded in every
+    checkpoint, hashed into `config_hash`, and is the only place a
+    setting that affects a run may live. `extra="forbid"` throughout, so
+    a typo in a YAML key is an error rather than a silently ignored
+    setting.
+    """
     schema_version: int = SCHEMA_VERSION
     data: DataConfig
     model: ModelConfig
@@ -467,6 +492,9 @@ class Config(StrictModel):
 
     @model_validator(mode="after")
     def _check(self):
+        """Cross-section checks: the ones that need more than one section
+        of the config to be visible at once, and so cannot live on the
+        individual models above."""
         if self.train.freeze_codec:
             assert self.train.init_from is not None, \
                 "train.freeze_codec requires train.init_from"
@@ -542,6 +570,11 @@ def config_hash(cfg: Config) -> str:
 
 
 def _flatten(d, prefix=""):
+    """Nested config -> {"a.b.0.c": value}, so two configs can be diffed
+    as flat key sets rather than by walking two trees in parallel. List
+    indices become path components, which means a reordered list reads
+    as several changed keys.
+    """
     out = {}
     if isinstance(d, dict):
         for k, v in d.items():
@@ -558,6 +591,9 @@ def config_diff(a, b) -> list[tuple[str, object, object]]:
     """Key-level diff of two configs (Config, dict, or checkpoint path).
     Returns [(dotted_key, a_value, b_value)] for keys that differ."""
     def as_dict(x):
+        """Accept a Config, a plain dict, or a checkpoint path, so runs can
+        be diffed against each other without first being loaded.
+        """
         if isinstance(x, Config):
             return x.model_dump(mode="json")
         if isinstance(x, dict):

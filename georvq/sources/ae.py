@@ -43,6 +43,11 @@ class AESource(Source):
         return nn.Identity()
 
     def build_head(self, model_cfg, in_dim) -> nn.Module:
+        """Dense pixel head, L2-normalized: AlphaEarth embeddings are
+        unit-norm by construction, so the head should not be free to emit
+        vectors of any other length. Compare `TesseraSource.build_head`,
+        which sets `normalize=False` because that field is not unit-norm.
+        """
         fine = model_cfg.tiers[-1]
         return DenseHead(in_dim, grid=fine.grid,
                          p=model_cfg.window // fine.grid,
