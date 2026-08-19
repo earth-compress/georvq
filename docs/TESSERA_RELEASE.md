@@ -24,13 +24,48 @@ other worked example, and the two differ in instructive places.
   was cut; a replacement checkpoint can be dropped in without changing
   any of the policy below, and will change `bitstream_id`.
 
-```python
-from georvq.tessera import load
-R = load("/data/georvq-releases/tessera-beta-v1/bundle", device="cuda")
-x, valid = R.model.source.prep(raw, "cuda")   # int8 chips + scale sidecar
-packets = R.encode(x, valid=valid)            # full depth
-recon   = R.decode(packets, depths=[20, 20, 5], valid=valid)   # 3.35 b/px
+## Getting it
+
+Weights are not in git.
+
+- *On the group server*: `/data/georvq-releases/tessera-beta-v1/bundle`.
+- *Elsewhere*: copy `tessera-beta-v1.tar.gz` (425 MB) and verify it
+  before use — `model.pt` is a torch pickle.
+
+```bash
+sha256sum -c <<< "5a85461327402951d1b2bec8ae47db2fddd2971e7bad0094bf71aa2666c03f82  tessera-beta-v1.tar.gz"
+tar xzf tessera-beta-v1.tar.gz
+pip install -e ".[eval]"          # decoding needs no extras at all
 ```
+
+## Quickstart
+
+Feed it what `geotessera` gives you — the int8 embedding array and its
+per-pixel scale plane. You do not need this project's chip store, and
+you should not have to know anything about its layout.
+
+```python
+from georvq.tessera import load, encode_tile, decode_tile, requantize
+
+R = load("tessera-beta-v1/bundle", device="cuda")
+
+packets, grid = encode_tile(R, embedding, scale)   # (128, H, W) int8, (H, W)
+recon = decode_tile(R, packets, grid, depths=[20, 20, 5])   # 3.35 b/px
+original_units = requantize(recon)                 # undo the model's rescale
+
+print(R.bpp([20, 20, 5]), "b/px")
+for tup in R.ladder():
+    print(tup, round(R.bpp(list(tup)), 3))
+```
+
+One encode serves every rate: `packets` are full depth, and `depths`
+truncates at decode time. A tile is cropped to whole 64 px windows
+rather than padded — pad upstream if you need the last partial window.
+
+Already-dequantized float embeddings work too: pass them without a
+`scale`. `georvq.tessera.prep` is the single-window form of the same
+door, and produces tensors bit-identical to the chip-store path (there
+is a test pinning that).
 
 ## Format: what a packet carries
 

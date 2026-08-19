@@ -23,7 +23,11 @@ does:
 Use `georvq.ae` and this package as two worked examples of the same
 contract, not as templates to inherit blindly.
 """
+from georvq.tessera.io import (decode_tile, encode_tile, from_windows, prep,
+                               requantize, to_windows)
 from georvq.tessera.release import (LADDER, REFINEMENT, TesseraRelease,
                                     build_bundle, load)
 
-__all__ = ["LADDER", "REFINEMENT", "TesseraRelease", "build_bundle", "load"]
+__all__ = ["LADDER", "REFINEMENT", "TesseraRelease", "build_bundle", "load",
+           "prep", "encode_tile", "decode_tile", "to_windows", "from_windows",
+           "requantize"]
