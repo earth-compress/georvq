@@ -1,5 +1,13 @@
 """Gain-shape vector quantization (CELT/CELP formulation) for the RVQ stack.
 
+MEASURED TO LOSE, kept for reference. At matched rate, plain VQ
+reaches 0.2251 against 0.2537 for K=4096 + 2 gain bits and 0.3087
+for K=1024 + 4. No config uses it. The motivation below is the
+argument that led here and it does NOT hold: the shape-codebook
+capacity the split costs exceeds the magnitude precision it buys
+(docs/FINDINGS.md). Read it as the reasoning behind a negative
+result, not as a rationale for switching this on.
+
 Motivation (measured on tessera_uf_vq8_s2): the selected codeword's norm
 tracks ||r||*cos(q,r) almost exactly, i.e. EMA k-means already places
 codewords at the projection-optimal magnitude for their direction. The

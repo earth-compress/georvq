@@ -197,13 +197,9 @@ class StatsCondConfig(StrictModel):
 
     @model_validator(mode="after")
     def _check(self):
-        """Refuse the combinations that would silently do nothing, or
-        something measured to be harmful.
-
-        `use_std` is blocked rather than merely defaulted off: matching the
-        reconstruction's standard deviation to the source's was measured to
-        HURT (0.9700 -> 0.9678), because the decoder is already smoother
-        than the truth and rescaling amplifies its error."""
+        """Refuse the combinations that would silently do nothing, and
+        `use_std`, which the class docstring above explains is not merely
+        unimplemented but measured to be harmful."""
         assert not self.use_std, "stats_cond.use_std is not implemented"
         assert self.subtract_mean or self.cond_encoder or self.cond_decoder, \
             "stats_cond does nothing with every option off"

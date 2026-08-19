@@ -193,7 +193,12 @@ def build_bundle(out_dir, model, cfg, means, refine_residuals=None,
                  **{"spec_" + k: v for k, v in REFINEMENT.to_json().items()
                     if v is not None})
 
-    bid = bitstream_id(model)
+    # the mean channel and the refinement table are things the decoder
+    # must agree on, so they belong in the id -- see bitstream_id
+    extra = [ch.mu0, ch.scale, np.int32(ch.bits), np.float32(ch.clip)]
+    if table is not None:
+        extra += [table, json.dumps(REFINEMENT.to_json(), sort_keys=True).encode()]
+    bid = bitstream_id(model, extra=extra)
     meta = {
         "bitstream_id": bid,
         "decoder_id": decoder_id(model),

@@ -89,12 +89,12 @@ class VectorQuantizer(nn.Module):
 
         reset_mode="split": send each dead code into the live cell with
         the largest distortion CONTRIBUTION (EMA of summed squared
-        error), placing it at that cell's worst-fitting member in the
-        current batch. This is LBG splitting -- the new codeword lands
-        where the error actually is. Point count alone would be the wrong
-        target: a large but tight cluster gains nothing from a second
-        codeword, so what matters is count x spread, which is what the
-        SSE EMA measures.
+        error) and split that cell in two -- see `_split_targets` for
+        where the pair is placed. This is LBG splitting: the new
+        codeword lands where the error actually is. Point count alone
+        would be the wrong target, since a large but tight cluster gains
+        nothing from a second codeword; what matters is count x spread,
+        which is what the SSE EMA measures.
 
         `replacements` is cast to the codebook dtype: z_flat may be bf16 under
         autocast while the codebook is fp32."""
