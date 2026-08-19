@@ -256,7 +256,7 @@ it recommends are done.
    `georvq/inference/` staying source-agnostic. This needs writing.
 2. **The run is mid-flight.** `tessera_vq8_k256_statscond_resume` is at
    ~29k of 71k cumulative steps on GPU0. The release waits on it. Note
-   the run_tag trap documented in HANDOFF: the resume reuses its
+   the run_tag trap: the resume reuses its
    `run_tag`, so `init_from` must keep pointing at the `_handoff/` copy.
 3. **`docs/OVERVIEW.md`, `docs/ADDING_A_SOURCE.md`, `README.md` and
    `CLAUDE.md` were never touched** by 19k lines of new code. They are
@@ -272,7 +272,7 @@ it recommends are done.
    rotation beats PCA here because at fixed levels-per-dimension you
    want variance *equalised*, not concentrated. This is a genuine
    candidate feature, not just a lesson.
-5. **`docs/HANDOFF.md` should not be merged as-is.** It is a session
+5. **`docs/HANDOFF.md` was not merged as-is (done).** It is a session
    document. Dissolve it: run state → deleted, science → FINDINGS.md,
    the measurement table and derived architecture → SOURCE_ONBOARDING.md,
    the metric-discipline section → FINDINGS.md or OVERVIEW.md (it is
@@ -287,15 +287,15 @@ it recommends are done.
    64/1024/16384) — every fix is committed but no run has used them
    together from scratch.
 
-**The uncomfortable finding to carry forward:** Tessera is
-downstream-transparent above **~1 b/px at cos ~0.93** on all five current
-benchmarks, and the release model sits at **10.85 b/px** — roughly 10×
-past transparency. But 46% of the within-patch residual sits below 4 px
-and is unreachable by this pyramid at any depth, and no benchmark in the
-suite can see fine spatial structure. So the rate target is either
-wrong by an order of magnitude, or the benchmarks are wrong. That is the
-highest-value open question in the project, and it should be stated
-plainly in the release notes rather than buried.
+**The measurement to carry forward:** Tessera is downstream-transparent
+above **~1 b/px at cos ~0.93** on all five current benchmarks. That fixes
+which rung to *recommend* for point-thematic work — around `20-20-1` —
+and nothing more: the release ships a ladder from 0.23 to 10.9 b/px
+precisely because the right rung depends on the task. The open question
+is not whether the high rungs are wasted but what they are worth, and no
+benchmark in the suite can answer it, because all five are coarse
+thematic labels at a single point. A fine-spatial or temporal benchmark
+is the highest-value addition to the eval suite.
 
 ---
 

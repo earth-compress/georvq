@@ -110,13 +110,18 @@ repeated split seeds, giving a noise floor of +/-0.017 on LUCAS and
    accuracy. AlphaEarth's field is smoother and more nearly low-rank, so a
    given cosine error eats the dimensions the probes actually read.
 
-**Two consequences that change what we are building.**
+**Two consequences for how a source is specified.**
 
-*The rate target is wrong by an order of magnitude.* These tasks stop
-caring at ~1 b/px. The current run sits at 10.85 b/px and cos 0.978 —
-roughly 10x past transparency — so the R-D gains we have been tracking may
-be downstream-irrelevant. A cosine target transplanted from AlphaEarth
-(0.998) is, in the report's words, the wrong specification for Tessera.
+*The transparency point is a recommendation, not a ceiling.* These tasks
+stop improving at ~1 b/px, which is what a user coding for point-thematic
+work should be pointed at — around `20-20-1` on the released ladder. It
+does not make the rest of the ladder wrong: the codec ships a range
+(0.23–10.9 b/px) precisely because the right rung depends on the task,
+and the benchmarks that exist today do not exercise the fine-scale detail
+the high rungs buy. What it does rule out is transplanting a *cosine*
+target across sources: AlphaEarth's 0.998 is not a meaningful
+specification for Tessera, whose probes are already indifferent at
+0.93.
 
 *L is measurably over-provisioned.* d95 of 51/91/71 in tiers of
 512/512/256 says the latent widths could be several times narrower before
@@ -126,10 +131,52 @@ the probes would notice.
 at a single point — the regime AlphaEarth was designed for. Tessera's
 per-pixel information may well pay on tasks with finer spatial or temporal
 structure, and **none are in the suite**. So "transparent above 1 b/px" is
-established for point-thematic use and unestablished for anything else;
-optimising to it could be optimising for the wrong customer. A
-fine-spatial or temporal benchmark is the single highest-value addition to
-this axis.
+established for point-thematic use and simply unmeasured for anything
+else. That is an argument for adding a fine-spatial or temporal
+benchmark — the highest-value addition to this axis — not for assuming
+the high-rate end is wasted.
+
+## The five-source measurement table
+
+`analysis/data_probe.py` and `analysis/pyramid_sizing.py`, W=64, grids
+1/4/16. This is the output the rest of the document consumes.
+
+| | DEM | S1 RTC | S2 L1C | AlphaEarth | Tessera |
+|---|---:|---:|---:|---:|---:|
+| bands | 1 | 2 | 13 | 64 | 128 |
+| valid | 100% | 100% | 99.5% | 81.5% | 95.9% |
+| tier-0 energy | 99.8% | 97.2% | 97.1% | 97.7% | 87.3% |
+| d95 tier 0/1/2 | 1/1/1 | 2/2/2 | 3/3/3 | 7/27/30 | 32/75/86 |
+| residual <4 px | 1.7% | 45.5% | 11.6% | 16.6% | 46.0% |
+| lossless floor b/px | 2.47 | 11.2 | 72.3 | 131 | 672 |
+| prediction saves | 58.4% | 17.8% | 42.5% | 44.9% | 9.7% |
+| magnitude spread | — | — (dB) | 6.6x | 1.00x | 1.57x |
+| autocorr <0.5 at | >32 px | 4 px | 32 px | >32 px | 4 px |
+
+The lossless unit is a judgement call per source (int8 as stored,
+integer metre, uint16 DN, **dB at 0.1 dB** for SAR) and is printed with
+the figures. On S2 the `left` predictor beats `(left+up)/2`, the reverse
+of every other source, because the 20 m and 60 m bands are
+nearest-upsampled and the horizontal neighbour is often an exact
+duplicate. Entropies are order-0 per band, so every floor is
+conservative.
+
+The `residual <4 px` row is a statement about where residual *energy*
+sits in scale, not about what the codec can represent: the fine tier's
+tokens decode through a head that emits every pixel of their cell
+individually, so sub-cell structure is reachable — it is simply the part
+the model has the least capacity to spare for.
+
+### What the table implies per source
+
+| | DEM | S1 | S2 | AE | Tessera |
+|---|---|---|---|---|---|
+| transmit mean | yes | yes | yes | yes | **yes** (0.188 b/px, +0.0069 cos) |
+| per-band std | no | no | no | n/a | **no — measured harmful** (0.9700->0.9678) |
+| scalar gain | already does | likely | likely | none needed | **likely, untested** (residual spans 4.16x) |
+| latent dims t0/t1/t2 | 16/32/32 | 16/32/32 | 32/64/64 | 32/64/96 | **64/128/128** (deployed 512/512/256) |
+| K per tier | 64/256/1024 | 64/256/1024 | 64/512/4096 | 64/1024/8192 | **64/1024/16384** |
+| train metric | MSE on standardised relief; report R2 | MSE in dB + multi-look | per-band weighted MSE + spectral angle | cosine | MSE on mean-removed field; report **ccos** |
 
 ## The derivation chain
 
@@ -137,7 +184,7 @@ Ordered so each step consumes the previous ones.
 
 | # | parameter | derived from | current evidence |
 |---|---|---|---|
-| 0 | **objective** | use-case: task eval, band subsetting | downstream transparency at ~1 b/px, cos ~0.93; cosine is NOT transferable across sources |
+| 0 | **objective** | use-case: task eval, band subsetting | point-thematic transparency at ~1 b/px, cos ~0.93; cosine is NOT transferable across sources; fine-scale use unmeasured |
 | 1 | **W** (window) | autocorrelation range; between/within variance vs W | 64 px, unjustified |
 | 2 | **P**, **G** (tiers, grids) | power spectrum; autocorrelation scale breaks | fine cell 4 px matches lag-0.5 point |
 | 3 | **L** (latent dims/tier) | global PCA d95; ~4 bits/dim saturation | measured d95 51/91/71 of 512/512/256 — over-provisioned several fold |

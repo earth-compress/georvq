@@ -15,6 +15,14 @@ provenance, and practical gotchas.
   `tests/test_compat.py` must stay exact).
 - Configs are pydantic-validated (`extra="forbid"`); anything affecting a
   run belongs in the `Config` schema.
-- `georvq/ae/` is the AlphaEarth *release layer* (source-specific
-  policy, `docs/AE_RELEASE.md`); `georvq/inference/` stays
-  source-agnostic. Keep that boundary.
+- `georvq/ae/` and `georvq/tessera/` are *release layers*
+  (source-specific policy, `docs/AE_RELEASE.md` and
+  `docs/TESSERA_RELEASE.md`); `georvq/inference/` stays source-agnostic.
+  Keep that boundary.
+- Shipped payloads are frozen. The AlphaEarth `star.tif` bytes are
+  public, so `tests/test_refine.py` pins them against an inlined copy of
+  the original packer; generalising code behind a shipped format is fine,
+  changing its bytes is not.
+- Before designing for a new source, read `docs/SOURCE_ONBOARDING.md`:
+  window, tier grids, latent widths and codebook sizes are derived from
+  measurements, not copied from a preset.
