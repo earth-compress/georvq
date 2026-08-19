@@ -158,6 +158,10 @@ class ChipPool:
         return t // self._n_per, int(self._r0s[t % self._n_per])
 
     def _load_tile(self, ci, r0):
+        """Read one chip's row-slice out of its shard, with the source's aux
+        bytes (e.g. Tessera's per-pixel scale plane) appended as trailing
+        bands when the store has them.
+        """
         r = self.rows.iloc[ci]
         sh = self.store.open_shard(int(r["shard"]))
         tile = np.ascontiguousarray(
@@ -182,6 +186,15 @@ class ChipPool:
         return slot, self._decode_tile(t)
 
     def _refresher_fifo(self, seed):
+        """Background refresh in whole-dataset FIFO order.
+
+        Unlike random refresh this sweeps the store front to back, so every
+        chip is seen once per pass -- the mode to use on multi-TB stores,
+        where a random draw would revisit a small resident subset and never
+        reach most of the data. Rate is set by `refresh_per_s`, not by pool
+        size, so shrinking the pool costs instantaneous diversity but not
+        throughput.
+        """
         while not self.stop.is_set():
             slot, (ci, r0) = self._next_tile()
             chip = torch.from_numpy(self._load_tile(ci, r0)); self.slot_row[slot] = ci

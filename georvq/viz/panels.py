@@ -72,6 +72,14 @@ def rgb_mapper(chips_i8):
         return np.clip((proj[:, GROUPS[gi]] - lo) / (hi - lo), 0, 1)
 
     def to_rgb(emb):
+        """Embedding chips -> RGB, blending a GLOBAL PCA basis with each
+        chip's own local basis.
+
+        The global part keeps colours comparable across chips; the local
+        part restores within-chip contrast that a global basis flattens.
+        Returned as a closure so a reconstruction can be rendered through
+        exactly the basis its original was.
+        """
         out = np.zeros((n, 2, H, Wd, 3), np.float32)
         for i in range(n):
             px = chip_px(emb[i])

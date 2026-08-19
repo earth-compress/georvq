@@ -72,6 +72,13 @@ class ShardWriter:
         return {None: os.path.join(self.out_dir, f"shard_{sh:04d}.npy")}
 
     def _open_shard(self, sh, fresh):
+        """Memory-map one shard, creating it at full size when `fresh`.
+
+        Shards are allocated at their final shape up front so writers can
+        address any slot without growing a file, which is what makes
+        append/resume safe: reopening uses mode `r+` and leaves existing
+        rows untouched.
+        """
         out = {}
         for name, path in self._paths(sh).items():
             if fresh:
@@ -118,6 +125,14 @@ class ShardWriter:
 
     def finalize(self, source: str, nodata=None, grid_period=None,
                  extra: dict | None = None) -> dict:
+        """Flush the shards and write the index and manifest.
+
+        The manifest is the store's contract with everything downstream --
+        geometry, dtype, nodata and `grid_period` are read by `Source.prep`
+        and by the crop alignment, so a store without one is unusable even
+        though its shards are intact. Call this exactly once, after the last
+        chip is written.
+        """
         if self._shard is not None:
             for s in self._shard.values():
                 s.flush()

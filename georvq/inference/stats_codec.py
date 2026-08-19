@@ -57,6 +57,13 @@ class StatsPacker:
         return struct.pack("B", 255) + stats.astype(np.float16).tobytes()
 
     def unpack(self, data: bytes) -> np.ndarray:
+        """Packed stats bytes -> the (dim,) stats vector.
+
+        `n` is the number of PCA components actually sent; `n == 255` is the
+        escape hatch meaning the packet carries a raw float16 vector
+        instead, used when the basis cannot represent the tile well enough.
+        Inverse of `pack`.
+        """
         n = struct.unpack("B", data[:1])[0]
         if n == 255:
             return np.frombuffer(data[1:1 + 2 * self.dim],

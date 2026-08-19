@@ -97,6 +97,13 @@ class S2Normalizer:
     the 13 bands (the layout the stats codec compresses)."""
 
     def normalize(self, x: dict):
+        """Per-band-group standardization, returning the stats to transmit.
+
+        Sentinel-2 bands differ in physical scale and per-scene
+        illumination, so the model sees standardized inputs and the (mu, sd)
+        side channel carries what was removed. Embedding-field sources need
+        nothing here and return None from `normalizer`.
+        """
         stats = {}
         out = {}
         for name, t in x.items():

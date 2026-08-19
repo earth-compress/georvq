@@ -59,6 +59,17 @@ def decoder_id(model) -> str:
 
 def save_release(out_dir, model, cfg, step=0, cdfs_path=None,
                  stats_pca=None, notes=""):
+    """Write a self-contained bundle: weights, optional side tables, and
+    the ids that define what they decode.
+
+    The `bitstream_id` returned here hashes everything that DEFINES the
+    bitstream -- tier specs, codebooks, conditioning priors, the stats
+    basis and the CDF tables -- but deliberately NOT the decoder
+    weights, so a better decoder can ship against the same id and decode
+    existing archives without re-encoding. Source-specific release state
+    (containers, refinements, mean channels) belongs in that source's
+    release layer, not here.
+    """
     os.makedirs(out_dir, exist_ok=True)
     save_checkpoint(os.path.join(out_dir, "model.pt"), model, cfg, step)
     if cdfs_path:

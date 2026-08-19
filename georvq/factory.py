@@ -9,6 +9,13 @@ from georvq.sources import get_source
 
 
 def build_model(cfg: Config, device="cpu") -> PyramidCodec:
+    """The one way to construct a model from a config.
+
+    Also attaches `source` and `full_config` to the model, which is what
+    lets a checkpoint rebuild itself and what every eval and inference
+    path reads. Construct models through here rather than calling
+    `PyramidCodec` directly, or those attributes go missing.
+    """
     source = get_source(cfg.data.source, cfg.model)
     model = PyramidCodec(cfg.model, source).to(device)
     model.tokenizer.grad_ckpt = cfg.train.grad_ckpt

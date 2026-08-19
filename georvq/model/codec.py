@@ -445,6 +445,14 @@ class PyramidCodec(nn.Module):
         zs = self.encode_levels(x, self._stats_of(x), None)
 
         def _tally(i, sp, per_level_idx):
+            """Per-level codebook diagnostics for one tier: fraction of codes
+            used, index entropy, and its perplexity.
+
+            Usage and perplexity are health hints only, never quality measures:
+            a codebook can reach near-full utilization while explaining almost
+            none of the variance (see docs/FINDINGS.md). Judge books by
+            rate-distortion; read these to spot a level that has collapsed.
+            """
             for j in range(sp.depth):
                 p = torch.bincount(per_level_idx[j].flatten(),
                                    minlength=sp.codes).float()

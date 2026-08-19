@@ -124,6 +124,14 @@ def config_from_legacy_args(a: dict) -> Config:
 
 
 def remap_state_dict(sd: dict, strict=True) -> dict:
+    """Rename a legacy research-repo state dict onto today's modules.
+
+    Strict by default, and deliberately so: an unrecognized key usually
+    means the checkpoint has a module this code no longer builds, and
+    silently dropping it would load a partially-initialized model that
+    reports plausible-looking garbage. Pass `strict=False` only when
+    you intend to discard the unmapped half.
+    """
     out = {}
     dropped = []
     for k, v in sd.items():

@@ -50,6 +50,14 @@ def rd_figure(cos_by_tuple, vs, specs, tuples, step, ref_fronts=(), px=256,
 
 
 def codebook_figure(vs, specs, step):
+    """One panel per tier: usage, perplexity and index entropy per RVQ
+    level, each normalized to [0, 1] so tiers with different K are
+    comparable side by side.
+
+    Read this to spot a level that has COLLAPSED, not to judge quality:
+    all three bars can sit near 1.0 on a codebook that explains almost
+    none of the variance (docs/FINDINGS.md).
+    """
     fig, axes = plt.subplots(1, len(specs), figsize=(5 * len(specs), 3.3),
                              constrained_layout=True, squeeze=False)
     for i, (ax, sp) in enumerate(zip(axes[0], specs)):
@@ -236,6 +244,14 @@ def recon_figure(model, source, val_s, step, n=8, mins=None, tuples=None,
 
 
 def _recon_figure(model, source, val_s, step, n, mins, tuples, val_loc):
+    """Reconstruction contact sheet: the original over one row per depth
+    tuple, projected to RGB through a shared PCA basis.
+
+    The basis is fitted on the ORIGINALS and reused for every row, so
+    rows are comparable to each other and to the source; a per-row
+    basis would hide exactly the errors this figure exists to show.
+    Call `recon_figure`, which owns the eval-mode guard.
+    """
     val_x, val_valid = source.prep(val_s[:n], val_s.device)
     loc = val_loc[:n] if val_loc is not None else None
     if tuples:

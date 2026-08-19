@@ -250,6 +250,14 @@ class TorchBackend:
 
 
 class OnnxBackend:
+    """Torch-free backend over an exported ONNX directory.
+
+    Writes the same container as `TorchBackend`, so a tile encoded by
+    either decodes with the other. Encoders are backend-CONSISTENT but
+    not bit-identical -- ONNX runs fp32 throughout where torch may use
+    bf16 decoder forwards -- so indices can differ on near-ties without
+    any quality difference.
+    """
     def __init__(self, export_dir, device="cpu", threads=None):
         from georvq.inference.onnx_backend import OnnxCodec
         self.codec = OnnxCodec(export_dir, device=device, threads=threads)
@@ -271,6 +279,13 @@ class OnnxBackend:
 
 
 def load_backend(args):
+    """Pick the torch or ONNX backend, defaulting to whichever the model
+    directory actually contains.
+
+    Both read and write the same container, so the choice is a
+    deployment detail: ONNX needs no torch at all, torch is required to
+    encode on GPU.
+    """
     kind = args.backend
     if kind == "auto":
         kind = "onnx" if (os.path.isdir(args.model) and os.path.exists(
@@ -465,6 +480,10 @@ def nominal_bits(specs_sig, depths=None):
 # --------------------------------------------------------------------------
 
 def _common_args(ap):
+    """Arguments shared by every `georvq-ae-*` entry point: which model,
+    which backend, which device. Kept in one place so the executables
+    cannot drift apart in how they are addressed.
+    """
     ap.add_argument("--model", required=True,
                     help="torch checkpoint .pt, release bundle dir, or "
                          "ONNX export dir")
@@ -493,6 +512,10 @@ def _check_bitstream(header, be, path):
 
 
 def _parse_tuple(s, specs_sig):
+    """Parse `--tuple L0,L1,L2` into per-tier depths, validated against
+    the model's own tier depths so an over-deep request fails here
+    rather than silently truncating at decode.
+    """
     if not s:
         return None
     ls = [int(v) for v in s.split(",")]
@@ -565,6 +588,15 @@ def _quality_arg(sub):
 
 
 def _resolve_quality(header, spec_arg, specs_sig):
+    """Turn `--quality STAT<=X` into the cheapest depth tuple that meets
+    it, using the error stats measured at ENCODE time and stored in the
+    blob header.
+
+    This is why quality control needs no predictor network: the encoder
+    already decoded its own rate ladder and recorded the true per-window
+    error. Blobs encoded without stats can only be addressed by
+    `--tuple`.
+    """
     import re
     m = re.fullmatch(r"(mean|p50|p90|p99|max)<=([0-9.eE+-]+)", spec_arg)
     if not m:
@@ -611,6 +643,14 @@ def _report(tag, header, n_windows, window, file_bytes, t0, depths=None):
 # --------------------------------------------------------------------------
 
 def export_onnx_main(argv=None):
+    """Export encoder, decoder and codebooks to ONNX, then verify parity
+    against the torch model before writing.
+
+    The parity check is the point: an export that silently disagrees
+    with its checkpoint would produce a bitstream no other backend can
+    read, and the failure would only surface as degraded reconstructions
+    much later.
+    """
     ap = argparse.ArgumentParser(
         description="Export a georvq checkpoint to an ONNX dir usable by "
                     "the onnx backend of the codec executables.")
@@ -652,6 +692,10 @@ def export_onnx_main(argv=None):
 # --------------------------------------------------------------------------
 
 def _load_windows(path, window, bands):
+    """Read pre-cut (B, C, W, W) windows from an npz for the patch dev
+    tool. This is the development container, not the release one -- real
+    tiles go through the COG asset path.
+    """
     a = np.load(path)
     if a.ndim == 3:
         a = a[None]

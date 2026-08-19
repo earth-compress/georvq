@@ -115,17 +115,22 @@ class TesseraRelease:
 
     @property
     def side_bits(self) -> float:
+        """Cost of the transmitted mean, charged at every rung."""
         return float(self.mean_channel.cost_bits())
 
     def ladder(self):
         return ladder(self.specs, self.side_bits)
 
     def bits(self, depths=None, refine=False) -> float:
+        """Bits per window at a depth tuple, side channel included and the
+        refinement counted only when asked for and only at full depth.
+        """
         depths = depths or [sp.depth for sp in self.specs]
         return tuple_bits(self.specs, depths, self.side_bits,
                           self.refine if refine else None)
 
     def bpp(self, depths=None, refine=False) -> float:
+        """`bits` per pixel -- the number quoted in docs/TESSERA_RELEASE.md."""
         return self.bits(depths, refine) / self.window ** 2
 
     # ---- code ----
@@ -155,6 +160,9 @@ class TesseraRelease:
 
     @torch.no_grad()
     def decode(self, packets, depths=None, valid=None):
+        """Decode packets at a depth tuple. `valid` restores the source's
+        nodata geometry; omit it only when every pixel is valid.
+        """
         return self.codec.decode(packets, depths=depths, valid=valid)
 
 
@@ -206,6 +214,13 @@ def build_bundle(out_dir, model, cfg, means, refine_residuals=None,
 
 
 def load(release_dir, device="cpu") -> TesseraRelease:
+    """Load a Tessera release bundle into a ready `TesseraRelease`.
+
+    The mean channel is required -- the model was trained on a
+    mean-removed field, so weights alone cannot decode. The refinement
+    table is optional and absent bundles simply cannot refine, which is
+    the intended degraded mode rather than an error.
+    """
     from georvq.factory import from_checkpoint
     model = from_checkpoint(os.path.join(release_dir, "model.pt"), device)
     ch = MeanChannel.load(os.path.join(release_dir, "mean_channel.npz"))
