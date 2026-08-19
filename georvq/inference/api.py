@@ -6,9 +6,12 @@ models, packed stats bytes for normalized sources). Any monotone depth
 tuple can be decoded from the same packet by truncating levels — the
 matryoshka property.
 
-The bitstream is decoder-independent: packets are defined by (tier specs,
-codebooks, stats codec), so decoder upgrades never require re-encoding
-(see docs/BITSTREAM.md).
+The bitstream is decoder-independent: a packet is defined by everything
+BOTH ends must agree on -- tier specs, codebooks, the stats codec or
+transmitted-mean channel where a source uses one, and a refinement's
+table and seed where one is carried -- and never by the decoder weights,
+so decoder upgrades never require re-encoding. `bitstream_id` hashes
+exactly that set (see docs/BITSTREAM.md).
 """
 from __future__ import annotations
 

@@ -27,7 +27,17 @@ from georvq.inference.stats_codec import StatsPacker
 from georvq.repro import save_checkpoint
 
 
-def bitstream_id(model, stats_pca=None, cdfs_path=None) -> str:
+def bitstream_id(model, stats_pca=None, cdfs_path=None, extra=()) -> str:
+    """Hash of everything that DEFINES the bitstream.
+
+    Decoder weights are deliberately excluded, so a better decoder ships
+    against the same id and decodes existing archives. Everything a
+    decoder must agree on to reconstruct the same field is included, and
+    `extra` is how a source's release layer adds its own such state --
+    a transmitted-mean channel's constants, a refinement's table and
+    rotation seed. Leaving those out would let two incompatible bundles
+    claim one id, and mismatched-but-same-id state decodes to plausible
+    garbage rather than to an error."""
     h = hashlib.sha256()
     for sp in model.specs:
         h.update(str((sp.grid, sp.dim, sp.codes, sp.depth)).encode())
@@ -41,6 +51,8 @@ def bitstream_id(model, stats_pca=None, cdfs_path=None) -> str:
         h.update(np.asarray(stats_pca["components"]).tobytes())
     if cdfs_path and os.path.exists(cdfs_path):
         h.update(open(cdfs_path, "rb").read())
+    for blob in extra:
+        h.update(blob if isinstance(blob, bytes) else np.asarray(blob).tobytes())
     return h.hexdigest()[:16]
 
 
