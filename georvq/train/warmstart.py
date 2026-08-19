@@ -51,7 +51,15 @@ def load_partial(model, path, device):
 
 
 def mature_codebooks(model, decay=0.9995):
-    """Warm-started codebooks: freeze dead-code resets, slow the EMA."""
+    """Warm-started codebooks: freeze dead-code resets, slow the EMA.
+
+    This OVERRIDES `vq.ema_decay` and disables `vq.reset_interval` /
+    `vq.reset_mode` for the run. That is right when the books arrive
+    already fitted and should barely move, and wrong when the point of
+    the run is to keep them live -- set `vq.mature_warmstart: false`
+    then. It is on by default, so any run with `train.init_from` gets it
+    unless it opts out; the caller logs when it contradicts an explicit
+    setting."""
     for rvq in model.rvqs:
         for lev in rvq.levels:
             lev.reset_interval = 1 << 30

@@ -494,6 +494,18 @@ class Config(StrictModel):
         """Cross-section checks: the ones that need more than one section
         of the config to be visible at once, and so cannot live on the
         individual models above."""
+        v = self.model.vq
+        if v is not None:
+            # these two partition one batch -- full-depth rows, path-sampled
+            # rows, and un-quantized pass-through rows -- but they live in
+            # different sections, so nothing else notices when they overrun
+            # it. Over 1.0 the path fraction goes negative and the sampler
+            # silently returns full depth for everything.
+            assert self.model.full_frac + v.passthrough_frac <= 1.0, (
+                f"model.full_frac ({self.model.full_frac}) + "
+                f"model.vq.passthrough_frac ({v.passthrough_frac}) > 1: they "
+                "are shares of the same batch and leave no rows for the "
+                "sampled depth tuples")
         if self.train.freeze_codec:
             assert self.train.init_from is not None, \
                 "train.freeze_codec requires train.init_from"

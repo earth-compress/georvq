@@ -70,7 +70,7 @@ def decoder_id(model) -> str:
 
 
 def save_release(out_dir, model, cfg, step=0, cdfs_path=None,
-                 stats_pca=None, notes=""):
+                 stats_pca=None, notes="", extra_id=(), meta=None):
     """Write a self-contained bundle: weights, optional side tables, and
     the ids that define what they decode.
 
@@ -80,7 +80,9 @@ def save_release(out_dir, model, cfg, step=0, cdfs_path=None,
     weights, so a better decoder can ship against the same id and decode
     existing archives without re-encoding. Source-specific release state
     (containers, refinements, mean channels) belongs in that source's
-    release layer, not here.
+    release layer, but it is written THROUGH here: pass its
+    id-defining state as `extra_id` and its descriptive fields as `meta`,
+    so every bundle in the project has one writer and one layout.
     """
     os.makedirs(out_dir, exist_ok=True)
     save_checkpoint(os.path.join(out_dir, "model.pt"), model, cfg, step)
@@ -90,13 +92,17 @@ def save_release(out_dir, model, cfg, step=0, cdfs_path=None,
     if stats_pca is not None:
         np.savez(os.path.join(out_dir, "stats_pca.npz"), **stats_pca)
     bid = bitstream_id(model, stats_pca,
-                       os.path.join(out_dir, "cdfs.npz") if cdfs_path else None)
+                       os.path.join(out_dir, "cdfs.npz") if cdfs_path else None,
+                       extra=extra_id)
+    payload = {"bitstream_id": bid,
+               "decoder_id": decoder_id(model),
+               "decoder_version": 1,
+               "window": model.window,
+               "tiers": [str(sp) for sp in model.specs],
+               "notes": notes}
+    payload.update(meta or {})
     with open(os.path.join(out_dir, "bundle.json"), "w") as f:
-        json.dump({"bitstream_id": bid,
-                   "decoder_version": 1,
-                   "window": model.window,
-                   "tiers": [str(sp) for sp in model.specs],
-                   "notes": notes}, f, indent=1)
+        json.dump(payload, f, indent=1)
     _write_readme(out_dir, model)
     return bid
 

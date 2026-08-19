@@ -181,9 +181,8 @@ def build_bundle(out_dir, model, cfg, means, refine_residuals=None,
     refine_residuals:  (N, cells, dim) residuals of REFINEMENT.tier, from
                        held-out windows encoded with the SHIPPED weights
     """
-    from georvq.repro import save_checkpoint
+    from georvq.inference.release import save_release
     os.makedirs(out_dir, exist_ok=True)
-    save_checkpoint(os.path.join(out_dir, "model.pt"), model, cfg, step)
 
     bits = cfg.model.stats_cond.bits_per_band
     ch = MeanChannel.fit(means, bits)
@@ -201,24 +200,17 @@ def build_bundle(out_dir, model, cfg, means, refine_residuals=None,
     extra = [ch.mu0, ch.scale, np.int32(ch.bits), np.float32(ch.clip)]
     if table is not None:
         extra += [table, json.dumps(REFINEMENT.to_json(), sort_keys=True).encode()]
-    bid = bitstream_id(model, extra=extra)
-    meta = {
-        "bitstream_id": bid,
-        "decoder_id": decoder_id(model),
-        "decoder_version": 1,
-        "source": "tessera",
-        "window": model.window,
-        "bands": model.bands,
-        "tiers": [str(sp) for sp in model.specs],
-        "mean_channel": {"bits_per_band": bits,
-                         "bits_per_window": ch.cost_bits()},
-        "refinement": (REFINEMENT.to_json() if table is not None else None),
-        "refine_by_default": REFINE_BY_DEFAULT,
-        "notes": notes,
-    }
-    with open(os.path.join(out_dir, "bundle.json"), "w") as f:
-        json.dump(meta, f, indent=1)
-    return meta
+    bid = save_release(
+        out_dir, model, cfg, step=step, notes=notes, extra_id=extra,
+        meta={"source": "tessera",
+              "bands": model.bands,
+              "mean_channel": {"bits_per_band": bits,
+                               "bits_per_window": ch.cost_bits()},
+              "refinement": (REFINEMENT.to_json() if table is not None
+                             else None),
+              "refine_by_default": REFINE_BY_DEFAULT})
+    with open(os.path.join(out_dir, "bundle.json")) as f:
+        return json.load(f)
 
 
 def load(release_dir, device="cpu") -> TesseraRelease:
@@ -232,16 +224,21 @@ def load(release_dir, device="cpu") -> TesseraRelease:
     from georvq.factory import from_checkpoint
     model = from_checkpoint(os.path.join(release_dir, "model.pt"), device)
     ch = MeanChannel.load(os.path.join(release_dir, "mean_channel.npz"))
-    spec, table = None, None
-    rpath = os.path.join(release_dir, "refine_table.npz")
-    if os.path.exists(rpath):
-        z = np.load(rpath)
-        table, spec = z["table"], REFINEMENT
     bundle = {}
     bpath = os.path.join(release_dir, "bundle.json")
     if os.path.exists(bpath):
         with open(bpath) as f:
             bundle = json.load(f)
+    spec, table = None, None
+    rpath = os.path.join(release_dir, "refine_table.npz")
+    if os.path.exists(rpath):
+        table = np.load(rpath)["table"]
+        # the bundle's OWN spec, not today's module constant: a table is
+        # fitted for one (tier, bits, rotation) and decoding it under a
+        # different one is silent garbage. REFINEMENT is only the
+        # fallback for bundles cut before it was recorded.
+        spec = (RefinementSpec.from_json(bundle["refinement"])
+                if bundle.get("refinement") else REFINEMENT)
     return TesseraRelease(Codec(model), ch, spec, table, bundle)
 
 
