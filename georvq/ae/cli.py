@@ -149,7 +149,7 @@ class TorchBackend:
                           for sp in self.codec.specs]
         self.device = device
         sp0 = self.codec.specs[0]
-        self.star_cost_bits = sp0.cells * sp0.dim * STAR_BITS + 16
+        self.star_cost_bits = STAR_SPEC.cost_bits(sp0.cells, sp0.dim)
         from georvq.inference.release import bitstream_id, decoder_id
         self.bitstream_id = bitstream_id(self.codec.model)
         self.decoder_id = decoder_id(self.codec.model)
@@ -260,7 +260,7 @@ class OnnxBackend:
         self.bitstream_id = self.codec.meta.get("bitstream_id")
         self.decoder_id = self.codec.meta.get("decoder_id")
         t0 = self.codec.tiers[0]
-        self.star_cost_bits = t0["grid"] ** 2 * t0["dim"] * STAR_BITS + 16
+        self.star_cost_bits = STAR_SPEC.cost_bits(t0["grid"] ** 2, t0["dim"])
 
     def encode(self, x, coarse_residual=False):
         return self.codec.encode(x, coarse_residual=coarse_residual)

@@ -2,18 +2,16 @@
 import numpy as np
 import pytest
 
+from georvq.config import TierSpec
 from georvq.inference.mean_codec import MeanChannel
 from georvq.tessera import release as rel
 
 
-class _Spec:
-    def __init__(self, grid, dim, codes, depth):
-        self.grid, self.dim, self.codes, self.depth = grid, dim, codes, depth
-        self.cells = grid * grid
-
-
-SPECS = [_Spec(1, 512, 256, 20), _Spec(4, 512, 256, 20),
-         _Spec(16, 256, 256, 20)]
+# The real TierSpec, deliberately: rate arithmetic lives on it, and a
+# stub here would let the release's accounting drift from the codec's.
+SPECS = [TierSpec(grid=1, dim=512, codes=256, depth=20),
+         TierSpec(grid=4, dim=512, codes=256, depth=20),
+         TierSpec(grid=16, dim=256, codes=256, depth=20)]
 SIDE = 128 * 6          # bands x bits_per_band
 
 
@@ -101,3 +99,18 @@ def test_release_refines_the_fine_tier_and_not_by_default():
     assert rel.REFINEMENT.tier == 2
     assert rel.REFINEMENT.quantizer == "lloyd"
     assert rel.REFINE_BY_DEFAULT is False
+
+
+def test_rate_is_computed_in_exactly_one_place():
+    """Regression: Codec.packet_bits once omitted the stats side channel,
+    under-reporting a stats_cond model's cheapest rung by 83%. Both the
+    generic and the release-side accounting must agree, because they are
+    now the same arithmetic."""
+    from georvq.model.codec import tuple_bits as codec_tuple_bits
+    side = SIDE
+    for depths in ([20, 0, 0], [20, 20, 0], [20, 20, 20]):
+        assert rel.tuple_bits(SPECS, depths, side) == \
+            codec_tuple_bits(SPECS, depths, side)
+    # and the side channel is charged at EVERY rung, cheapest included
+    bare = codec_tuple_bits(SPECS, [20, 0, 0], 0.0)
+    assert rel.tuple_bits(SPECS, [20, 0, 0], side) == bare + side

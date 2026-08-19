@@ -7,7 +7,6 @@ mechanism each one configures is generic and lives in
 from __future__ import annotations
 
 import json
-import math
 import os
 
 import numpy as np
@@ -18,6 +17,7 @@ from georvq.inference.mean_codec import MeanChannel
 from georvq.inference.refine import RefinementSpec
 from georvq.inference import refine as _refine
 from georvq.inference.release import bitstream_id, decoder_id
+from georvq.model.codec import tuple_bits as _codec_tuple_bits
 
 # --------------------------------------------------------------------------
 # the refinement: which tier, and why this one
@@ -68,8 +68,15 @@ def ladder(specs, side_bits):
 
 
 def tuple_bits(specs, depths, side_bits, refine: RefinementSpec = None):
-    b = sum(sp.cells * L * math.log2(sp.codes)
-            for sp, L in zip(specs, depths)) + side_bits
+    """Rate of one depth tuple, including the side channel and, where its
+    tier is at full depth, the refinement.
+
+    The pyramid + side-channel arithmetic belongs to
+    `georvq.model.codec.tuple_bits` and is deliberately not repeated
+    here: a second copy of a rate formula is how a channel ends up
+    uncharged in one code path and charged in another.
+    """
+    b = _codec_tuple_bits(specs, depths, side_bits)
     if refine is not None and depths[refine.tier] == specs[refine.tier].depth:
         sp = specs[refine.tier]
         b += refine.cost_bits(sp.cells, sp.dim)
