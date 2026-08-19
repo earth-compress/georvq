@@ -145,8 +145,11 @@ class TesseraRelease:
         mu_t = torch.from_numpy(mu_q).to(x.device)
         tiers = (self.refine.tier,) if (refine and self.refine) else ()
         pk = self.codec.encode(x, valid=valid, mean=mu_t, refine_tiers=tiers)
-        for p, c in zip(pk, codes):
-            p.stats = c.astype(np.uint16).tobytes()   # the wire form
+        # The packet carries the DEQUANTIZED mean, not the codes. They are
+        # not both needed: the mean already sits on the quantizer's
+        # reconstruction grid, so `mean_channel.encode(p.mean)` returns the
+        # transmitted codes exactly. Carrying both would be two fields for
+        # one fact, free to disagree.
         if refine and self.refine is not None:
             t = self.refine.tier
             res = np.stack([p.refinements[t] for p in pk])

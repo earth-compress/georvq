@@ -114,3 +114,17 @@ def test_rate_is_computed_in_exactly_one_place():
     # and the side channel is charged at EVERY rung, cheapest included
     bare = codec_tuple_bits(SPECS, [20, 0, 0], 0.0)
     assert rel.tuple_bits(SPECS, [20, 0, 0], side) == bare + side
+
+
+def test_the_transmitted_codes_are_recoverable_from_the_packet_mean():
+    """Why the packet carries only the dequantized mean.
+
+    The mean it carries is already on the quantizer's reconstruction
+    grid, so re-encoding it returns the codes that were transmitted.
+    Storing both would be two fields for one fact."""
+    g = np.random.default_rng(3)
+    mu = g.standard_normal((256, 48)).astype(np.float32) * 2 - 1
+    ch = MeanChannel.fit(mu, bits=6)
+    sent = ch.encode(mu)
+    on_the_packet = ch.decode(sent)
+    assert np.array_equal(ch.encode(on_the_packet), sent)

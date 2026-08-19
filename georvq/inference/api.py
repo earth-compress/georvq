@@ -26,7 +26,11 @@ import torch
 class Packet:
     indices: list  # per tier: (cells, depth) int64 ndarray
     loc: Optional[np.ndarray] = None      # location embedding (conditioned models)
-    stats: Optional[bytes] = None         # packed normalization stats
+    stats: Optional[bytes] = None
+    # a normalizer's packed side channel (`stats_codec.StatsPacker`), for
+    # sources that RESCALE their input. Not to be confused with `mean`
+    # below, which is part of the reconstruction rather than a rescaling
+    # of it -- the two are different mechanisms and never both in use.
     mean: Optional[np.ndarray] = None
     # (bands,) per-window mean, for models trained with `stats_cond`. It
     # is subtracted before the encoder and added back after the decoder,

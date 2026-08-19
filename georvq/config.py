@@ -182,9 +182,11 @@ class StatsCondConfig(StrictModel):
     decoder, so loss and metrics stay on the full field. Both encoder and
     decoder are conditioned on it. See georvq/model/stats_cond.py.
 
-    use_std is off and untested: matching the std was measured to HURT
-    (full-depth cosine 0.9700 -> 0.9678), unlike the S2 version this is
-    ported from, whose bands have genuinely different physical scales.
+    use_std is off and BLOCKED, not merely defaulted off: matching the
+    std was measured to hurt full-depth cosine, unlike the S2 version this
+    is ported from, whose bands have genuinely different physical scales.
+    The measurement is in docs/FINDINGS.md and the mechanism's reasoning
+    in georvq/model/stats_cond.py.
 
     bits_per_band is rate accounting only -- it does not quantize anything
     during training. 6 bits/band reaches cos 0.9767 against 0.9769 for the
@@ -282,8 +284,9 @@ class ModelConfig(StrictModel):
     full_frac: float = 0.0
     # "nested": draw the coarse depth uniformly and each finer tier
     # conditionally. Weights the R-D curve toward the high-rate end, but
-    # starves deep fine-tier books -- measured P(active)=0.006 for tier-2
-    # level 14, i.e. those books see 0.6% of rows.
+    # starves deep fine-tier books: the deepest fine levels train on a
+    # fraction of a percent of rows. See `path_tuples` in model/codec.py
+    # for the measurement and the fix.
     # "path": spread uniformly along the monotone truncation path, one
     # step per codebook, so every book gets an equal share (same level
     # rises to 0.197).

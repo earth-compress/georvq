@@ -23,6 +23,10 @@ provenance, and practical gotchas.
   public, so `tests/test_refine.py` pins them against an inlined copy of
   the original packer; generalising code behind a shipped format is fine,
   changing its bytes is not.
+- Measured figures live in `docs/FINDINGS.md` plus at most one mechanism
+  home; elsewhere state the claim and cite. `tests/test_figures_consistent.py`
+  pins this — a new quotation fails it, which is the prompt to ask whether
+  the reader needs the number or just the claim.
 - Before designing for a new source, read `docs/SOURCE_ONBOARDING.md`:
   window, tier grids, latent widths and codebook sizes are derived from
   measurements, not copied from a preset.
