@@ -24,6 +24,12 @@ class Packet:
     indices: list  # per tier: (cells, depth) int64 ndarray
     loc: Optional[np.ndarray] = None      # location embedding (conditioned models)
     stats: Optional[bytes] = None         # packed normalization stats
+    mean: Optional[np.ndarray] = None
+    # (bands,) per-window mean, for models trained with `stats_cond`. It
+    # is subtracted before the encoder and added back after the decoder,
+    # so unlike `stats` (a normalizer's packed side channel) it is part
+    # of the reconstruction, not a rescaling of it. Carried as floats
+    # here; a release quantizes it on the way to disk and charges it.
     refinements: Optional[dict] = None
     # {tier: (cells, dim) float} — that tier's residual after its full RVQ
     # depth. Optional additive refinements: a decoder adds one to its
@@ -73,7 +79,7 @@ class Codec:
     # ---- encode ----
 
     @torch.no_grad()
-    def encode(self, x, loc=None, refine_tiers=(),
+    def encode(self, x, loc=None, refine_tiers=(), valid=None, mean=None,
                coarse_residual=False) -> list[Packet]:
         """x: (B, C, W, W) prepared model-space input -> one Packet per
         window, at full depth (truncate at decode time for lower rates).
@@ -82,9 +88,16 @@ class Codec:
         additive refinement (see georvq.inference.refine). Which tier is
         worth refining is model-specific. `coarse_residual=True` is the
         AlphaEarth release's name for `refine_tiers=(0,)`.
+
+        valid/mean: for `stats_cond` models the per-window mean is part
+        of the packet. It is measured from the input unless supplied —
+        pass `mean` explicitly to encode against the QUANTIZED mean a
+        release will actually transmit, so encoder and decoder agree.
         """
         m = self.model
-        zs = m.encode_levels(x)
+        if m.stats_cond is not None and mean is None:
+            mean = m.patch_mean(x, valid)
+        zs = m.encode_levels(x, stats=mean, valid=valid)
         B = x.shape[0]
         want = set(refine_tiers) | ({0} if coarse_residual else set())
         if want and (m.selector is not None or m.conditioner is not None):
@@ -115,8 +128,10 @@ class Codec:
         stacked = [torch.stack(per, -1).cpu().numpy() for per in idxs]
         loc_np = (loc.cpu().numpy() if isinstance(loc, torch.Tensor)
                   else loc) if loc is not None else None
+        mu_np = mean.cpu().numpy() if isinstance(mean, torch.Tensor) else mean
         return [Packet(indices=[t[b] for t in stacked],
                        loc=loc_np[b] if loc_np is not None else None,
+                       mean=mu_np[b] if mu_np is not None else None,
                        refinements=({t: r[b] for t, r in res.items()}
                                     if res else None))
                 for b in range(B)]
@@ -124,13 +139,17 @@ class Codec:
     # ---- decode ----
 
     @torch.no_grad()
-    def decode(self, packets: list[Packet], depths=None):
+    def decode(self, packets: list[Packet], depths=None, valid=None):
         """Decode packets at a depth tuple (default: full).
         Returns (B, C, W, W) model-space reconstructions."""
         m = self.model
         depths = depths or [sp.depth for sp in self.specs]
         B = len(packets)
         dev = self.device
+        mean = None
+        if packets[0].mean is not None:
+            mean = torch.from_numpy(
+                np.stack([p.mean for p in packets])).to(dev).float()
         idx = [torch.from_numpy(np.stack([p.indices[i] for p in packets]))
                .to(dev) for i in range(len(self.specs))]     # (B, cells, depth)
         loc = None
@@ -149,7 +168,7 @@ class Codec:
                 recons.append(zq_full)   # full-depth context for finer tiers
                 tier_depths.append(torch.full((B,), full[i], device=dev))
             Ls = torch.tensor(depths, device=dev)[None].expand(B, -1)
-            return m.decode(zqs, Ls)
+            return m.decode(zqs, Ls, stats=mean, valid=valid)
         for rvq, tier_idx, L in zip(m.rvqs, idx, depths):
             zqs.append(self._lookup(rvq, tier_idx, L))
         # additive refinements: applied per tier, and only where that tier
@@ -162,7 +181,7 @@ class Codec:
                 np.stack([p.refinements[t] for p in packets])).to(dev)
             zqs[t] = zqs[t] + r
         Ls = torch.tensor(depths, device=dev)[None].expand(B, -1)
-        return m.decode(zqs, Ls)
+        return m.decode(zqs, Ls, stats=mean, valid=valid)
 
     @staticmethod
     def _lookup(rvq, tier_idx, L):
