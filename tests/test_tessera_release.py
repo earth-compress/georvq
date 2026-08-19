@@ -1,0 +1,103 @@
+"""Tessera release policy: the mean channel and the rate ladder."""
+import numpy as np
+import pytest
+
+from georvq.inference.mean_codec import MeanChannel
+from georvq.tessera import release as rel
+
+
+class _Spec:
+    def __init__(self, grid, dim, codes, depth):
+        self.grid, self.dim, self.codes, self.depth = grid, dim, codes, depth
+        self.cells = grid * grid
+
+
+SPECS = [_Spec(1, 512, 256, 20), _Spec(4, 512, 256, 20),
+         _Spec(16, 256, 256, 20)]
+SIDE = 128 * 6          # bands x bits_per_band
+
+
+def test_mean_channel_round_trips_within_its_step():
+    g = np.random.default_rng(0)
+    mu = g.standard_normal((500, 32)).astype(np.float32) * 3 + 7
+    ch = MeanChannel.fit(mu, bits=6)
+    back = ch.round_trip(mu)
+    # Inside the clip the error is bounded by half a step; outside it the
+    # quantizer saturates deliberately, and at 4 sigma a Gaussian corpus
+    # puts a handful of samples there.
+    step = 2 * ch.clip * ch.scale / (ch.levels - 1)
+    inside = np.abs((mu - ch.mu0) / ch.scale) <= ch.clip
+    assert inside.mean() > 0.999
+    assert np.all(np.abs(back - mu)[inside] <= step[None].repeat(
+        mu.shape[0], 0)[inside] * 0.5 + 1e-4)
+    assert ch.cost_bits() == 32 * 6          # no per-window side info
+
+
+def test_mean_channel_costs_exactly_the_charged_rate():
+    """The rate ladder is computed with bands x bits_per_band; the wire
+    format must not quietly add a per-window scale on top."""
+    ch = MeanChannel(np.zeros(128, np.float32), np.ones(128, np.float32),
+                     bits=6)
+    assert ch.cost_bits() == 768
+    assert ch.cost_bits() / 64 ** 2 == pytest.approx(0.1875)
+
+
+def test_mean_channel_saturates_rather_than_wrapping():
+    ch = MeanChannel(np.zeros(4, np.float32), np.ones(4, np.float32), bits=4)
+    far = np.array([[1e6, -1e6, 0.0, 0.0]], np.float32)
+    codes = ch.encode(far)
+    assert codes.max() == ch.levels - 1 and codes.min() == 0
+    assert np.all(np.isfinite(ch.decode(codes)))
+
+
+def test_mean_channel_survives_a_constant_band():
+    mu = np.ones((10, 3), np.float32)          # zero variance everywhere
+    ch = MeanChannel.fit(mu, bits=6)
+    assert np.all(np.isfinite(ch.round_trip(mu)))
+
+
+def test_mean_channel_persists(tmp_path):
+    g = np.random.default_rng(1)
+    ch = MeanChannel.fit(g.standard_normal((50, 8)).astype(np.float32), 6)
+    p = tmp_path / "mc.npz"
+    ch.save(p)
+    got = MeanChannel.load(p)
+    assert got.bits == ch.bits and got.clip == ch.clip
+    assert np.array_equal(got.mu0, ch.mu0)
+    assert np.array_equal(got.scale, ch.scale)
+
+
+def test_ladder_saturates_coarse_then_mid_then_fine():
+    lad = rel.ladder(SPECS, SIDE)
+    assert lad[0] == (20, 0, 0)
+    assert lad[1] == (20, 20, 0)
+    assert lad[-1] == (20, 20, 20)
+    # monotone in rate, which is what makes it a ladder
+    bits = [rel.tuple_bits(SPECS, t, SIDE) for t in lad]
+    assert bits == sorted(bits)
+
+
+def test_ladder_rates_match_the_published_table():
+    W = 64
+    for tup, bpp in [((20, 0, 0), 0.227), ((20, 20, 0), 0.852),
+                     ((20, 20, 5), 3.352), ((20, 20, 20), 10.852)]:
+        got = rel.tuple_bits(SPECS, tup, SIDE) / W ** 2
+        assert got == pytest.approx(bpp, abs=5e-4)
+
+
+def test_refinement_is_priced_only_at_full_depth():
+    """A refinement codes the residual after ALL of its tier's levels, so
+    it is meaningless — and must not be charged — against a prefix."""
+    W = 64
+    full = rel.tuple_bits(SPECS, (20, 20, 20), SIDE, rel.REFINEMENT) / W ** 2
+    part = rel.tuple_bits(SPECS, (20, 20, 19), SIDE, rel.REFINEMENT) / W ** 2
+    assert full == pytest.approx(10.852 + 16.0, abs=5e-4)
+    assert part == pytest.approx(10.852 - 0.5, abs=5e-4)   # no refine charge
+
+
+def test_release_refines_the_fine_tier_and_not_by_default():
+    """Both are measured choices that differ from the AlphaEarth release;
+    a silent flip of either would change the shipped rate."""
+    assert rel.REFINEMENT.tier == 2
+    assert rel.REFINEMENT.quantizer == "lloyd"
+    assert rel.REFINE_BY_DEFAULT is False

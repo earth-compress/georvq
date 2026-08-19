@@ -31,6 +31,65 @@ strong priors, not laws.
   for free, then plateaus if the coarse codebook starves — schedule rate
   pressure, don't crank it.
 
+## Residual refinements
+
+A tier's RVQ stops at a finite depth and leaves a residual. Coding that
+residual with a cheap scalar quantizer and adding it back at decode
+(`georvq.inference.refine`) buys the gap back without touching the
+codebooks or the index stream — but only under one precondition, and
+only on one tier, and which tier is not something to inherit.
+
+- **Only worth it when the ceiling is visibly above full depth.** The
+  refinement can recover, at most, the distance between full-depth
+  reconstruction and the same model decoding un-quantized latents. If
+  that gap is small the tier is saturation-limited, not rate-limited,
+  and there is nothing to buy — this is why the AlphaEarth mid and fine
+  sidecars were worthless. Measure the ceiling first; it is the budget.
+
+- **Which tier holds the slack differs by model, and the wrong choice
+  returns exactly zero.** Measured on the Tessera release checkpoint
+  (768 held-out windows, share of the centred-cosine ceiling gap
+  recovered, base 10.85 b/px):
+
+  | refined tier | rate | gap closed |
+  |---|---:|---:|
+  | 0 (coarse), 1–2 bits | +0.13–0.25 b/px | **0.0%** |
+  | 1 (mid), 1–2 bits | +2.0–4.0 b/px | 1.9% |
+  | 2 (fine), 1 bit | +16 b/px | 56.2% |
+  | 2 (fine), 2 bits | +32 b/px | 81.2% |
+
+  AlphaEarth refines tier 0 and recovers ~98% of its gap there; the same
+  policy on Tessera recovers nothing at all. Tessera's coarse book is
+  healthy and its fine tier is still rate-limited (residual decaying at
+  level 20), so that is where the slack sits.
+
+- **Cost scales with cells, so the same idea is cheap or ruinous
+  depending on the tier.** A refinement costs `cells x dim x bits`. On a
+  1/4/16 grid pyramid that is 1x, 16x, 256x cells — AlphaEarth's coarse
+  sidecar is +1.5% of rate and can simply be left on, while Tessera's
+  fine refinement more than doubles the bitstream. The rule generalises:
+  a refinement is a default when it lands on a coarse tier and an opt-in
+  when it lands on a fine one.
+
+- **After a deep RVQ, rotate and use Lloyd; don't bother with PCA.** The
+  post-RVQ residual is close to isotropic quantization noise, so a
+  random rotation and a PCA rotation land within 1% of each other (rel
+  MSE 0.1425 vs 0.1436 at ~1 bit/dim) — there is no structure left for
+  PCA to exploit, which is exactly the regime where a Gaussian Lloyd-Max
+  scalar quantizer is near-optimal. The rotation costs nothing in the
+  bitstream (it is a seed), and equalising variance across coordinates is
+  what a fixed levels-per-dimension coder wants. Random rotation even
+  beats PCA on *raw* latents (0.4062 vs 0.4249): PCA concentrates
+  variance and then quantizes the high-variance directions too coarsely,
+  so it only pays with bit allocation.
+
+- **A uniform quantizer's clip point must be retuned with its bit
+  depth.** The convention that puts the outermost reconstruction level at
+  `sigma x std` is good at 2 bits with sigma=2, but at 1 bit it places
+  the two levels at ±2 std where the optimum is ±0.8, and the
+  "refinement" adds error instead of removing it. One bit per dimension
+  belongs to the Lloyd family.
+
 ## Conditioning
 
 - **Location explains a large fraction of coarse-embedding variance**
@@ -82,14 +141,15 @@ strong priors, not laws.
   fine 3,584 bits per level): the measured Pareto front always
   saturates coarse, then mid, then adds fine levels. Hand-picked
   "balanced" tuples like 6-4-4 are strictly dominated.
-- **The coarse quantizer gap carries the outlier tail.** Worst-0.1%
-  pixels under full-depth decode are coarse-codebook misses (rare land
-  covers; window-scale bias), correlated 0.74 with the coarse residual
-  norm — and a 2-bit scalar-quantized residual sidecar (66 B/window,
-  per-window scale) recovers ~98% of the gap *including the tail*.
-  Mid/fine residual sidecars are worthless-to-harmful: those codebooks
-  sit at their ceiling, and downstream books were trained on quantized
-  upstream residuals (feeding them unquantized input is off-manifold).
+- **On AlphaEarth the coarse quantizer gap carries the outlier tail.**
+  Worst-0.1% pixels under full-depth decode are coarse-codebook misses
+  (rare land covers; window-scale bias), correlated 0.74 with the coarse
+  residual norm — and a 2-bit scalar-quantized residual sidecar
+  (66 B/window, per-window scale) recovers ~98% of the gap *including
+  the tail*, for +1.5% rate. On that model mid/fine sidecars are
+  worthless-to-harmful: those codebooks sit at their ceiling. See
+  **Residual refinements** below for why that is a fact about the model
+  rather than about the architecture.
 - **bf16 belongs on decoder forwards only.** bf16 encoder latents flip
   ~24% of near-tie RVQ indices (quality-neutral but bitstream-unstable
   across runs/hardware); fp32 encoder + bf16 decoder keeps indices
