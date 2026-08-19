@@ -100,9 +100,37 @@ only on one tier, and which tier is not something to inherit.
   late in training** (the pre-quantization ceiling falls); freezing the
   encoder while conditioning trains avoids it. Watch the ceiling, not the
   codebook gap, to diagnose.
-- Stats normalization (per-tile mean/std side channel) was very effective
-  on multispectral imagery; embedding fields are already unit-norm and
-  need none.
+- **Whether a stats side channel pays is a property of the field, not of
+  the modality.** Per-tile mean/std normalization was very effective on
+  multispectral imagery. A unit-norm embedding field (AlphaEarth) needs
+  none at all. An embedding field that is *not* unit-norm (Tessera,
+  magnitude spread 1.57x) wants the mean transmitted but not the std:
+  the mean is 85.5% of window energy and buys +0.0069 cosine for
+  0.188 b/px, while forcing the std *hurts* (0.9700 -> 0.9678) because
+  the decoder is already smoother than the truth, so rescaling amplifies
+  its error rather than restoring detail.
+
+## Metric discipline
+
+Conventions that each cost a wrong conclusion before they were adopted.
+
+- **Use relative gap closure** `d(1-m)/(1-m)`, not absolute deltas, for
+  any bounded metric. It exposed a depth-graded improvement (coarse 20%,
+  mid 9%, full 0.9% per 1k steps) that absolute deltas flattened into
+  noise.
+- **Match training budget before believing a crossover.** The
+  AE-vs-linear crossover moved 200 -> 300 -> 500 -> 600 bits as data and
+  steps were added, and every move favoured whichever arm had been
+  under-resourced.
+- **A transmitted mean inflates plain cosine.** Track `ccos` (centred
+  cosine) on any model with a stats channel: a coarse-only decode read
+  0.9154 plain cosine while contributing no spatial structure at all,
+  and a block-mean reconstruction scores 0.92.
+- **Don't extrapolate a flat stretch.** A coarse tier predicted to reach
+  0.11 reached 0.35: its recovery was a phase transition, not a line.
+- **Latent residual is a weak proxy for quality.** 0.22 latent residual
+  maps to ~0.001 cosine through the sigma ladder, because the decoder is
+  trained for noise robustness. Always decode before judging.
 
 ## Evaluation
 
@@ -111,9 +139,18 @@ only on one tier, and which tier is not something to inherit.
 - **Downstream probes** (frozen-embedding linear/kNN on held-out,
   contamination-checked windows) showed compression is nearly free for
   downstream regression across the whole R-D front — plain cosine
-  understates usable quality. Also track *centered* cosine: a block-mean
-  reconstruction scores high plain cosine while carrying no spatial
-  structure.
+  understates usable quality.
+- **Cosine does not transfer across sources.** At matched reconstruction
+  cosine the Tessera codec costs *less* downstream accuracy than the
+  AlphaEarth codec (LUCAS land cover: AE at cos 0.9532 loses 0.043
+  balanced accuracy, Tessera at cos 0.9475 loses 0.005), because Tessera
+  carries ~2.5x more independent variation per pixel and much of it is
+  weakly correlated with land cover. Set a quality target from the task,
+  never by transplanting another source's cosine.
+- **Establish a probe's noise floor before reading it.** Re-probing every
+  rate point under repeated split seeds gave +/-0.017 on LUCAS and
+  +/-0.023 on LCMAP — so LCMAP cannot resolve anything below ~0.05, and
+  its "compression beats the original" readings are artefacts.
 - A flat low-rate tail in an R-D curve usually means a decoder floor, not
   an entropy gap — fix decode capacity before blaming the coder.
 - Compare against classical baselines at *actual file bytes*, not nominal
@@ -129,7 +166,7 @@ only on one tier, and which tier is not something to inherit.
   phase-aligned cropping lets the model reproduce the high-frequency
   structure instead of averaging it.
 
-## Release engineering (AlphaEarth cycle, 2026-07)
+## Release engineering
 
 - **Entropy coding on healthy codebooks doesn't pay.** Order-0 rANS:
   ~0.6% over npz-deflated raw indices on real tiles (fine tier at ~95%
@@ -164,7 +201,7 @@ only on one tier, and which tier is not something to inherit.
   error stats that make quality-controlled delivery possible with no
   predictor network.
 
-## Tessera stage-2 / codebook investigation (2026-08-10)
+## Codebooks: sizing, fitting and health
 
 - **Tier-redundancy collapse is real and silent.** In the 4-tier `uf`
   model (grids 1/4/16/32 over 64 px) the fine tier carries only **0.2%**
@@ -208,9 +245,6 @@ only on one tier, and which tier is not something to inherit.
   AND decoder and optimising only the codewords against the *decoded*
   loss gained **+0.00007 cos** (0.99585 -> 0.99592, monotone, held-out)
   — a real but negligible degree of freedom. Not worth a pipeline stage.
-- **Measurement gotchas.** (a) Split latent datasets by *window*, never
-  by cell: adjacent cells are near-duplicates (mean NN distance ~6% of
-  vector norm) and a random split makes k-means look ~500x better than
-  it is. (b) Latent residual is a weak proxy for quality — 0.22 residual
-  maps to ~0.001 cos via the sigma ladder, because the decoder is
-  trained for noise robustness. Always decode.
+- **Split latent datasets by *window*, never by cell.** Adjacent cells
+  are near-duplicates (mean NN distance ~6% of vector norm), and a random
+  split makes k-means look ~500x better than it is.
