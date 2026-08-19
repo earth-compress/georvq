@@ -18,7 +18,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
-from georvq.config import Config
+from georvq.config import Config, VQConfig
 from georvq.data.pool import ChipPool, fixed_val_tokens
 from georvq.data.store import ChipStore
 from georvq.factory import build_model
@@ -150,6 +150,17 @@ def train(cfg: Config, gpu=0):
               f"{cfg.train.freeze_encoder_steps} steps", flush=True)
 
     v = cfg.model.vq
+    if cfg.train.init_from and v.mature_warmstart and (
+            v.ema_decay != VQConfig.model_fields["ema_decay"].default
+            or v.reset_mode != "random"):
+        # maturing silently wins over both of these, and a run that set
+        # them meant them -- say so rather than let the run quietly use
+        # decay 0.9995 with resets off
+        print(f"note: mature_warmstart is on, so the warm-started books "
+              f"run at decay 0.9995 with resets DISABLED -- overriding "
+              f"vq.ema_decay={v.ema_decay} and vq.reset_mode="
+              f"{v.reset_mode!r}. Set vq.mature_warmstart=false to keep "
+              f"them live.", flush=True)
     if cfg.train.init_from and not v.mature_warmstart:
         # undo load_partial's maturing: keep the books live at the
         # configured decay with resets (and therefore reset_mode) active
@@ -732,10 +743,14 @@ def train(cfg: Config, gpu=0):
             save_checkpoint(os.path.join(run_dir, "model.pt"), model, cfg,
                             step, {"cos_full": best_cos})
 
-    with open(os.path.join(run_dir, "final_val.json"), "w") as f:
-        json.dump({"scalars": {k: val for k, val in vs.items()
-                               if not k.startswith("_")},
-                   "cos_by_tuple": cbt}, f, indent=1)
+    if D.is_main():
+        # one writer: every rank reaching this line would race on the
+        # same path, and the ranks do not all hold the same `vs`
+        with open(os.path.join(run_dir, "final_val.json"), "w") as f:
+            json.dump({"scalars": {k: val for k, val in vs.items()
+                                   if not k.startswith("_")},
+                       "cos_by_tuple": cbt}, f, indent=1)
     pool.shutdown()
+    D.cleanup()
     print(f"done -> {run_dir}", flush=True)
     return run_dir

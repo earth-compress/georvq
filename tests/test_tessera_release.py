@@ -128,3 +128,33 @@ def test_the_transmitted_codes_are_recoverable_from_the_packet_mean():
     sent = ch.encode(mu)
     on_the_packet = ch.decode(sent)
     assert np.array_equal(ch.encode(on_the_packet), sent)
+
+
+def test_config_rejects_overlapping_batch_fractions():
+    """full_frac and passthrough_frac are shares of one batch but live in
+    different config sections, so nothing else notices them overrunning
+    it -- past 1.0 the path fraction goes negative and every row is
+    silently sampled at full depth."""
+    from georvq.config import Config
+    import pydantic
+    base = {"data": {"source": "ae", "store_dir": "/tmp/x"},
+            "model": {"window": 64, "bands": 64,
+                      "tiers": ["1:32:64:4", "4:32:64:4"],
+                      "full_frac": 0.7,
+                      "vq": {"passthrough_frac": 0.5}}}
+    with pytest.raises(pydantic.ValidationError, match="same batch"):
+        Config(**base)
+    base["model"]["full_frac"] = 0.4          # 0.4 + 0.5 <= 1.0
+    Config(**base)
+
+
+def test_refinement_spec_survives_a_json_round_trip():
+    """A bundle records the spec its table was fitted for, and `load`
+    reads it back rather than trusting today's module constant -- a table
+    decoded under a different (tier, bits, rotation) is silent garbage."""
+    from georvq.inference.refine import RefinementSpec
+    for spec in (rel.REFINEMENT,
+                 RefinementSpec(tier=0, bits=2, quantizer="uniform"),
+                 RefinementSpec(tier=1, bits=3, quantizer="lloyd",
+                                rotate_seed=11)):
+        assert RefinementSpec.from_json(spec.to_json()) == spec
