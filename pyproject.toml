@@ -22,6 +22,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+tessera = ["geotessera"]   # only to BUILD a store or run the point eval; decoding needs none
 # SatCLIP location conditioning (cascade / codebook-select)
 loc = ["huggingface_hub"]
 # Real entropy-coded archives (rANS via compressai)
