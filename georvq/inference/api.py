@@ -205,10 +205,24 @@ class Codec:
 
     # ---- rate accounting ----
 
-    def packet_bits(self, depths=None) -> float:
-        """Nominal (uncoded) bits per window at a depth tuple."""
+    def packet_bits(self, depths=None, refinements=()) -> float:
+        """Nominal (uncoded) bits per window at a depth tuple.
+
+        Counts EVERYTHING the packet carries, not just the index stream:
+        the stats side channel is charged at every depth because it is
+        always transmitted, and any refinement is charged where its tier
+        is at full depth. Omitting the side channel is not a rounding
+        error — on a stats_cond model at its cheapest rung it is 83% of
+        the true bitstream.
+        """
+        from georvq.model.codec import tuple_bits
         depths = depths or [sp.depth for sp in self.specs]
-        return float(sum(sp.bits(L) for sp, L in zip(self.specs, depths)))
+        b = tuple_bits(self.specs, depths, self.model.side_bits())
+        for spec in refinements:
+            if depths[spec.tier] == self.specs[spec.tier].depth:
+                sp = self.specs[spec.tier]
+                b += spec.cost_bits(sp.cells, sp.dim)
+        return float(b)
 
     @torch.no_grad()
     def entropy_bits(self, x) -> Optional[torch.Tensor]:
