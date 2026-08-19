@@ -4,7 +4,7 @@
 # Full depth is 43,680 bits/window (10.66 b/px) against the baseline's
 # 30,424 (7.43), so the ladder reaches 44% HIGHER at the top -- but it is
 # a superset, and 20-20-13 sits at 7.16 b/px for a like-for-like read
-# against the 0.9678 baseline. Codebook: 6.25 MiB vs 72 MiB at int8.
+# against the std-forced baseline. Codebook: 6.25 MiB vs 72 MiB at int8.
 #
 # Three independent measurements point here:
 #

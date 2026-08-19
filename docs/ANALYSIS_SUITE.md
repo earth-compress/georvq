@@ -101,11 +101,12 @@ tiers carry everything. The codec systematically **under-produces** spatial
 variance (73% of the source's even at full depth) and stays smoother than
 the source at every lag.
 
-The moment channel is worth +0.0069 cosine at full depth for 0.188 b/px,
-~60× more rate-efficient than pyramid bits — but **only the mean**:
-matching the std *hurts* (0.9700 → 0.9678), because the decoder's output is
-already smoother than the truth, so rescaling amplifies error instead of
-restoring detail. Below 4 bits/band the channel is worse than nothing.
+The moment channel is worth a real cosine gain at full depth for a small
+fraction of a bit per pixel, ~60× more rate-efficient than pyramid bits —
+but **only the mean**: matching the std *hurts*, because the decoder's
+output is already smoother than the truth, so rescaling amplifies error
+instead of restoring detail. Below 4 bits/band the channel is worse than
+nothing. Figures in docs/FINDINGS.md.
 
 ## D. Quantizer health
 
@@ -118,10 +119,10 @@ restoring detail. Below 4 bits/band the channel is worse than nothing.
 | `pcdir_probe.py` | Is the within-cell principal direction estimable at all (BBP transition), or is the power iteration fitting noise? |
 | `plot_reset_diag.py` | Per-level reset diagnostics from a run's wandb history. |
 
-**What they established.** There is a **sample-budget crossover** near
-~450 vectors per codeword below which refitting is worse than not
-refitting; K=16384 at 8 levels sits far under it (18–54 vectors/code) and
-loses 90% of its codebook. K=256 × 20 levels makes the pathology
+**What they established.** There is a **sample-budget crossover** in
+vectors per codeword (docs/FINDINGS.md has the number) below which
+refitting is worse than not refitting. K=16384 at 8 levels sits far under
+it (18–54 vectors/code) and loses 90% of its codebook. K=256 × 20 levels makes the pathology
 structurally impossible — dead-code resets find 1–5 codes instead of
 6,500–8,200 — at 12× smaller download, for equal R-D.
 

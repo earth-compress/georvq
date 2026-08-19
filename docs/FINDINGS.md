@@ -31,6 +31,33 @@ strong priors, not laws.
   for free, then plateaus if the coarse codebook starves — schedule rate
   pressure, don't crank it.
 
+## Codebook sizing
+
+- **K is derived, not chosen.** A codebook needs roughly
+  **450 vectors per codeword** inside its EMA window, or fitting it is
+  worse than not fitting it:
+
+      vectors_per_code = batch x cells_in_tier x ema_window / K  >=  ~450
+
+  K=16384 at 8 levels sits far below that (18-54 vectors/code) and loses
+  90% of its codebook; K=256 at 20 levels gives thousands, dead-code
+  resets fall from 6,500-8,200 per event to 1-5, and the download is 12x
+  smaller for equal R-D. Since cells rise with tier, this makes codebooks
+  something to grade UPWARD with tier rather than fix globally.
+
+- **Depth must be sampled along the truncation path, not nested.**
+  Drawing the coarse depth uniformly and each finer tier conditionally
+  makes deep fine-tier levels vanishingly rare -- measured
+  P(active)=0.006 for tier-2 level 14, i.e. those books saw 0.6% of rows.
+  Spreading uniformly along the monotone path (one step per codebook)
+  raises the same level to 0.197. See `path_tuples` in
+  `georvq/model/codec.py`.
+
+- **Cells dominate rate.** One tier-2 level costs ~64x one tier-1 level
+  on a 1/4/16 pyramid, so depth should be allocated inversely to cell
+  count, and the efficient ladder always saturates coarse, then mid, then
+  adds fine levels one at a time.
+
 ## Residual refinements
 
 A tier's RVQ stops at a finite depth and leaves a residual. Coding that

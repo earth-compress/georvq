@@ -18,8 +18,8 @@
 #
 # MEAN ONLY, NO STD. The S2 version this is ported from (ring-space,
 # `_normalize_bands`) standardises by mean AND std. Matching the std was
-# measured to HURT here (0.9700 -> 0.9678) and to give back a third of the
-# mean's gain when applied on top of it (0.9747). S2 bands have different
+# measured to HURT here, and to give back a third of the mean's gain when
+# applied on top of it (docs/FINDINGS.md). S2 bands have different
 # physical scales and per-scene illumination; Tessera's 128 dims are a
 # learned embedding already on comparable scales.
 #

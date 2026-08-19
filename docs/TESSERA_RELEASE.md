@@ -144,9 +144,10 @@ can currently resolve.
   could be turned on here; it has not been, because no consumer has
   asked for it.
 - **`use_std` is blocked, not merely unused.** Matching the reconstructed
-  standard deviation to the source's *hurts* (0.9700 -> 0.9678): the
-  decoder is already smoother than the truth, so rescaling amplifies its
-  error instead of restoring detail. The config validator refuses it.
+  standard deviation to the source's was measured to *hurt*: the decoder is
+  already smoother than the truth, so rescaling amplifies its error instead
+  of restoring detail. The config validator refuses it; the numbers are in
+  docs/FINDINGS.md.
 
 ## Rebuilding
 

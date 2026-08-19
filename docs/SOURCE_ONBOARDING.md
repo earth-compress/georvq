@@ -196,9 +196,10 @@ Ordered so each step consumes the previous ones.
 **Trick selection, from measurements we already have:**
 
 - **Transmit the patch mean** when it is a large share of energy *and*
-  cheap. Tessera: 85.5% of per-window energy, +0.0069 cosine for 0.188
-  b/px, ~60x more rate-efficient than pyramid bits. **Yes.**
-- **Do not force the std.** Matching it *hurts* (0.9700 -> 0.9678) because
+  cheap. Tessera: 85.5% of per-window energy, and ~60x more
+  rate-efficient than pyramid bits at the rate in the table above.
+  **Yes.**
+- **Do not force the std.** Matching it *hurts* (table above) because
   the decoder is already smoother than the truth, so rescaling amplifies
   error. Condition on it instead.
 - **Transmit a scalar gain** when the mean-removed residual has wide
