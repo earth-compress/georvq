@@ -30,6 +30,13 @@ strong priors, not laws.
 - **Rate-aware VQ**: a gentle rate weight recovers a few percent of rate
   for free, then plateaus if the coarse codebook starves — schedule rate
   pressure, don't crank it.
+- **Past the throughput knee, batch size buys codebook health, not
+  speed.** On the S2 pyramid (A100 80GB, 96 px windows, grad checkpointing)
+  windows/s saturates from batch 768 upward — 445 / 628 / 631 / 634 / 570
+  at 384 / 768 / 1024 / 1536 / 2048 — so a larger batch there costs
+  proportional wall-clock per step and returns only better gradients and
+  more vectors per codeword. Pick the batch from the sample-budget rule,
+  then the step count from the wall-clock you have.
 
 ## Codebook sizing
 
@@ -127,6 +134,22 @@ only on one tier, and which tier is not something to inherit.
   late in training** (the pre-quantization ceiling falls); freezing the
   encoder while conditioning trains avoids it. Watch the ceiling, not the
   codebook gap, to diagnose.
+- **A normalizer's stats are rate, and they hide.** `side_bits` once
+  charged only the transmitted-mean channel (`stats_cond`), so a source
+  that instead *normalizes* — Sentinel-2 removes 13 per-band means and 13
+  stds per window — had that channel counted nowhere. It hides because it
+  is invisible at the top of the ladder and dominant at the bottom: on the
+  S2 pyramid the raw channel is +1.6% of full depth but **3.31x** the
+  coarse-only rung. Charge every side channel at every depth.
+
+- **PCA-packing a stats vector is worth ~5x, and the basis is cheap to
+  fit.** 26 per-band mean/std floats, PCA with tolerance-coded uint8
+  components (`inference/stats_codec.py`): **9.73 bytes/window** measured
+  on held-out S2 windows at tolerance 0.01, against 26 x f16 = 52 bytes —
+  a **5.3x** reduction, with 5 components carrying 99% of the stats
+  variance. Independently reproduces the ~11 B/tile the ring-space S2
+  betas shipped, on a basis refitted for a different window size.
+
 - **Whether a stats side channel pays is a property of the field, not of
   the modality.** Per-tile mean/std normalization was very effective on
   multispectral imagery. A unit-norm embedding field (AlphaEarth) needs
@@ -192,6 +215,21 @@ Conventions that each cost a wrong conclusion before they were adopted.
 - If a source is upsampled onto a finer grid (period-N pixel structure),
   phase-aligned cropping lets the model reproduce the high-frequency
   structure instead of averaging it.
+- **A store is a choice, not a step.** A chip store exists to give the
+  pool fixed-geometry chips; a source already laid out that way gains
+  nothing from being resharded. Major-TOM Core-S2L1C (106k scene dirs on
+  a 10 km grid, 1.2 TB) is read in place, and GLO-30 likewise.
+- **Check the compression block size before designing a reader.** The
+  Major-TOM rasters are LZW with 1024 px blocks over a 1068 px image, so a
+  windowed read decompresses essentially the whole band: **4.7 ms** for a
+  full band against 0.4 ms for a 96x96 window that hits one warm block.
+  Reading whole scenes and slicing in the pool is simpler and no more I/O.
+  Measured end to end: 64 ms and 12.1 MB per 13-band scene.
+- **Pool size and refresh rate do different jobs.** Reuse per chip is
+  `windows/s / refresh_per_s` and is *independent of pool size*; the pool
+  buys instantaneous diversity — how many distinct chips one batch can
+  draw from. A batch as large as the pool resamples the same chips no
+  matter how fast the refresh runs.
 
 ## Release engineering
 
