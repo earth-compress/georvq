@@ -71,7 +71,7 @@ def setup_data(cfg: Config, source, device):
 
     val_frac=0 is closed-distribution mode (compress a fixed corpus):
     train on every chip and let "val" measure training-set fit."""
-    store = open_store(cfg.data.store_dir)
+    store = open_store(cfg.data.store_dir, cfg.data.reader)
     train_rows, val_rows = store.split(cfg.data.val_frac,
                                        seed=cfg.data.split_seed)
     if cfg.data.val_frac == 0:

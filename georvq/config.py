@@ -368,6 +368,10 @@ class PoolConfig(StrictModel):
 class DataConfig(StrictModel):
     source: str = "ae"              # key into georvq.sources.SOURCES
     store_dir: Path
+    # How to read store_dir. "auto" detects a chip store, a live_dem store
+    # or a Major-TOM Sentinel-2 root; pin it when a run must not depend on
+    # what happens to be on disk. Live readers copy no pixels.
+    reader: Literal["auto", "chipstore", "live_s2"] = "auto"
     val_frac: float = 0.04
     split_seed: int = 0
     limit_chips: Optional[int] = None   # data-scaling probes: train on a
