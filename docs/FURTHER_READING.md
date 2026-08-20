@@ -324,7 +324,7 @@ worked example.
 | file | what it is |
 |---|---|
 | `train_pyramid.py`, `train_stage1.py` | Entry-point bodies for the two trainers. |
-| `build_store_ae.py` / `build_store_s2.py` | Store builders: equal-area sphere sampling of AEF blocks; S2 equivalent. |
+| `build_store_ae.py` / `build_store_s2.py` | Store builders: equal-area sphere sampling of AEF blocks; S2 equivalent (optional — `configs/s2_pyr96.yaml` reads Major-TOM live instead, see `data/live_s2.py`). |
 | `build_archive.py`, `bench_decode.py` | rANS archive builder + decode benchmarks (research). |
 | `baseline_classical.py` | PCA+J2K / HEVC baselines at matched granularity. |
 | `eval_build_dataset.py`, `eval_run_ab.py`, `eval_rate_sweep.py` | Downstream benchmark datasets; original-vs-recon A/B probes; Pareto-front sweeps. |
