@@ -1,36 +1,43 @@
-# Sentinel-2 L1C: 13 bands at three native resolutions, Major-TOM Core-S2L1C.
+# Sentinel-2 L1C: 13 bands at three native resolutions, read LIVE from the
+# Major-TOM Core-S2L1C GeoTIFFs. No chip store is built and no pixels are
+# copied -- Major-TOM is already a chip store on a regular 10 km grid, and
+# resharding its 1.2 TB would gain nothing. The only thing cached is a
+# scene catalogue (paths + grid position) under ~/.cache/georvq.
 #
-# UNVALIDATED. Unlike every other preset in this directory, this one does
-# not reproduce a run that happened -- no S2 model has been trained. The
-# geometry below is derived from the measurements in
-# docs/SOURCE_ONBOARDING.md (the S2 column of the five-source table), not
-# copied from the AE/Tessera presets, and the derivation is written out so
-# the first run can argue with it.
+#   georvq-train -c configs/s2_pyr96.yaml --gpu 0
 #
-# Build the store first:
-#   python scripts/build_store_s2.py --scenes-root /data/Major-TOM/Core-S2L1C \
-#       --out-dir /data/s2-store --chip-px 1020
+# CLOUDS ARE KEPT. cloud_mask.tif sits beside the bands and is deliberately
+# not applied: cloud is part of the distribution the codec has to carry.
+#
+# UNVALIDATED. Unlike every other preset here this one reproduces no run --
+# no S2 model has been trained. The geometry is derived from
+# docs/SOURCE_ONBOARDING.md (the S2 column), not copied from a preset, and
+# the derivation is written out so the first run can argue with it.
 
 data:
   source: s2
-  store_dir: /data/s2-store
-  val_frac: 0.04
+  store_dir: /data/Major-TOM/Core-S2L1C
+  reader: live_s2        # pinned, so startup never depends on autodetection
+  val_frac: 0.02
   pool:
-    # slot_rows must divide by 6 so every group's strip is a whole number
-    # of its own rows (the 60m grid is the binding one).
-    size: 4096
-    workers: 6
-    slot_rows: 120
-    refresh_per_s: 60.0
+    # Measured on this corpus: 64 ms and 12.1 MB per scene (13 bands,
+    # 15.6 scenes/s/thread). 1024 resident scenes is ~12.4 GB of host RAM.
+    size: 1024
+    workers: 8
+    # Whole scenes: the rasters are LZW with 1024 px blocks over a 1068 px
+    # image, so a partial read decompresses the band anyway -- taking half
+    # the rows would double the read cost per resident pixel, not halve it.
+    slot_rows: 1068
+    refresh_per_s: 24.0    # ~74 min to sweep all 106,639 scenes
     device: cpu
-    cycle: true          # 1.2 TB store: sweep it, never resample a resident subset
+    cycle: true            # sweep the corpus; never resample a resident subset
     align_crops: true
 
 model:
   # W=96, not the habitual 64: the fine-token patch (window / finest grid)
   # must divide by 6 for all three native grids to decode exactly, and 96
   # is the smallest such window that keeps a 1/4/16 pyramid. It also makes
-  # the fine cell 6 px = one 60m pixel exactly. S2 autocorrelation only
+  # the fine cell 6 px = one 60 m pixel exactly. S2 autocorrelation only
   # falls below 0.5 at 32 px, so a 96 px window is not over-large.
   window: 96
   bands: 13

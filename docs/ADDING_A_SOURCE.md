@@ -11,6 +11,30 @@ architecture parameters below, so that window size, tier grids, latent
 widths and codebook sizes are derived rather than inherited from
 whichever preset you copied.
 
+## 0. First ask whether you need a store at all
+
+A chip store exists to give the pool fixed-geometry chips it can read
+cheaply. If the source is *already* laid out that way, building one
+duplicates the corpus to gain nothing. Two live readers do without:
+
+| reader | source | why live |
+|---|---|---|
+| `live_dem` (`data/live_dem.py`) | GLO-30 COG mosaics | chips are windows on a continuous mosaic |
+| `live_s2` (`data/live_s2.py`) | Major-TOM Core-S2L1C | already 106k scene dirs on a regular 10 km grid |
+
+Both present the `ChipStore` surface — the same attributes, the
+`open_shard(sh, group)[slot]` contract and `split()` — so the pool, the
+trainer and the evals cannot tell the difference. `open_store` picks one;
+`data.reader` pins the choice.
+
+Write a live reader when the source's own layout already has fixed
+geometry and a usable index, and a store builder when it does not (chips
+must be cut, reprojected, or dequantized once). Note what the read
+granularity actually is before choosing: Major-TOM's rasters are LZW with
+1024 px blocks over a 1068 px image, so a windowed read decompresses the
+whole band anyway and `live_s2` reads whole scenes rather than pretending
+windows are cheap.
+
 ## 1. A store builder → chip-store v1
 
 Convert your source once into the standard on-disk format
