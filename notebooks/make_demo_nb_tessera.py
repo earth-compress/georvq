@@ -354,6 +354,62 @@ for a, t, ttl in (
     a.imshow(to_rgb(t, BASIS)); a.axis("off"); a.set_title(ttl, fontsize=10)
 plt.tight_layout(); plt.show()""")
 
+md("""## 8. What it costs to run
+
+Rate and fidelity are not the only axes. The two codecs are built
+differently and it shows here: tessera-vq's decode is a **table lookup**
+(`C1[idx1] + C2[idx2]`), while this one runs a transformer decoder. That
+is the price of the extra fidelity, and for a serving system it may
+matter more than the bytes.
+
+Note also that **decoding a cheaper rate point is not cheaper for us**:
+the decoder trunk runs whatever the depth tuple is, and only the
+codebook gathers shrink. A lookup codec has no such floor.""")
+
+code("""import gzip
+
+def bench(fn, n=3, sync=None):
+    fn()
+    if sync: sync()
+    out = []
+    for _ in range(n):
+        a = time.perf_counter(); fn()
+        if sync: sync()
+        out.append(time.perf_counter() - a)
+    return min(out)
+
+timings = []
+devs = ["cpu"] + (["cuda:0"] if torch.cuda.is_available() else [])
+for dev in devs:
+    Rd = load(BUNDLE, device=dev)
+    sync = torch.cuda.synchronize if dev.startswith("cuda") else None
+    enc = bench(lambda: encode_tile(Rd, q, s, batch=64), sync=sync)
+    pkd, gd = encode_tile(Rd, q, s, batch=64)
+    dfull = bench(lambda: decode_tile(Rd, pkd, gd, depths=[20, 20, 20],
+                                      batch=64), sync=sync)
+    dlow = bench(lambda: decode_tile(Rd, pkd, gd, depths=[20, 20, 1],
+                                     batch=64), sync=sync)
+    timings.append((f"this codec ({dev})", enc, dfull, dlow))
+    del Rd
+
+# tessera-vq: numpy, CPU. Encode = fit both codebooks + assign (per tile,
+# so it is inherent, not amortized); decode = gunzip idx1 then two gathers.
+r_t = rvq_reconstruct_large(tile, 20, 256, seed=0)
+c1, c2 = np.asarray(r_t.codebook1), np.asarray(r_t.codebook2)
+i1 = np.asarray(r_t.indices1).ravel().astype(np.uint8)
+i2 = np.asarray(r_t.indices2).ravel()
+blob = gzip.compress(i1.tobytes(), 9)
+enc_tvq = bench(lambda: rvq_reconstruct_large(tile, 20, 256, seed=0), n=2)
+dec_tvq = bench(lambda: c1[np.frombuffer(gzip.decompress(blob),
+                                         dtype=np.uint8)] + c2[i2])
+
+print(f"{'':>24} {'encode':>9} {'decode full':>12} {'decode 20-20-1':>15}")
+for n_, e, df, dl in timings:
+    print(f"{n_:>24} {e:8.2f}s {df:11.2f}s {dl:14.2f}s")
+print(f"{'tessera-vq (cpu)':>24} {enc_tvq:8.2f}s {dec_tvq:11.3f}s {'n/a':>14}")
+print(f"\\n{CROP}x{CROP} = {CROP*CROP:,} px, {(CROP//64)**2} windows; "
+      f"best of 3")""")
+
 md("""## 7. Back to source units
 
 `requantize` undoes the model's internal rescaling, and with the scale
