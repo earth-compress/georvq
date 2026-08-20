@@ -78,9 +78,22 @@ class DEMSource(Source):
 
     def recon_stats(self, out, x, valid):
         mse, _ = masked_recon_stats(out, x, valid)
-        # quality under the shared "cos" key so train/val logging stays
-        # uniform; for DEM it is R^2 (variance explained), not a cosine
-        return mse, {"mse": mse, "cos": self.quality(out, x, valid)}
+        return mse, {"mse": mse, "r2": masked_r2(out, x, valid)}
 
-    def quality(self, out, x, valid):
-        return masked_r2(out, x, valid)
+    def report(self, model_cfg):
+        """Standardized relief, one band: R² (variance explained) is the
+        honest quality measure -- cosine over a single band collapses to
+        sign agreement -- with RMSE alongside it and a grayscale preview
+        (a 3-component PCA-RGB projection of one band cannot be drawn).
+
+        No block-mean baseline: the per-window mean and std are already
+        transmitted as a side channel, so scoring against the window mean
+        would be scoring against part of the bitstream rather than
+        against a rate-free reference.
+
+        The error histogram earns its place here because the normalizer
+        can put the second panel in METRES, which is the unit the result
+        is actually judged in.
+        """
+        from georvq.sources.report import scalar_field_spec
+        return scalar_field_spec(units="metres")

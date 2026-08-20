@@ -444,11 +444,34 @@ class EvalConfig(StrictModel):
     rd_refs: list[str] = Field(default_factory=list)
 
 
+class ReportConfig(StrictModel):
+    """Per-run narrowing of what the source declares it reports.
+
+    Every field defaults to None, meaning "whatever the source's
+    `ReportSpec` says" -- the source is the authority on what its field
+    admits, and a run may only take things AWAY. Naming something the
+    source does not declare raises at config resolution
+    (`georvq.sources.report.resolve_report`), not at the first validation.
+    """
+    #: Metrics to log, most important FIRST: the head of the list becomes
+    #: the headline metric that names the val scalars, labels the R-D axis
+    #: and selects model_best.pt.
+    metrics: Optional[list[str]] = None
+    #: Zero-rate reference lines on the R-D plot (e.g. ["blockmean"]).
+    baselines: Optional[list[str]] = None
+    #: Figures to draw: rd, rd_log, codebook, recon, reset, cosdist.
+    #: [] logs scalars only -- the cheap setting for a long sweep.
+    figures: Optional[list[str]] = None
+    #: The source's preview key, or "none" to skip reconstruction panels.
+    preview: Optional[str] = None
+
+
 class LogConfig(StrictModel):
     run_tag: str = "dev"
     wandb: bool = True
     wandb_project: str = "georvq"
     out_dir: Path = Path("checkpoints")
+    report: ReportConfig = Field(default_factory=ReportConfig)
 
 
 #: Fields removed from the schema, as "section.field" paths. A checkpoint

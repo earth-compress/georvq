@@ -40,12 +40,32 @@ def test_quality_penalizes_overshoot(dem_cfg):
     """R^2, unlike the raw channel dot product, must not reward amplitude
     overshoot (the unit-norm cosine reads > 1 there)."""
     src = get_source("dem", dem_cfg.model)
+    q = src.report(dem_cfg.model).quality
     x = torch.randn(4, 1, 16, 16)
     valid = torch.ones(4, 16, 16, dtype=torch.bool)
-    exact = src.quality(x, x, valid)
-    over = src.quality(1.5 * x, x, valid)
+    exact = q(x, x, valid)
+    over = q(1.5 * x, x, valid)
     assert exact == pytest.approx(1.0)
     assert over < exact and over <= 1.0
+
+
+def test_dem_reports_r2_not_cosine(dem_cfg):
+    """The bug this branch carried: DEM published R^2 under the key "cos"
+    so the shared logging path would accept it. It now says r2, and the
+    band-count gate would refuse a cosine here anyway."""
+    from georvq.sources.report import resolve_report
+
+    src = get_source("dem", dem_cfg.model)
+    spec = resolve_report(src, dem_cfg)
+    assert spec.quality.key == "r2"
+    assert [m.key for m in spec.extra] == ["rmse"]
+    assert spec.baselines == ()          # the mean is a transmitted channel
+    assert spec.preview.key == "gray"    # PCA-RGB cannot draw one band
+    assert spec.has_figure("error_hist") and spec.units == "metres"
+    _, m = src.recon_stats(torch.zeros(2, 1, 16, 16),
+                           torch.zeros(2, 1, 16, 16),
+                           torch.ones(2, 16, 16, dtype=torch.bool))
+    assert "cos" not in m and "r2" in m
 
 
 def test_normalizer_roundtrip(dem_cfg):
@@ -69,4 +89,34 @@ def test_dem_model_roundtrip(dem_cfg):
     out = model.decode(zqs, Ls).float()
     assert out.shape == x.shape
     loss, m = src.recon_stats(out, x, valid)
-    assert torch.isfinite(loss) and {"mse", "cos"} <= set(m)
+    assert torch.isfinite(loss) and {"mse", "r2"} <= set(m)
+
+
+def test_dem_figures_draw_under_the_declared_surface(dem_cfg):
+    """Both source-specific figures must actually render for one band.
+
+    The recon panel is the sharper case: PCA-RGB takes three components of
+    a 1x1 SVD and hands imshow an (H, W, 1) array, so before the source
+    declared a grayscale preview this raised rather than plotting.
+    """
+    import matplotlib.pyplot as plt
+
+    from georvq.sources.report import resolve_report
+    from georvq.train.figures import error_hist_figure, recon_figure
+
+    torch.manual_seed(0)
+    model = build_model(dem_cfg, torch.device("cpu"))
+    spec = resolve_report(model.source, dem_cfg)
+    val_s = torch.rand(8, 1, 16, 16) * 500 + 1000
+
+    f = recon_figure(model, model.source, val_s, step=1, n=2,
+                     preview=spec.preview)
+    plt.close(f)
+
+    # the second panel is the point of this figure for DEM: signed error
+    # in metres, via the normalizer
+    f2 = error_hist_figure(model, model.source, val_s, step=1,
+                           max_tokens=8, chunk=4, unit=spec.units)
+    titles = [ax.get_title() for ax in f2.axes]
+    assert titles == ["model space (per-tile normalized)", "metres"]
+    plt.close(f2)

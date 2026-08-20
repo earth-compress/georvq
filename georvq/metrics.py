@@ -32,3 +32,31 @@ def centered_cos(out, x, valid, eps=1e-8):
     num = (xc * oc).sum(1)
     den = xc.norm(dim=1) * oc.norm(dim=1) + eps
     return (num / den)[valid].mean()
+
+
+def masked_r2(out, x, valid, eps=1e-8):
+    """Variance explained on valid pixels, for single-plane scalar fields
+    (elevation, backscatter). Cosine is degenerate on one band -- it
+    collapses to sign agreement -- so a scalar source's quality metric has
+    to come from the residual against the field's own variance instead."""
+    o = out[valid.unsqueeze(1).expand_as(out)]
+    t = x[valid.unsqueeze(1).expand_as(x)]
+    ss_res = (t - o).pow(2).sum()
+    ss_tot = (t - t.mean()).pow(2).sum()
+    return 1.0 - ss_res / ss_tot.clamp_min(eps)
+
+
+def masked_rmse(out, x, valid):
+    """Root mean squared error over valid pixels, in model-space units."""
+    m = valid.unsqueeze(1).expand_as(out)
+    return (out[m] - x[m]).pow(2).mean().sqrt()
+
+
+def spectral_angle(out, x, valid, eps=1e-8):
+    """Mean spectral angle (radians) between reconstructed and true pixel
+    spectra. The standard multispectral fidelity measure: it ignores a
+    per-pixel gain, so it reads the band RATIOS that spectral indices and
+    classifiers actually use, which a per-band MSE averages away."""
+    num = (out * x).sum(1)
+    den = out.norm(dim=1) * x.norm(dim=1) + eps
+    return (num / den).clamp(-1.0, 1.0).arccos()[valid].mean()

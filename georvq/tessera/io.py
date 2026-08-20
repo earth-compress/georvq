@@ -23,13 +23,19 @@ import torch
 from georvq.sources.tessera import TesseraSource
 
 
-def prep(embedding, scale=None, device="cpu"):
+def prep(embedding, scale=None, device="cpu", channels_last=None,
+         bands=128):
     """geotessera arrays -> the model-space tensors the codec encodes.
 
     embedding: (bands, H, W) or (B, bands, H, W), int8 codes or already
-               dequantized floats.
+               dequantized floats. `geotessera` hands out (H, W, bands),
+               which is accepted too -- see `channels_last`.
     scale:     (H, W) or (B, H, W) per-pixel dequantization scale.
                Required for int8 input, forbidden for float input.
+    channels_last: None auto-detects, which is right whenever the band
+               axis is unambiguous. Pass it explicitly for a tile whose
+               height or width happens to equal `bands`, where no rule
+               could tell the layouts apart.
 
     Returns (x, valid) exactly as `TesseraSource.prep` would, so anything
     downstream cannot tell which door the data came through. nodata is
@@ -37,6 +43,15 @@ def prep(embedding, scale=None, device="cpu"):
     zero, negative, or absurd.
     """
     e = torch.as_tensor(np.asarray(embedding))
+    if channels_last is None:
+        last, first = e.shape[-1] == bands, e.shape[-3 if e.ndim > 3 else 0] == bands
+        if last and first:
+            raise ValueError(
+                f"cannot tell the layout of {tuple(e.shape)}: both the band "
+                f"axis and a spatial axis are {bands}. Pass channels_last=.")
+        channels_last = last
+    if channels_last:
+        e = e.movedim(-1, -3) if e.ndim > 3 else e.movedim(-1, 0)
     if e.ndim == 3:
         e = e[None]
     if e.dtype == torch.int8:
