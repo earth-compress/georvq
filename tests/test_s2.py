@@ -204,3 +204,36 @@ def test_singleplane_pool_is_unchanged(tmp_path):
         assert pool.ratio == {None: 1}
     finally:
         pool.shutdown()
+
+
+def test_s2_round_trips_through_the_inference_codec():
+    """encode -> Packet -> decode, for a multi-resolution source.
+
+    NOT yet charged: S2Normalizer removes a per-tile per-band mean/std (26
+    floats) that no packet carries, so `packet_bits` here is the index cost
+    only. The generic machinery for this exists -- Codec takes a
+    stats_packer and charges it -- but nothing fits a StatsPacker for S2
+    yet. docs/ADDING_A_SOURCE.md is blunt about why that matters: an
+    uncharged stats channel once reached 34% of a bitstream unnoticed.
+    """
+    from georvq.inference.api import Codec
+
+    cfg = _cfg()
+    torch.manual_seed(0)
+    model = build_model(cfg)
+    model.eval()
+    src = model.source
+    raw = {"10m": torch.randint(1, 9000, (2, 4, 24, 24), dtype=torch.int32),
+           "20m": torch.randint(1, 9000, (2, 6, 12, 12), dtype=torch.int32),
+           "60m": torch.randint(1, 9000, (2, 3, 4, 4), dtype=torch.int32)}
+    x, valid = src.prep(raw, "cpu")
+
+    codec = Codec(model)
+    packets = codec.encode(x, valid=valid)
+    assert len(packets) == 2
+    assert [tuple(i.shape) for i in packets[0].indices] == [(1, 3), (16, 3)]
+    out = codec.decode(packets)
+    assert out["10m"].shape == (2, 4, 24, 24)
+    assert out["20m"].shape == (2, 6, 12, 12)
+    assert out["60m"].shape == (2, 3, 4, 4)
+    assert codec.packet_bits() > 0
