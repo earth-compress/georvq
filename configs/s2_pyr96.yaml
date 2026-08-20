@@ -108,3 +108,16 @@ log:
   run_tag: s2_pyr96
   wandb: true
   wandb_project: georvq
+
+eval:
+  # A NESTED ladder for the reconstruction panels. The default canonical
+  # points are four independently-named samples, not a chain: `half`
+  # clamps its coarse component up to min_depths[0]=6 while `coarse_only`
+  # uses the full 8, so tier-0 depth reads 6, 8, 6, 8 down the figure and
+  # the rows look like a refinement they are not.
+  #
+  # This ladder is monotone in every component AND follows the efficient
+  # front FINDINGS describes -- saturate coarse, then mid, then add fine
+  # levels one at a time, because cells dominate rate (one tier-2 level
+  # costs 3,072 bits against tier-1's 144 and tier-0's 6).
+  recon_tuples: ["8-1-0", "8-8-0", "8-8-1", "8-8-2", "8-8-4", "8-8-8"]

@@ -150,14 +150,15 @@ def test_every_figure_the_run_draws_renders_on_real_data():
     tuples = list(canon.values())
     vs, cbt = validate(model, model.source, val_s, tuples,
                        {tname(t) for t in tuples}, spec=spec)
-    assert "sam_ceiling" in vs and "rmse_ceiling" in vs
+    assert "r2_ceiling" in vs and "rmse_ceiling" in vs
+    assert "sam_ceiling" in vs
 
     f = rd_figure(cbt, vs, model.specs, tuples, 2000, spec,
                   px=cfg.model.window ** 2, side_bits=model.side_bits())
-    assert f.axes[0].get_ylabel().startswith("spectral angle")
+    assert f.axes[0].get_ylabel().startswith("R\u00b2")
     plt.close(f)
-    # sam is unbounded, so 1 - m on a log axis is meaningless and dropped
-    assert not spec.has_figure("rd_log")
+    # R2 is bounded above by 1, so 1 - m on a log axis is meaningful
+    assert spec.has_figure("rd_log")
 
     plt.close(codebook_figure(vs, model.specs, 2000))
 
