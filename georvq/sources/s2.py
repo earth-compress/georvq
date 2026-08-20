@@ -165,18 +165,27 @@ class S2Source(Source):
         return self._norm
 
     def side_bits(self, cfg) -> float:
-        """The 26 per-band mean/std floats `prep` removes, as raw f16.
+        """The 26 per-band mean/std floats `prep` removes.
 
-        Conservative on purpose: `stats_codec.StatsPacker` compresses this
-        layout to roughly 11 bytes/tile, but no packer is fitted for S2
-        yet, so charging the uncompressed cost keeps the rate figures
-        honest rather than optimistic. This is not a rounding error --
-        on a 1/4/16 pyramid it can exceed the coarse-only operating point
-        outright, which is how a stats channel reaches a third of a
-        bitstream without anyone noticing.
+        With `model.stats_pca` set, this is the MEASURED mean packed size
+        of the fitted basis (`scripts/fit_stats_pca_s2.py` stores it in the
+        npz, so the rate a run reports is reproducible from the artifact
+        rather than re-measured per run). The packer is tolerance-coded, so
+        the per-window size varies; the mean is what an expected-rate
+        figure wants, and the same file carries the p99 for anyone who
+        needs the tail.
+
+        Without a basis it falls back to raw f16, ~5x larger. That is the
+        conservative direction, but it is not free: on a 1/4/16 pyramid the
+        raw channel can exceed the coarse-only operating point outright,
+        which is how a stats channel reaches a third of a bitstream
+        without anyone noticing.
         """
-        return float(2 * len(BANDS_10M) + 2 * len(BANDS_20M)
-                     + 2 * len(BANDS_60M)) * 16.0
+        n = 2 * (len(BANDS_10M) + len(BANDS_20M) + len(BANDS_60M))
+        path = getattr(cfg, "stats_pca", None) if cfg is not None else None
+        if path is None:
+            return float(n) * 16.0
+        return float(_packed_bits(str(path)))
 
     def recon_stats(self, out: dict, x: dict, valid):
         losses = {}
@@ -243,3 +252,24 @@ def _s2_sam(out, x, valid):
 def _s2_rmse(out, x, valid):
     from georvq.metrics import masked_rmse
     return masked_rmse(_s2_10m(out), _s2_10m(x), valid)
+
+
+_PACKED_BITS: dict[str, float] = {}
+
+
+def _packed_bits(path: str) -> float:
+    """Mean packed bits/window recorded by the basis fit.
+
+    Cached: `side_bits` is read on every rate figure, and this would
+    otherwise re-open the npz each time.
+    """
+    if path not in _PACKED_BITS:
+        import numpy as np
+        z = np.load(path)
+        if "mean_bytes" not in z.files:
+            raise KeyError(
+                f"{path}: no 'mean_bytes' -- refit with "
+                f"scripts/fit_stats_pca_s2.py, which records the measured "
+                f"packed size that the rate figures charge.")
+        _PACKED_BITS[path] = float(z["mean_bytes"]) * 8.0
+    return _PACKED_BITS[path]

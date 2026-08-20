@@ -271,3 +271,57 @@ def test_sources_without_a_normalizer_charge_nothing():
     cfg = _cfg()
     assert AESource(cfg.model).side_bits(cfg.model) == 0.0
     assert TesseraSource(cfg.model).side_bits(cfg.model) == 0.0
+
+
+def test_stats_pca_basis_shrinks_the_charged_channel(tmp_path):
+    """The fitted basis must actually reduce the charged rate, and the
+    charge must come from the artifact rather than a hardcoded guess."""
+    import numpy as np
+
+    from georvq.inference.stats_codec import StatsPacker, fit_stats_pca
+
+    rng = np.random.default_rng(0)
+    # stats vectors are strongly correlated across bands, which is the
+    # structure the basis exists to exploit
+    latent = rng.normal(size=(512, 4))
+    mixing = rng.normal(size=(4, 26))
+    stats = latent @ mixing * 0.05 + 0.2
+
+    basis = dict(fit_stats_pca(stats))
+    packer = StatsPacker(data=basis, tolerance=0.01)
+    sizes = [len(packer.pack(s)) for s in stats]
+    assert np.mean(sizes) < 26 * 2          # beats raw f16
+    for s in stats[:32]:                    # and stays inside tolerance
+        assert np.abs(packer.unpack(packer.pack(s)) - s).max() < 0.011
+
+    basis["mean_bytes"] = np.float32(np.mean(sizes))
+    path = tmp_path / "pca.npz"
+    np.savez(path, **basis)
+
+    raw_cfg = _cfg()
+    model_raw = build_model(raw_cfg)
+    assert model_raw.side_bits() == 26 * 16.0        # no basis -> raw f16
+
+    cfg = _cfg()
+    cfg.model.stats_pca = path
+    model = build_model(cfg)
+    assert model.side_bits() == pytest.approx(np.mean(sizes) * 8)
+    assert model.side_bits() < model_raw.side_bits()
+
+
+def test_a_basis_without_a_measured_size_is_rejected(tmp_path):
+    """A basis fitted by hand, with no recorded packed size, must fail
+    loudly rather than have the rate silently invented."""
+    import numpy as np
+
+    from georvq.inference.stats_codec import fit_stats_pca
+
+    rng = np.random.default_rng(0)
+    basis = fit_stats_pca(rng.normal(size=(64, 26)))
+    path = tmp_path / "nosize.npz"
+    np.savez(path, **basis)
+    cfg = _cfg()
+    cfg.model.stats_pca = path
+    model = build_model(cfg)
+    with pytest.raises(KeyError, match="mean_bytes"):
+        model.side_bits()
