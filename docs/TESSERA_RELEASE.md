@@ -79,13 +79,13 @@ tensors into the fp32 model and upcasts, so the arithmetic afterwards is
 bit-identical to an fp32 release, and index determinism across hardware
 is whatever it already was.
 
-**Both variants carry the same `bitstream_id`, deliberately.** The id is
-computed from the reference fp32 weights, before the halving, so an fp16
-bundle is a storage variant of the same bitstream rather than a new one:
-either decoder reads the other's archives, which is the decoder-upgrade
-freedom the contract exists to give. Note the consequence -- rehashing a
-shipped fp16 bundle will not reproduce its stated id, because the id
-describes the reference weights, not the bytes on disk.
+**The two variants carry different `bitstream_id`s, and should.** The id
+hashes the weights that actually ship, so rehashing a bundle reproduces
+its stated id -- which is the whole point, since the tile backends
+recompute it from the weights they loaded and refuse a mismatch. An
+fp16 bundle's codebooks really do hold different values, so it really is
+a different bitstream: the same indices decode to a very slightly
+different field. Pick one variant per archive and stay on it.
 
 Computing in fp16 would be a different proposal. A narrower accumulate
 makes near-tie RVQ assignments hardware-dependent, and the encoder's
