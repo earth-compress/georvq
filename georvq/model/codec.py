@@ -270,11 +270,31 @@ class PyramidCodec(nn.Module):
                 "it would silently produce a mean-removed field.")
 
     def side_bits(self):
-        """Fixed per-window bits outside the index stream (stats channel)."""
-        if self.stats_cond is None:
-            return 0.0
-        from georvq.model.stats_cond import channel_bits
-        return float(channel_bits(self.stats_cond, self.bands))
+        """Fixed per-window bits outside the index stream.
+
+        TWO channels can land here and they are different mechanisms, so
+        both are charged:
+
+        - `model.stats_cond`, which transmits the per-window mean and
+          codes only the remainder; and
+        - a source's `normalizer`, which removes per-tile statistics
+          before the encoder and must ship them for the decode to mean
+          anything (S2's 26 per-band mean/std floats).
+
+        Charging only the first understated the rate of every normalized
+        source, and understated it worst exactly where it matters: on a
+        1/4/16 pyramid the coarse-only operating point can be SMALLER than
+        the stats channel it was silently not counting.
+        """
+        bits = 0.0
+        if self.stats_cond is not None:
+            from georvq.model.stats_cond import channel_bits
+            bits += float(channel_bits(self.stats_cond, self.bands))
+        src = getattr(self, "source", None)
+        if src is not None:
+            bits += float(src.side_bits(self.cfg)
+                          if hasattr(src, "side_bits") else 0.0)
+        return bits
 
     def _stats_of(self, x, valid=None):
         """The stats argument the encode/decode pair needs, or None when
