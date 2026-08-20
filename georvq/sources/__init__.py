@@ -41,6 +41,22 @@ class Source:
         Returns (loss, metrics: dict[str, float tensor])."""
         raise NotImplementedError
 
+    def report(self, model_cfg):
+        """What a run on this source should measure, plot and log.
+
+        Returns a `georvq.sources.report.ReportSpec`. There is deliberately
+        NO default: reporting inherited from whichever source came before
+        is how a single-band elevation model ended up logging cosine, so a
+        new source states its own surface or gets a loud error. The two
+        ready-made shapes cover most cases -- `embedding_field_spec()` for
+        dense per-pixel vector fields, `scalar_field_spec()` for
+        single-plane scalar fields.
+        """
+        raise NotImplementedError(
+            f"source {self.name!r} declares no ReportSpec -- see "
+            f"georvq/sources/report.py; embedding_field_spec() and "
+            f"scalar_field_spec() are the ready-made shapes.")
+
 
 def get_source(name: str, model_cfg) -> Source:
     """Look up a `Source` adapter by its config name.

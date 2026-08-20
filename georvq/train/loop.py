@@ -32,6 +32,7 @@ from georvq.repro import (run_metadata, save_checkpoint, seed_all,
 from georvq.train.figures import (codebook_figure, cosdist_figure,
                                    rd_figure, recon_figure,
                                    reset_figure)
+from georvq.sources.report import resolve_report
 from georvq.train.validate import canonical_tuples, load_rd_ref, tname, validate
 from georvq.train import dist as D
 from georvq.train.warmstart import (decoder_tail_names, freeze_books,
@@ -126,6 +127,15 @@ def train(cfg: Config, gpu=0):
               f"({model.side_bits() / cfg.model.window ** 2:.3f} b/px) "
               f"charged at every depth", flush=True)
     source = model.source
+    # Resolve BEFORE the store opens: a bad log.report.* selection should
+    # fail in the first second, not at the first val_interval.
+    report = resolve_report(source, cfg)
+    qm = report.quality
+    if D.is_main():
+        print(f"report: quality={qm.key} "
+              f"extra={[m.key for m in report.extra]} "
+              f"baselines={[b.key for b in report.baselines]} "
+              f"figures={list(report.figures)}", flush=True)
     store, train_rows, val_rows, val_s, pool = setup_data(cfg, source, device)
     val_rows.to_parquet(os.path.join(run_dir, "val_chips.parquet"))
 
@@ -308,7 +318,7 @@ def train(cfg: Config, gpu=0):
               f"first {_ramp.until} steps, then {batch_full}", flush=True)
     align = cfg.data.pool.align_crops
     t0, data_ms = time.time(), 0.0
-    best_cos = -1.0
+    best_q = -math.inf if qm.higher_better else math.inf
     nonfinite_steps = 0
     best_is_quantized = False   # warmup selects on the ceiling; see below
     vs, cbt = {}, {}
@@ -507,17 +517,20 @@ def train(cfg: Config, gpu=0):
                 # per-level detail as ONE figure, not 168 scalar
                 # panels; only the aggregates stay as scalars so they
                 # are still plottable over time
-                fr = reset_figure(rst, specs, step)
+                fr = (reset_figure(rst, specs, step)
+                      if report.has_figure("reset") else None)
                 agg = {"reset/total_codes_reset": n_tot,
                        "reset/mean_resid_gain": float(np.nanmean(
                            [v for k, v in rst.items()
                             if k.endswith("_resid_gain")])),
                        "reset/mean_perp_gain": float(np.nanmean(
                            [v for k, v in rst.items()
-                            if k.endswith("_perp_gain")])),
-                       "figs/reset": wandb.Image(fr)}
+                            if k.endswith("_perp_gain")]))}
+                if fr is not None:
+                    agg["figs/reset"] = wandb.Image(fr)
                 wandb.log(agg, step=step)
-                plt.close(fr)
+                if fr is not None:
+                    plt.close(fr)
             worst = max((val, k) for k, val in rst.items()
                         if k.endswith("_n_reset"))
             print(f"step {step}: reset {n_tot:.0f} codes "
@@ -555,7 +568,8 @@ def train(cfg: Config, gpu=0):
             if step % 200 == 0:
                 rstr = (f" rate={rate_bpp.item():.2f}bpp"
                         if rate_bpp is not None else "")
-                cstr = (f" cos={m['cos'].item():.4f}" if "cos" in m else "")
+                cstr = (f" {qm.key}={m[qm.key].item():.4f}"
+                        if qm.key in m else "")
                 print(f"step {step}: loss={loss.item():.5f}{cstr}{rstr} "
                       f"tok/s={tok_s:,.0f}", flush=True)
             if use_wandb:
@@ -583,30 +597,35 @@ def train(cfg: Config, gpu=0):
             # tracking noise.
             vq_live = not (v.warmup_steps and step <= v.warmup_steps)
             vs, cbt = validate(model, source, val_s, val_ts, canon_names,
-                               val_loc=val_loc, quantized=vq_live)
+                               val_loc=val_loc, quantized=vq_live,
+                               spec=report)
             if cfg.train.freeze_codec:    # keep the codec frozen (no EMA)
                 model.eval()
             if v.freeze_books:            # validate() leaves the model in
                 freeze_books(model)       # train() -- re-assert the freeze
-            ccbt = vs.pop("_ccos", {})
-            print(f"step {step} VAL: "
+            ebt = vs.pop("_extra", {})
+            extra_str = "".join(
+                f" {m.key}_ceil={vs[f'{m.key}_ceiling']:.4f}"
+                for m in report.extra if f"{m.key}_ceiling" in vs)
+            base_str = "".join(
+                f" {b.key}={vs[f'{qm.key}_{b.key}']:.4f}"
+                for b in report.baselines if f"{qm.key}_{b.key}" in vs)
+            print(f"step {step} VAL[{qm.key}]: "
                   + ("" if vq_live else "[warmup: ceiling only] ")
                   + " ".join(f"{k}({tname(t)})={cbt[tname(t)]:.4f}"
                              for k, t in canon.items() if tname(t) in cbt)
-                  + f" ceil={vs['cos_ceiling']:.4f}"
-                  + f" ccos_ceil={vs['ccos_ceiling']:.3f}"
-                  + f" blockmean={vs['cos_blockmean']:.4f}"
-                  + (f" ccos_full={ccbt.get(tname(canon['full']), 0):.3f}"
-                     if vq_live else ""),
+                  + f" ceil={vs[f'{qm.key}_ceiling']:.4f}"
+                  + extra_str + base_str,
                   flush=True)
             if use_wandb:
-                scalars = {f"val/cos_{k}": cbt[tname(t)]
+                scalars = {f"val/{qm.key}_{k}": cbt[tname(t)]
                            for k, t in canon.items() if tname(t) in cbt}
                 scalars.update({k: val for k, val in vs.items()
                                 if k.startswith("sel_")})
-                scalars.update({f"val/ccos_{k}": ccbt[tname(t)]
-                                for k, t in canon.items()
-                                if tname(t) in ccbt})
+                for mk, by_t in ebt.items():
+                    scalars.update({f"val/{mk}_{k}": by_t[tname(t)]
+                                    for k, t in canon.items()
+                                    if tname(t) in by_t})
                 # per-(tier, level) codebook health as SCALARS, not just
                 # the figure. rvq/pyr{i}_ema_usage is a poor proxy: it
                 # counts entries above the dead threshold, so a book whose
@@ -615,9 +634,17 @@ def train(cfg: Config, gpu=0):
                 # is the honest number.
                 # per-level codebook health stays in figs/codebook; as
                 # scalars it is 72 more panels for no extra information
-                scalars["val/cos_ceiling"] = vs["cos_ceiling"]
-                scalars["val/ccos_ceiling"] = vs["ccos_ceiling"]
-                scalars["val/cos_blockmean"] = vs["cos_blockmean"]
+                # only the ceilings and baselines this source declares:
+                # a scalar field publishes r2_ceiling and no block-mean,
+                # rather than inheriting an embedding field's panels
+                for m in report.metrics:
+                    if f"{m.key}_ceiling" in vs:
+                        scalars[f"val/{m.key}_ceiling"] = \
+                            vs[f"{m.key}_ceiling"]
+                for b in report.baselines:
+                    bk = f"{qm.key}_{b.key}"
+                    if bk in vs:
+                        scalars[f"val/{bk}"] = vs[bk]
                 # Every figure below is a view of QUANTIZED behaviour --
                 # the R-D front, per-level codebook health, reconstructions
                 # at depth tuples. During the VQ-free warmup they would all
@@ -627,33 +654,42 @@ def train(cfg: Config, gpu=0):
                     wandb.log(scalars, step=step)
                 else:
                     sb = model.side_bits()
-                    f1 = rd_figure(cbt, vs, specs, val_ts, step,
-                                   ref_fronts=ref_fronts,
-                                   px=cfg.model.window ** 2, side_bits=sb)
-                    f1b = rd_figure(cbt, vs, specs, val_ts, step,
-                                    ref_fronts=ref_fronts,
-                                    px=cfg.model.window ** 2, dist_log=True,
-                                    side_bits=sb)
-                    f2 = codebook_figure(vs, specs, step)
-                    scalars["figs/rd"] = wandb.Image(f1)
-                    scalars["figs/rd_log"] = wandb.Image(f1b)
-                    scalars["figs/codebook"] = wandb.Image(f2)
-                    f4 = None
-                    if "cosdist" in vs:
+                    open_figs = []
+                    if report.has_figure("rd"):
+                        f1 = rd_figure(cbt, vs, specs, val_ts, step, report,
+                                       ref_fronts=ref_fronts,
+                                       px=cfg.model.window ** 2,
+                                       side_bits=sb)
+                        scalars["figs/rd"] = wandb.Image(f1)
+                        open_figs.append(f1)
+                    if report.has_figure("rd_log"):
+                        f1b = rd_figure(cbt, vs, specs, val_ts, step, report,
+                                        ref_fronts=ref_fronts,
+                                        px=cfg.model.window ** 2,
+                                        dist_log=True, side_bits=sb)
+                        scalars["figs/rd_log"] = wandb.Image(f1b)
+                        open_figs.append(f1b)
+                    if report.has_figure("codebook"):
+                        f2 = codebook_figure(vs, specs, step)
+                        scalars["figs/codebook"] = wandb.Image(f2)
+                        open_figs.append(f2)
+                    if "cosdist" in vs and report.has_figure("cosdist"):
                         f4 = cosdist_figure(vs["cosdist"], None, specs, step)
                         scalars["figs/cosdist_by_level"] = wandb.Image(f4)
+                        open_figs.append(f4)
                     wandb.log(scalars, step=step)
-                    plt.close(f1); plt.close(f1b); plt.close(f2)
-                    if f4 is not None:
-                        plt.close(f4)
-                    if step % cfg.train.fig_interval == 0 \
-                            or step == cfg.train.steps:
+                    for f in open_figs:
+                        plt.close(f)
+                    if report.has_figure("recon") and (
+                            step % cfg.train.fig_interval == 0
+                            or step == cfg.train.steps):
                         rt = ([[int(x_) for x_ in t.split("-")]
                                for t in cfg.eval.recon_tuples]
                               if cfg.eval.recon_tuples else None)
                         f3 = recon_figure(model, source, val_s, step,
                                           mins=mins, tuples=rt,
-                                          val_loc=val_loc)
+                                          val_loc=val_loc,
+                                          preview=report.preview)
                         wandb.log({"figs/recon": wandb.Image(f3)}, step=step)
                         plt.close(f3)
 
@@ -663,27 +699,38 @@ def train(cfg: Config, gpu=0):
             # running best when the books go live and the criterion
             # switches.
             if vq_live and not best_is_quantized:
-                best_cos, best_is_quantized = -1.0, True
-            full_cos = (cbt[tname(canon["full"])] if vq_live
-                        else vs["cos_ceiling"])
-            metrics = {"cos_full": full_cos,
-                       "cos_ceiling": vs["cos_ceiling"]}
-            if full_cos > best_cos:
-                best_cos = full_cos
+                best_q = -math.inf if qm.higher_better else math.inf
+                best_is_quantized = True
+            full_q = (cbt[tname(canon["full"])] if vq_live
+                      else vs[f"{qm.key}_ceiling"])
+            metrics = {"quality_key": qm.key,
+                       f"{qm.key}_full": full_q,
+                       f"{qm.key}_ceiling": vs[f"{qm.key}_ceiling"]}
+            improved = (full_q > best_q if qm.higher_better
+                        else full_q < best_q)
+            if improved:
+                best_q = full_q
                 save_checkpoint(os.path.join(run_dir, "model_best.pt"),
                                 model, cfg, step, metrics)
         if (step % cfg.train.save_interval == 0
                 or step == cfg.train.steps) and D.is_main():
             save_checkpoint(os.path.join(run_dir, "model.pt"), model, cfg,
-                            step, {"cos_full": best_cos})
+                            step, {"quality_key": qm.key,
+                                   f"{qm.key}_full": best_q})
 
     if D.is_main():
         # one writer: every rank reaching this line would race on the
         # same path, and the ranks do not all hold the same `vs`
         with open(os.path.join(run_dir, "final_val.json"), "w") as f:
-            json.dump({"scalars": {k: val for k, val in vs.items()
-                                   if not k.startswith("_")},
-                       "cos_by_tuple": cbt}, f, indent=1)
+            blob = {"scalars": {k: val for k, val in vs.items()
+                                if not k.startswith("_")},
+                    "quality_key": qm.key,
+                    "quality_by_tuple": cbt}
+            if qm.key == "cos":
+                # readers of pre-report runs (load_rd_ref, analysis/) key
+                # off this name; keep it where it still means the same
+                blob["cos_by_tuple"] = cbt
+            json.dump(blob, f, indent=1)
     pool.shutdown()
     D.cleanup()
     print(f"done -> {run_dir}", flush=True)

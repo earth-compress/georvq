@@ -84,3 +84,18 @@ class TesseraSource(Source):
             rel = (se.sqrt()
                    / x.pow(2).sum(1).sqrt().clamp_min(1e-6))[valid].mean()
         return mse, {"mse": mse, "cos": cos, "vec_rel_l2": rel}
+
+    def report(self, model_cfg):
+        """Same shape as AlphaEarth, plus the relative-L2 diagnostic this
+        field needs: Tessera vectors carry real magnitude (spread 1.57x),
+        so an error can be large in norm while cosine looks fine."""
+        from georvq.sources.report import (Metric, embedding_field_spec,
+                                           replace_extra)
+        rel = Metric("vec_rel_l2", "relative L2", _vec_rel_l2,
+                     higher_better=False, bounded=False, min_bands=2)
+        return replace_extra(embedding_field_spec(), add=(rel,))
+
+
+def _vec_rel_l2(out, x, valid):
+    se = (out - x).pow(2).sum(1)
+    return (se.sqrt() / x.pow(2).sum(1).sqrt().clamp_min(1e-6))[valid].mean()

@@ -55,6 +55,24 @@ Subclass `georvq.sources.Source` and register it in
   stats channel once reached 34% of a bitstream unnoticed.
 - `recon_stats(out, x, valid) -> (loss, metrics)` — the training loss and
   quality metrics in model space.
+- `report(cfg) -> ReportSpec` — what a run on this source should measure,
+  plot and log (`georvq/sources/report.py`). There is deliberately no
+  default: reporting inherited from the previous source is how a
+  single-band elevation model ended up logging a cosine, so a source that
+  declares nothing raises. Two ready-made shapes cover most cases —
+  `embedding_field_spec()` (cosine + centred cosine + block-mean floor +
+  PCA-RGB preview) and `scalar_field_spec()` (R² + RMSE, no block-mean,
+  grayscale preview).
+
+  A spec names the headline `quality` metric — it labels the val scalars
+  and the R-D axis, and selects `model_best.pt` — plus `extra`
+  diagnostics, `baselines`, `figures` and a `preview`. Every metric and
+  preview declares the `min_bands` it is defined for, so cosine on one
+  band (it collapses to sign agreement) or a 3-component PCA-RGB preview
+  of one band is refused at config resolution rather than logged. A run
+  narrows the surface with `log.report.{metrics,baselines,figures,preview}`;
+  those may only take things away, and naming something the source does
+  not declare is a config error.
 
 `georvq/sources/ae.py` is the minimal reference (60 lines);
 `georvq/sources/s2.py` is the full multi-resolution example.

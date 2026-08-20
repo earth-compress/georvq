@@ -52,7 +52,7 @@ submodules exist. Everything is assembled from one validated `Config`
 | `georvq/model/conditioning.py` | `TierPredictor` (cascade), `CodebookSelector` (gated subset) |
 | `georvq/model/location.py` | SatCLIP clone-on-demand loader, location tables, location→latent prior MLPs |
 | `georvq/data/` | `store.py` chip-store v1 + `geographic_split`; `pool.py` resident pools; `build.py` `ShardWriter` |
-| `georvq/sources/` | `Source` interface + registry; `ae.py` (minimal reference), `tessera.py` (dense embeddings with a per-pixel scale), `s2.py` (multi-resolution example) |
+| `georvq/sources/` | `Source` interface + registry; `ae.py` (minimal reference), `tessera.py` (dense embeddings with a per-pixel scale), `s2.py` (multi-resolution example); `report.py` the per-source reporting surface (metrics, baselines, figures, previews) |
 | `georvq/train/` | `loop.py` the one trainer; `stage1.py` σ-conditioned pretrain; `dist.py` data-parallel launch; `validate.py`, `figures.py`, `warmstart.py` |
 | `georvq/eval/` | Held-out extraction, probes, benchmark registry, codec A/B helpers |
 | `georvq/viz/` | Panel/GIF styling and builders |
@@ -93,7 +93,11 @@ submodules exist. Everything is assembled from one validated `Config`
 6. **Sources own all data-specific behavior.** The shared stack
    (tokenizer→decoder, trainer, evals, inference) must stay
    source-agnostic. If you're adding an `if source == ...` anywhere
-   outside `sources/`, it belongs in the adapter instead.
+   outside `sources/`, it belongs in the adapter instead. This includes
+   what a run *reports*: the trainer reads a `ReportSpec`
+   (`sources/report.py`) for its metric names, baselines, figures and
+   preview, and no longer knows what a cosine is. Hardcoding a metric
+   key in `train/` is the same violation as hardcoding a dequant.
 7. **Configs are the reproducibility spine.** Every training artifact
    embeds its resolved config; anything that affects a run must live in
    the `Config` schema (validated, `extra="forbid"`), not in an env var
