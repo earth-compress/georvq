@@ -99,3 +99,25 @@ def test_requantize_returns_to_source_units():
     assert codes.dtype == torch.int8
     ok = torch.from_numpy(q[0]).ne(0).any(0)          # ignore nodata pixels
     assert torch.equal(codes[0][:, ok], torch.from_numpy(q[0])[:, ok])
+
+
+def test_prep_accepts_the_layout_geotessera_actually_returns():
+    """geotessera hands out (H, W, bands); the store is (bands, H, W).
+    Both must land on identical tensors, or the demo path and the
+    training path are quietly different codecs."""
+    q, scale = _fake(n=1)
+    chw = q[0]                                  # (bands, H, W)
+    hwc = np.ascontiguousarray(chw.transpose(1, 2, 0))   # (H, W, bands)
+    x_a, v_a = io.prep(chw, scale[0], device="cpu")
+    x_b, v_b = io.prep(hwc, scale[0], device="cpu")
+    assert torch.equal(x_a, x_b) and torch.equal(v_a, v_b)
+
+
+def test_prep_refuses_to_guess_an_ambiguous_layout():
+    """A tile whose width equals the band count has no detectable
+    layout, so guessing would silently transpose someone's data."""
+    g = np.random.default_rng(0)
+    amb = g.integers(-127, 127, (128, 64, 128), dtype=np.int8)
+    with pytest.raises(ValueError, match="cannot tell the layout"):
+        io.prep(amb, np.ones((64, 128), np.float32))
+    io.prep(amb, np.ones((64, 128), np.float32), channels_last=False)
