@@ -221,12 +221,36 @@ Conventions that each cost a wrong conclusion before they were adopted.
 - **Cheap decoders hit a quality wall.** Tier-subset decoders with
   low-res heads + bilinear upsampling (0.76M/4.25M params) run 17-28x
   faster but land 0.006-0.1 cos below the 31M trunk at matched rate —
-  parked below the release bar (`docs/PARKED.md`).
+  parked below the release bar (see Deferred with evidence above).
 - **Encoder-side self-measurement is nearly free and very valuable**:
   decoding the rate ladder during encode (fused pass: shared encode +
   cumsums, ~2x the base encode cost) yields per-blob and per-window true
   error stats that make quality-controlled delivery possible with no
   predictor network.
+
+## Deferred with evidence
+
+Ideas that were measured, found real, and not shipped. Recorded so they
+are not re-derived; each was parked for cost or for missing a quality
+bar, not for being wrong.
+
+- **A decoder-side error predictor is feasible and cheap.** The 24
+  per-(tier, level) RVQ increment norms -- pure bitstream features the
+  decoder already sums -- predict log window-mean error at **r = 0.94**
+  with a linear probe, better than the encode-side coarse-residual norm
+  (0.898). 42% of predicted worst-5% windows are truly in the worst 5%.
+  So "which pixels are likely bad" and "how much would deeper levels
+  help here" are answerable from indices alone, with no original.
+- **Cheap decoders hit a quality wall.** Tier-subset decoders with
+  low-res heads and bilinear upsampling (0.76M / 4.25M params) run
+  17-28x faster but land 0.006-0.1 cos below the 31M trunk at matched
+  rate. Speed is available; quality at speed is not, on this
+  architecture.
+- **Blocked-halo attention is worth it if narrow local attention comes
+  back.** Computing a fine tier's neighbourhood attention in blocks with
+  a halo, rather than gathering per query, measured **7x faster**. The
+  narrow-suffix stream it was built for was abandoned with the
+  architectures that used it, but the kernel idea stands on its own.
 
 ## Codebooks: sizing, fitting and health
 
@@ -260,10 +284,10 @@ Conventions that each cost a wrong conclusion before they were adopted.
   256 x14 -> 0.2539. The opposite conclusion drawn from a *collapsed*
   tier was an artefact. Keep the AE ladder (2048/8192/16384).
 - **Gain-shape VQ loses at matched rate**: plain VQ 0.2251 vs 0.2537
-  (K=4096+2 gain bits) and 0.3087 (K=1024+4). Implemented and tested
-  (`vq.gain_shape`), kept for reference. Its premise (books wasting
-  capacity on magnitude) does not hold; the shape-codebook capacity it
-  costs exceeds the magnitude precision it buys.
+  (K=4096+2 gain bits) and 0.3087 (K=1024+4). Implemented, measured, and
+  since removed. Its premise -- that books waste capacity on magnitude --
+  does not hold: the shape-codebook capacity the split costs exceeds the
+  magnitude precision it buys.
 - **Cross-fitted refinement levels help only degenerate tiers.** +33% on
   the collapsed tier (where levels 1-2 contributed 1.3%), **-13% on a
   healthy one** (0.2556 vs 0.2262) — the fold models are weaker, so the

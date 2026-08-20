@@ -16,3 +16,6 @@ plots/
 .venv/
 err.log
 .ipynb_checkpoints/
+
+# local agent scratch (archived internal docs, worktrees)
+.claude/
