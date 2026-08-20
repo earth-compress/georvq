@@ -1,0 +1,86 @@
+"""Copernicus DEM (GLO-30) source: one elevation band in metres.
+
+Absolute elevation spans -400..8800m and dominates the raw signal, so each
+window is standardized on its valid pixels before encoding — the same
+per-tile stats side-channel pattern as Sentinel-2, here just (mean, std).
+The model codes local relief; the two floats restore metres after decoding.
+"""
+from __future__ import annotations
+
+import torch
+import torch.nn as nn
+
+from georvq.metrics import masked_r2, masked_recon_stats
+from georvq.model.decoder import DenseHead
+from georvq.sources import Source
+
+NODATA = -32767.0
+VALID_MIN = -1000.0  # deepest COPDEM land ~-450 m; below = fill/warp smear
+STD_FLOOR = 0.1     # metres; keeps near-flat windows from amplifying noise
+
+
+class DEMNormalizer:
+    """Per-window masked mean/std over valid pixels: normalize before
+    encode, restore after decode. `stats_vector` is [mean, std] (B, 2)."""
+
+    def normalize(self, x, valid):
+        vm = valid.unsqueeze(1).float()
+        n = vm.sum((2, 3)).clamp_min(1)
+        mu = (x * vm).sum((2, 3)) / n
+        var = ((x - mu[:, :, None, None]) ** 2 * vm).sum((2, 3)) / n
+        sd = var.sqrt().clamp_min(STD_FLOOR)
+        out = (x - mu[:, :, None, None]) / sd[:, :, None, None] * vm
+        return out, (mu, sd)
+
+    def denormalize(self, x, stats):
+        mu, sd = stats
+        return x * sd[:, :, None, None] + mu[:, :, None, None]
+
+    @staticmethod
+    def stats_vector(stats):
+        return torch.cat(stats, 1)                    # (B, 2)
+
+
+class DEMSource(Source):
+    name = "dem"
+
+    def __init__(self, model_cfg):
+        super().__init__(model_cfg)
+        self._norm = DEMNormalizer()
+
+    def prep(self, raw, device):
+        """float32 (B, 1, W, W) metres -> standardized floats + validity."""
+        x = raw.to(device, non_blocking=True).float()
+        # fill is -32767 (documented) or -32768 (some mosaics), and warp
+        # resampling smears the land/fill boundary into arbitrary large
+        # negatives — mask by physical plausibility, not value equality
+        # (COPDEM land minimum is ~-450 m)
+        valid = x[:, 0] > VALID_MIN
+        xn, self._last_stats = self._norm.normalize(x, valid)
+        return xn, valid
+
+    def last_stats(self):
+        return self._last_stats
+
+    def build_stem(self, model_cfg) -> nn.Module:
+        return nn.Identity()
+
+    def build_head(self, model_cfg, in_dim) -> nn.Module:
+        fine = model_cfg.tiers[-1]
+        return DenseHead(in_dim, grid=fine.grid,
+                         p=model_cfg.window // fine.grid,
+                         bands=model_cfg.bands,
+                         head_feat=model_cfg.decoder.head_feat,
+                         normalize=False)
+
+    def normalizer(self, model_cfg):
+        return self._norm
+
+    def recon_stats(self, out, x, valid):
+        mse, _ = masked_recon_stats(out, x, valid)
+        # quality under the shared "cos" key so train/val logging stays
+        # uniform; for DEM it is R^2 (variance explained), not a cosine
+        return mse, {"mse": mse, "cos": self.quality(out, x, valid)}
+
+    def quality(self, out, x, valid):
+        return masked_r2(out, x, valid)

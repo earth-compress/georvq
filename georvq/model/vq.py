@@ -23,11 +23,18 @@ class VectorQuantizer(nn.Module):
 
     def __init__(self, num_codes=512, dim=128, decay=0.99, eps=1e-5,
                  kmeans_init=True, reset_interval=2500, dead_threshold=0.01,
+<<<<<<< Updated upstream
                  grad_codebook=False, bf16_scores=False,
                  reset_mode="random"):
+=======
+                 grad_codebook=False, bf16_scores=False, reset_mode="batch",
+                 reset_frac=1.0, repulsion=0.0, repulsion_margin=0.5,
+                 repulsion_interval=10):
+>>>>>>> Stashed changes
         super().__init__()
         self.reset_mode = reset_mode
         self.grad_codebook = grad_codebook
+        self.reset_frac = reset_frac
         self.num_codes = num_codes
         self.dim = dim
         self.decay = decay
@@ -36,6 +43,17 @@ class VectorQuantizer(nn.Module):
         self.reset_interval = reset_interval
         self.dead_threshold = dead_threshold
         self.bf16_scores = bf16_scores
+        self.reset_mode = reset_mode
+        self.repulsion = repulsion
+        self.repulsion_margin = repulsion_margin
+        self.repulsion_interval = repulsion_interval
+        if reset_mode == "fps":
+            # reservoir of recent latents: 1-cell tiers see only
+            # batch-many vectors per step, far fewer than dead slots
+            slots = min(max(2 * num_codes, 4096), 32768)
+            self.register_buffer("reservoir", torch.zeros(slots, dim))
+            self.register_buffer("res_ptr", torch.zeros((), dtype=torch.long))
+            self.register_buffer("res_fill", torch.zeros((), dtype=torch.long))
 
         self.codebook = nn.Embedding(num_codes, dim)
         nn.init.uniform_(self.codebook.weight, -1.0 / num_codes, 1.0 / num_codes)
@@ -78,6 +96,7 @@ class VectorQuantizer(nn.Module):
         self.initialized.fill_(True)
 
     @torch.no_grad()
+<<<<<<< Updated upstream
     def _reset_dead(self, z_flat, indices=None, z_q=None):
         """Revive codes whose EMA mass has fallen below threshold.
 
@@ -95,10 +114,21 @@ class VectorQuantizer(nn.Module):
         would be the wrong target, since a large but tight cluster gains
         nothing from a second codeword; what matters is count x spread,
         which is what the SSE EMA measures.
+=======
+    def _reset_dead(self, z_flat):
+        """Replace codes with EMA mass below threshold.
+>>>>>>> Stashed changes
 
-        `replacements` is cast to the codebook dtype: z_flat may be bf16 under
-        autocast while the codebook is fp32."""
+        Default: samples from z_flat (cast to the codebook dtype: z_flat may
+        be bf16 under autocast while the codebook is fp32). For low-traffic
+        levels (1-cell coarse tiers) this cannot break usage collapse: the
+        batch is a handful of vectors already co-adapted onto the surviving
+        codes, so replacements clone incumbents, tie, starve, and die again.
+        `reset_split` instead splits high-usage codes (donor ~ EMA mass,
+        plus noise at the batch's per-dim scale) — the two halves of a split
+        cluster each win their side, independent of batch diversity."""
         dead = self.ema_count < self.dead_threshold
+<<<<<<< Updated upstream
         n_dead = int(dead.sum().item())
         # Before-state, measured on this batch with the pre-reset book.
         # Recorded even when NOTHING is dead: otherwise a level that never
@@ -130,6 +160,33 @@ class VectorQuantizer(nn.Module):
         else:
             reps = self._sample_from(z_flat, n_dead)
         replacements = reps.to(self.codebook.weight.data.dtype)
+=======
+        n_all = int(dead.sum().item())
+        if n_all == 0:
+            return 0
+        cap = max(1, int(self.num_codes * self.reset_frac))
+        if n_all > cap:      # partial reset: diversify z_q gradually
+            idx = dead.nonzero(as_tuple=True)[0]
+            keep = idx[torch.randperm(idx.numel(), device=idx.device)[:cap]]
+            dead = torch.zeros_like(dead)
+            dead[keep] = True
+        n_dead = int(dead.sum().item())
+        print(f"[vq reset {getattr(self, '_tag', '?')}] step "
+              f"{int(self.step)}: {n_all}/{self.num_codes} dead, "
+              f"resetting {n_dead} (mode={self.reset_mode})", flush=True)
+        dtype = self.codebook.weight.data.dtype
+        if self.reset_mode == "fps":
+            return self._reset_dead_fps(dead, n_dead)
+        if self.reset_mode == "split":
+            donors = torch.multinomial(self.ema_count.clamp_min(0) + 1e-12,
+                                       n_dead, replacement=True)
+            noise = torch.randn(n_dead, self.dim, device=z_flat.device)
+            scale = z_flat.float().std(0, keepdim=True)
+            replacements = (self.codebook.weight.data[donors].float()
+                            + 0.05 * scale * noise).to(dtype)
+        else:
+            replacements = self._sample_from(z_flat, n_dead).to(dtype)
+>>>>>>> Stashed changes
         self.codebook.weight.data[dead] = replacements
         self.ema_sum[dead] = replacements
         self.ema_count[dead] = 1.0
@@ -153,6 +210,7 @@ class VectorQuantizer(nn.Module):
         return n_dead
 
     @torch.no_grad()
+<<<<<<< Updated upstream
     def _split_targets(self, z_flat, indices, z_q, dead, n_dead):
         """LBG split of the top-SSE live cells: the pair straddles the
         donor centroid, offset along a data-driven direction.
@@ -204,6 +262,73 @@ class VectorQuantizer(nn.Module):
         if bool((~ok).any()):
             reps[~ok] = self._sample_from(z_flat, int((~ok).sum()))
         return reps
+=======
+    def _reset_dead_fps(self, dead, n_dead):
+        """Greedy k-center reinit: each dead slot anchors the reservoir
+        latent farthest from every live code AND every anchor placed so
+        far (incremental min-distance update). Duplicates are impossible
+        (an anchored region has min-dist 0) and anchors never land inside
+        an owned core (min-dist there is small by definition)."""
+        fill = int(self.res_fill.item())
+        if fill == 0:
+            return 0
+        cand = self.reservoir[:fill].float()                # (N, D)
+        live = self.codebook.weight.data[~dead].float()
+        dmin = torch.cdist(cand, live).min(1).values if live.shape[0] \
+            else torch.full((fill,), float("inf"), device=cand.device)
+        slots = dead.nonzero(as_tuple=True)[0]
+        dtype = self.codebook.weight.data.dtype
+        for slot in slots:
+            i = int(dmin.argmax())
+            v = cand[i]
+            self.codebook.weight.data[slot] = v.to(dtype)
+            self.ema_sum[slot] = v
+            self.ema_count[slot] = 1.0
+            dmin = torch.minimum(dmin, (cand - v).norm(dim=1))
+        return n_dead
+
+    @torch.no_grad()
+    def _res_push(self, z_flat):
+        """Ring-buffer write of (a subsample of) the batch into the
+        reservoir of recent latents."""
+        slots = self.reservoir.shape[0]
+        z = z_flat
+        if z.shape[0] > slots:
+            z = z[torch.randperm(z.shape[0], device=z.device)[:slots]]
+        p = int(self.res_ptr.item())
+        idx = (torch.arange(z.shape[0], device=z.device) + p) % slots
+        self.reservoir[idx] = z.float()
+        self.res_ptr.fill_((p + z.shape[0]) % slots)
+        self.res_fill.fill_(min(int(self.res_fill.item()) + z.shape[0],
+                                slots))
+
+    @torch.no_grad()
+    def _repel(self):
+        """Push codes apart when nearer than repulsion_margin x the median
+        nearest-neighbour distance (scale-free anti-clustering on the
+        codebook itself; the encoder warps to use the spread lattice).
+        Writes through to ema_sum — the per-step EMA copy would otherwise
+        erase the nudge on the next update."""
+        E = self.codebook.weight.data
+        d = torch.cdist(E.float(), E.float())
+        d.fill_diagonal_(float("inf"))
+        nn_d, nn_i = d.min(1)
+        margin = self.repulsion_margin * nn_d.median()
+        gap = (margin - nn_d).clamp_min(0)
+        if not (gap > 0).any():
+            return
+        dirn = (E - E[nn_i]).float()
+        tie = nn_d < 1e-6
+        if tie.any():                      # exact duplicates: random escape
+            dirn[tie] = torch.randn(int(tie.sum()), E.shape[1],
+                                    device=E.device)
+        dirn = dirn / dirn.norm(dim=1, keepdim=True).clamp_min(1e-8)
+        E.add_((self.repulsion * gap.unsqueeze(1) * dirn).to(E.dtype))
+        n = self.ema_count.sum()
+        count_stable = (self.ema_count + self.eps) \
+            / (n + self.num_codes * self.eps) * n
+        self.ema_sum.copy_(E * count_stable.unsqueeze(1))
+>>>>>>> Stashed changes
 
     def forward(self, z):
         """
@@ -265,6 +390,11 @@ class VectorQuantizer(nn.Module):
                             0, indices, se), alpha=1 - self.decay)
 
                 self.step += 1
+                if self.reset_mode == "fps":
+                    self._res_push(z_flat.detach())
+                if self.repulsion > 0 and \
+                        (self.step.item() % self.repulsion_interval == 0):
+                    self._repel()
                 if self.reset_interval > 0 and (self.step.item() % self.reset_interval == 0):
                     self._reset_dead(z_flat.detach(), indices,
                                      z_q.detach())
@@ -401,8 +531,14 @@ class ResidualVQ(nn.Module):
 
     def __init__(self, num_levels=8, num_codes=256, dim=128, decay=0.99,
                  kmeans_init=True, reset_interval=2500, dead_threshold=0.01,
+<<<<<<< Updated upstream
                  grad_codebook=False, bf16_scores=False,
                  reset_mode="random"):
+=======
+                 grad_codebook=False, bf16_scores=False, reset_mode="batch",
+                 reset_frac=1.0, repulsion=0.0, repulsion_margin=0.5,
+                 repulsion_interval=10):
+>>>>>>> Stashed changes
         super().__init__()
         self.num_levels = num_levels
         self.levels = nn.ModuleList([
@@ -412,7 +548,15 @@ class ResidualVQ(nn.Module):
                             dead_threshold=dead_threshold,
                             grad_codebook=grad_codebook,
                             bf16_scores=bf16_scores,
+<<<<<<< Updated upstream
                             reset_mode=reset_mode)
+=======
+                            reset_mode=reset_mode,
+                            reset_frac=reset_frac,
+                            repulsion=repulsion,
+                            repulsion_margin=repulsion_margin,
+                            repulsion_interval=repulsion_interval)
+>>>>>>> Stashed changes
             for _ in range(num_levels)
         ])
 

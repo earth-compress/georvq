@@ -1,0 +1,30 @@
+# COPDEM at a 128px window (3.8km @ 30m): pyr64-size trunk and codebooks,
+# depth-6 RVQ -> 1.39 bpp full vs ~4.5 bpp lossless (int16 metres). The
+# best-performing sizing of the sweep (6-bit books and compact trunks all
+# ceilinged at R^2 ~0.980-0.982; this config converged fastest).
+# Trained from scratch, so no fine-tune LR schedule: hot LR, short warmup.
+# The vq.warmup_steps k-means init stays (codebook init, not an LR concern).
+inherit: dem64.yaml
+
+data:
+  pool:
+    slot_rows: 160    # must exceed the 128px window
+
+model:
+  window: 128
+  tiers: ["1:256:2048:6", "4:192:8192:6", "16:64:16384:6"]
+  # pyr64 trunk: the compact trunk (128x6 / 192x8) ceilinged at R^2 ~0.980;
+  # the pyr64-size trunk is the proven capacity point for this window
+  tokenizer: {dim: 256, depth: 9}
+  decoder: {dim: 384, depth: 12, heads: 8, head_feat: 64, cls_bridge: true}
+
+train:
+  steps: 60000
+  grad_ckpt: false          # fits comfortably; recompute costs ~25% speed
+  optim: {lr: 5.0e-4, warmup: 500}
+
+eval:
+  recon_tuples: ["6-1-0", "6-6-0", "6-6-2", "6-6-6"]
+
+log:
+  run_tag: dem128_overnight

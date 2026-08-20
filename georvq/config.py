@@ -90,6 +90,7 @@ class VQConfig(StrictModel):
     bf16_scores: bool = False
     skip_masked: bool = False      # skip VQ work for levels the sampled depth masks off
     grad_codebook: bool = False
+<<<<<<< Updated upstream
     book_bits: Optional[int] = None  # b-bit QAT codebooks (vq_quant.py); None = fp32
     # Hard-freeze warm-started codebooks: no EMA, no dead-code resets, no
     # gradient. `mature_codebooks` only SLOWS the EMA (decay 0.9995), which
@@ -176,6 +177,25 @@ class StatsCondConfig(StrictModel):
             "stats_cond does nothing with every option off"
         assert self.bits_per_band > 0
         return self
+=======
+    # anti-collapse levers (default off; see vq.py) --------------------
+    reset_mode: Literal["batch", "split", "fps"] = "batch"
+    #   batch: legacy — clone current-batch vectors (collapses on 1-cell
+    #          tiers: duplicates + winner-take-all cores)
+    #   split: perturbed copies of high-usage codes
+    #   fps:   greedy k-center over a reservoir of recent latents — each
+    #          dead code anchors the latent farthest from every live code
+    #          and every previously placed anchor
+    reset_split: bool = False      # deprecated alias for reset_mode=split
+    reset_frac: float = 1.0        # max fraction of K reset per event —
+    #                                partial resets reintroduce codebook
+    #                                diversity gradually (decoder shock)
+    repulsion: float = 0.0         # codebook repulsion step size (0 = off):
+    #                                push codes apart when nearer than
+    #                                repulsion_margin x median NN distance
+    repulsion_margin: float = 0.5
+    repulsion_interval: int = 10   # apply repulsion every N training steps
+>>>>>>> Stashed changes
 
 
 class SigmaConfig(StrictModel):
@@ -207,7 +227,8 @@ class RateConfig(StrictModel):
 
 
 class LocationConfig(StrictModel):
-    encoder: Literal["satclip"] = "satclip"
+    encoder: Literal["satclip", "sphharm"] = "satclip"
+    degree: int = 40    # sphharm only: SH band limit (degree^2 features)
     standardize: bool = True
 
 
@@ -261,6 +282,10 @@ class ModelConfig(StrictModel):
     # rises to 0.197).
     depth_sampling: Literal["nested", "path"] = "nested"
     ff_ratio: float = 2.0
+    # L2-normalize per-cell latents (x sqrt(dim)) in encode_levels — REQUIRED
+    # when warm-starting from a stage-1 checkpoint (its decoder only ever saw
+    # normalized latents); default off preserves all legacy checkpoints
+    norm_latents: bool = False
     tokenizer: TokenizerConfig = Field(default_factory=TokenizerConfig)
     decoder: DecoderConfig = Field(default_factory=DecoderConfig)
     vq: Optional[VQConfig] = Field(default_factory=VQConfig)
@@ -409,7 +434,13 @@ class BatchRamp(StrictModel):
 class TrainConfig(StrictModel):
     steps: int = 20000
     batch_windows: int = 512
+<<<<<<< Updated upstream
     batch_ramp: Optional[BatchRamp] = None
+=======
+    clip_norm: Optional[float] = 1.0   # grad-norm clip; None/0 disables.
+    #   Working dead-code resets diversify coarse z_q mid-training; the
+    #   decoder shock plus hot LR blew up unclipped runs (2026-07-12).
+>>>>>>> Stashed changes
     amp: bool = True
     grad_ckpt: bool = False
     tf32: bool = True

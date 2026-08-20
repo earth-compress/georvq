@@ -19,7 +19,8 @@ import torch
 
 from georvq.data.pool import fixed_val_tokens
 from georvq.data.store import ChipStore
-from georvq.model.location import build_base, build_location_table, get_satclip
+from georvq.model.location import (build_base, build_location_table,
+                                   get_location_encoder)
 
 
 def load_encoder(path, device):
@@ -53,6 +54,10 @@ def main():
     ap.add_argument("--encoder-ckpt", required=True)
     ap.add_argument("--out", default="checkpoints/location_prior/base.pt")
     ap.add_argument("--gpu", type=int, default=0)
+    ap.add_argument("--encoder", choices=["satclip", "sphharm"],
+                    default="satclip")
+    ap.add_argument("--degree", type=int, default=40,
+                    help="sphharm only: SH band limit (degree^2 features)")
     ap.add_argument("--val-frac", type=float, default=0.04)
     ap.add_argument("--split-seed", type=int, default=0)
     ap.add_argument("--per-chip", type=int, default=16)
@@ -76,7 +81,7 @@ def main():
     store = ChipStore(args.store_dir)
     train_rows, val_rows = store.split(args.val_frac, seed=args.split_seed)
     model = load_encoder(args.encoder_ckpt, device)
-    enc_loc = get_satclip(device)
+    enc_loc = get_location_encoder(args.encoder, device, args.degree)
     X, S = collect_pairs(store, train_rows, model, enc_loc, device,
                          args.per_chip, args.max_chips)
     Xv, Sv = collect_pairs(store, val_rows, model, enc_loc, device,
@@ -122,6 +127,7 @@ def main():
     torch.save({"base": best_sd, "sdim": sdim, "hidden": args.hidden,
                 "layers": args.layers, "bottleneck": args.bottleneck,
                 "dropout": args.dropout,
+                "encoder": args.encoder, "degree": args.degree,
                 "val_mse": best, "val_r2": 1 - best / float(var_v),
                 "encoder_ckpt": str(args.encoder_ckpt)}, args.out)
     print(f"saved -> {args.out} (val_R2={1 - best / float(var_v):.3f})")

@@ -41,6 +41,14 @@ class Source:
         Returns (loss, metrics: dict[str, float tensor])."""
         raise NotImplementedError
 
+    def quality(self, out, x, valid):
+        """Scalar validation quality (higher is better, perfect = 1); drives
+        the R-D front and best-checkpoint selection. Default: per-pixel
+        channel cosine, correct for unit-norm fields only — sources with
+        other channel geometry must override (see dem.py)."""
+        from georvq.metrics import masked_recon_stats
+        return masked_recon_stats(out, x, valid)[1]
+
 
 def get_source(name: str, model_cfg) -> Source:
     """Look up a `Source` adapter by its config name.
@@ -50,8 +58,13 @@ def get_source(name: str, model_cfg) -> Source:
     breaking the import of every other one.
     """
     from georvq.sources.ae import AESource
+<<<<<<< Updated upstream
     from georvq.sources.tessera import TesseraSource
     SOURCES = {"ae": AESource, "tessera": TesseraSource}
+=======
+    from georvq.sources.dem import DEMSource
+    SOURCES = {"ae": AESource, "dem": DEMSource}
+>>>>>>> Stashed changes
     try:
         from georvq.sources.s2 import S2Source
         SOURCES["s2"] = S2Source

@@ -94,6 +94,7 @@ def validate(model, source, val_s, tuples, canon_names=(), val_loc=None,
             cd_n += zs[0].shape[0]
         n = int(cv.sum())
         for t in tuples:
+<<<<<<< Updated upstream
             o = model.eval_tuple(cums, t, cx, valid=cv)
             c = source.recon_stats(o, cx, cv)[1]["cos"]
             s = sums[tname(t)]; s[0] += float(c) * n; s[1] += n
@@ -101,6 +102,15 @@ def validate(model, source, val_s, tuples, canon_names=(), val_loc=None,
                 s[2] += float(centered_cos(o, cx, cv)) * n
         o = model.eval_ceiling(cx, valid=cv)
         c = source.recon_stats(o, cx, cv)[1]["cos"]
+=======
+            o = model.eval_tuple(cums, t, cx)
+            c = source.quality(o, cx, cv)
+            s = sums[tname(t)]; s[0] += float(c) * n; s[1] += n
+            if tname(t) in canon_names:
+                s[2] += float(centered_cos(o, cx, cv)) * n
+        o = model.eval_ceiling(cx)
+        c = source.quality(o, cx, cv)
+>>>>>>> Stashed changes
         ceil_sum[0] += float(c) * n; ceil_sum[1] += n
         ceil_sum[2] += float(centered_cos(o, cx, cv)) * n
     for t in tuples:

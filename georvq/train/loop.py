@@ -20,7 +20,7 @@ import torch
 
 from georvq.config import Config, VQConfig
 from georvq.data.pool import ChipPool, fixed_val_tokens
-from georvq.data.store import ChipStore
+from georvq.data.store import open_store
 from georvq.factory import build_model
 from georvq.model.codec import (monotone_tuples, path_tuples,
                                 sample_monotone_depths,
@@ -30,8 +30,12 @@ from georvq.model.vqinit import residual_init_rvq
 from georvq.repro import (run_metadata, save_checkpoint, seed_all,
                           write_resolved_config)
 from georvq.train.figures import (codebook_figure, cosdist_figure,
+<<<<<<< Updated upstream
                                    rd_figure, recon_figure,
                                    reset_figure)
+=======
+                                  error_hist_figure, rd_figure, recon_figure)
+>>>>>>> Stashed changes
 from georvq.train.validate import canonical_tuples, load_rd_ref, tname, validate
 from georvq.train import dist as D
 from georvq.train.warmstart import (decoder_tail_names, freeze_books,
@@ -59,6 +63,7 @@ def resolve_device(gpu):
 
 
 def setup_data(cfg: Config, source, device):
+<<<<<<< Updated upstream
     """Store, split, fixed val tokens, training pool.
 
     Under data parallelism the resident pool is split across ranks so the
@@ -80,6 +85,21 @@ def setup_data(cfg: Config, source, device):
             order[:cfg.data.limit_chips]].reset_index(drop=True)
         print(f"data: limit_chips -> training on {len(train_rows)} chips",
               flush=True)
+=======
+    """Store, split, fixed val tokens, training pool."""
+    store = open_store(cfg.data.store_dir)
+    train_rows, val_rows = store.split(cfg.data.val_frac,
+                                       seed=cfg.data.split_seed)
+    if cfg.data.val_frac == 0:
+        # closed-distribution mode (compress a fixed corpus): train on every
+        # chip and let "val" measure training-set fit
+        val_rows = train_rows
+        print(f"data: {len(store.index)} chips, closed distribution "
+              "(val tokens drawn from train chips)", flush=True)
+    else:
+        print(f"data: {len(store.index)} chips -> {len(train_rows)} train / "
+              f"{len(val_rows)} val", flush=True)
+>>>>>>> Stashed changes
     val_s = fixed_val_tokens(store, val_rows, token=cfg.model.window)
     if D.is_main():
         print(f"data: {val_s.shape[0]} fixed val tokens", flush=True)
@@ -470,6 +490,7 @@ def train(cfg: Config, gpu=0):
             loss = loss + rate_w * rate_bpp
         opt.zero_grad(set_to_none=True)
         loss.backward()
+<<<<<<< Updated upstream
         if ddp_world > 1:
             # average (not sum) so the LR keeps its single-GPU meaning
             D.average_grads(base_p + rate_p)
@@ -488,6 +509,11 @@ def train(cfg: Config, gpu=0):
                           f"({nonfinite_steps} so far)", flush=True)
                 sched.step()
                 continue
+=======
+        if cfg.train.clip_norm:
+            torch.nn.utils.clip_grad_norm_(model.parameters(),
+                                           cfg.train.clip_norm)
+>>>>>>> Stashed changes
         opt.step(); sched.step()
 
         rst = {}
@@ -618,6 +644,7 @@ def train(cfg: Config, gpu=0):
                 scalars["val/cos_ceiling"] = vs["cos_ceiling"]
                 scalars["val/ccos_ceiling"] = vs["ccos_ceiling"]
                 scalars["val/cos_blockmean"] = vs["cos_blockmean"]
+<<<<<<< Updated upstream
                 # Every figure below is a view of QUANTIZED behaviour --
                 # the R-D front, per-level codebook health, reconstructions
                 # at depth tuples. During the VQ-free warmup they would all
@@ -656,6 +683,38 @@ def train(cfg: Config, gpu=0):
                                           val_loc=val_loc)
                         wandb.log({"figs/recon": wandb.Image(f3)}, step=step)
                         plt.close(f3)
+=======
+                f1 = rd_figure(cbt, vs, specs, val_ts, step,
+                               ref_fronts=ref_fronts, px=cfg.model.window ** 2)
+                f1b = rd_figure(cbt, vs, specs, val_ts, step,
+                                ref_fronts=ref_fronts,
+                                px=cfg.model.window ** 2, dist_log=True)
+                f2 = codebook_figure(vs, specs, step)
+                scalars["figs/rd"] = wandb.Image(f1)
+                scalars["figs/rd_log"] = wandb.Image(f1b)
+                scalars["figs/codebook"] = wandb.Image(f2)
+                f4 = None
+                if "cosdist" in vs:
+                    f4 = cosdist_figure(vs["cosdist"], None, specs, step)
+                    scalars["figs/cosdist_by_level"] = wandb.Image(f4)
+                wandb.log(scalars, step=step)
+                plt.close(f1); plt.close(f1b); plt.close(f2)
+                if f4 is not None:
+                    plt.close(f4)
+                if step % cfg.train.fig_interval == 0 \
+                        or step == cfg.train.steps:
+                    rt = ([[int(x_) for x_ in t.split("-")]
+                           for t in cfg.eval.recon_tuples]
+                          if cfg.eval.recon_tuples else None)
+                    f3 = recon_figure(model, source, val_s, step, mins=mins,
+                                      tuples=rt, val_loc=val_loc)
+                    f5 = error_hist_figure(model, source, val_s, step,
+                                           tuples=rt, mins=mins,
+                                           val_loc=val_loc)
+                    wandb.log({"figs/recon": wandb.Image(f3),
+                               "figs/err_hist": wandb.Image(f5)}, step=step)
+                    plt.close(f3); plt.close(f5)
+>>>>>>> Stashed changes
 
             # Track the ceiling during warmup: cos_full would be the
             # model scored against unfitted books, so model_best.pt would
