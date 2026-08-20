@@ -130,20 +130,30 @@ code("""LADDER = [(20, 0, 0), (20, 20, 0), (20, 20, 1), (20, 20, 3), (20, 20, 6)
           (20, 20, 20)]
 LOSSLESS = 672.0        # b/px, measured by analysis/data_probe.py
 
+# Reported in the units the tessera-vq paper uses, so the two codecs are
+# directly comparable: relative L2 (median, as in its Table 2) and R^2,
+# both scale-free, plus the centred cosine this project tracks.
+def metrics(out, ref, vmask):
+    o, r = requantize(out), requantize(ref)          # -> source units
+    cc = float(centered_cos(out, ref, vmask))
+    e = (o - r).pow(2).sum(1).sqrt()
+    rel = (e / r.pow(2).sum(1).sqrt().clamp_min(1e-9))[vmask]
+    r2 = 1 - float((o - r).pow(2).sum() / (r - r.mean()).pow(2).sum())
+    return cc, float(rel.median()), r2
+
 recons, rows = {}, []
 for d in LADDER:
     out = decode_tile(R, packets, grid, depths=list(d), batch=32)
     recons[d] = out
-    cos = torch.nn.functional.cosine_similarity(
-        out, x[:, :, :out.shape[2], :out.shape[3]], dim=1).mean()
-    cc = centered_cos(out, x[:, :, :out.shape[2], :out.shape[3]],
-                      valid[:, :out.shape[2], :out.shape[3]])
-    rows.append((d, R.bpp(list(d)), float(cos), float(cc)))
+    h, w = out.shape[2], out.shape[3]
+    cc, rel, r2 = metrics(out, x[:, :, :h, :w], valid[:, :h, :w])
+    rows.append((d, R.bpp(list(d)), cc, rel, r2))
 
-print(f"{'tuple':>10} {'b/px':>8} {'vs lossless':>12} {'cos':>8} {'ccos':>8}")
-for d, bpp, cos, cc in rows:
+print(f"{'tuple':>10} {'b/px':>8} {'vs lossless':>12} {'ccos':>8} "
+      f"{'rel L2':>8} {'R^2':>8}")
+for d, bpp, cc, rel, r2 in rows:
     print(f"{'-'.join(map(str,d)):>10} {bpp:8.3f} {LOSSLESS/bpp:11.0f}x "
-          f"{cos:8.4f} {cc:8.4f}")""")
+          f"{cc:8.4f} {rel:8.4f} {r2:8.4f}")""")
 
 code("""show = [(20, 0, 0), (20, 20, 0), (20, 20, 1), (20, 20, 6)]
 fig, ax = plt.subplots(1, len(show) + 1, figsize=(4 * (len(show) + 1), 4.2))
@@ -199,19 +209,137 @@ vc = valid[:, :out_r.shape[2], :out_r.shape[3]]
 
 base_cc = float(centered_cos(recons[tuple(full)], xc, vc))
 ref_cc = float(centered_cos(out_r, xc, vc))
+_, base_l2, base_r2 = metrics(recons[tuple(full)], xc, vc)
+_, ref_l2, ref_r2 = metrics(out_r, xc, vc)
 # the model works on 64px windows, so the ceiling is measured there and
 # stitched back, giving a tile-shaped result comparable to the decodes
 xw, vw, gr = to_windows(x, valid, R.window)
 ceil = from_windows(R.model.eval_ceiling(xw, valid=vw), gr, R.window)
 ceil_cc = float(centered_cos(ceil[:, :, :xc.shape[2], :xc.shape[3]], xc, vc))
 
-print(f"{'':>22} {'b/px':>8} {'ccos':>8}")
-print(f"{'RVQ x20':>22} {R.bpp(full):8.3f} {base_cc:8.4f}")
-print(f"{'+ refinement':>22} {R.bpp(full, refine=True):8.3f} {ref_cc:8.4f}")
-print(f"{'un-quantized ceiling':>22} {'-':>8} {ceil_cc:8.4f}")
+print(f"{'':>22} {'b/px':>8} {'ccos':>8} {'rel L2':>8} {'R^2':>8}")
+print(f"{'RVQ x20':>22} {R.bpp(full):8.3f} {base_cc:8.4f} {base_l2:8.4f} {base_r2:8.4f}")
+print(f"{'+ refinement':>22} {R.bpp(full, refine=True):8.3f} {ref_cc:8.4f} {ref_l2:8.4f} {ref_r2:8.4f}")
+print(f"{'un-quantized ceiling':>22} {'-':>8} {ceil_cc:8.4f} {'-':>8} {'-':>8}")
 gap = (ref_cc - base_cc) / max(ceil_cc - base_cc, 1e-9)
 print(f"\\ngap to the ceiling closed: {gap:.0%} "
       f"for +{R.bpp(full, refine=True)-R.bpp(full):.2f} b/px")""")
+
+md("""## 7. Against tessera-vq
+
+[tessera-vq](https://github.com/sk818/tessera-vq) (Yang, Feng & Keshav,
+*Using Residual Vector Quantization to Compress Spatially Auto-correlated
+Geo-Foundation Models*) is the deployed point of comparison: per-tile
+two-stage RVQ, a stage-1 codebook of prototypes plus a stage-2 residual
+codebook, with two byte-aligned index planes.
+
+Run here **exactly as that paper specifies**, which is worth being
+careful about because the obvious shortcuts all get it wrong:
+
+* **Euclidean k-means on the embeddings, not cosine.** Their §3 measures
+  magnitude as carrying signal and cosine k-means as 3.4x worse, and
+  rejects it. Benchmarking against a cosine variant would be scoring
+  them on a configuration they explicitly discarded.
+* **gzip on the stage-1 plane, not RLE.** Their §5.1 finds a plain
+  raster scan beats Hilbert and Morton at this scale, and that gzip on
+  the map beats space-filling-curve + RLE by 2.1-2.6x. They discard RLE.
+* **The stage-2 plane does not compress** -- it is spatially white and
+  ships raw at 1 byte/pixel.
+* **Metrics are relative L2 and R-squared**, both scale-free (their
+  Table 2). We report ours the same way here.
+
+**Same patch, same pixels.** Their codebook cost amortizes as 1/p^2, so
+tile size is part of their rate and the comparison is only fair at a
+matched one. Both codecs here see the identical 512x512 region, which is
+their recommended p=512: tessera-vq fits one per-tile codebook over it,
+and this codec tiles it into 8x8 windows of 64 px and stitches them back.
+
+Their recommended configuration is p=512, k1=20, k2=256 at
+**1.38 bytes/pixel = 11.0 b/px**. Our full depth is 10.85 b/px, so this
+is close to a matched-rate comparison rather than two curves fitted at
+different budgets.""")
+
+code("""import gzip
+from tessera_vq.rvq_large import rvq_reconstruct_large
+
+# their space: dequantized embeddings, magnitude kept (L2 k-means)
+tile = requantize(x)[0, :, :CROP, :CROP].permute(1, 2, 0).numpy()
+flat = tile.reshape(-1, 128)
+
+def tvq(k1, k2, p=CROP):
+    r = rvq_reconstruct_large(tile, k1, k2, seed=0)
+    rec = np.asarray(r.recon).reshape(-1, 128)
+    err = np.linalg.norm(flat - rec, axis=1)
+    rel = float(np.median(err / np.maximum(np.linalg.norm(flat, axis=1), 1e-9)))
+    r2 = 1 - float(((flat - rec) ** 2).sum() / ((flat - flat.mean(0)) ** 2).sum())
+    idx1 = np.asarray(r.indices1).astype(np.uint8).tobytes()
+    bpp = (len(gzip.compress(idx1, 9)) / p ** 2      # stage-1, gzip (their 5.1)
+           + 1.0                                     # stage-2, raw byte plane
+           + (k1 + k2) * 128 / p ** 2) * 8           # both codebooks, int8
+    return bpp, rel, r2
+
+tv = [(f"k1={k1} k2={k2}", *tvq(k1, k2)) for k1, k2 in
+      [(20, 256), (32, 256), (128, 256)]]
+
+print(f"{'tessera-vq':>14} {'b/px':>8} {'rel L2':>8} {'R^2':>8}")
+for n, b, rel, r2 in tv:
+    star = "   <- recommended" if n.startswith("k1=20") else ""
+    print(f"{n:>14} {b:8.3f} {rel:8.4f} {r2:8.4f}{star}")
+print(f"\\n{'this codec':>14} {'b/px':>8} {'rel L2':>8} {'R^2':>8}")
+for d, bpp, cc, rel, r2 in rows:
+    print(f"{'-'.join(map(str, d)):>14} {bpp:8.3f} {rel:8.4f} {r2:8.4f}")""")
+
+md("""### Rate-distortion, on their metrics
+
+The paper reports R-squared ~0.79 and median relative L2 ~0.18 across a
+ten-tile sweep; a single tile will not land exactly there (its between-tile
+R-squared s.d. is ~0.09), so read the *shapes*, and read the matched-rate
+point rather than the endpoints.""")
+
+code("""fig, ax = plt.subplots(1, 2, figsize=(13, 4.8))
+ob = [r[1] for r in rows]
+
+for a, i, lab, inv in ((ax[0], 4, "R-squared", False),
+                       (ax[1], 3, "median relative L2", True)):
+    a.plot(ob, [r[i] for r in rows], "o-", lw=2, color="#0f6e78",
+           label="this codec")
+    a.plot([t[1] for t in tv], [t[3 if i == 4 else 2] for t in tv], "s--",
+           color="#93384a", label="tessera-vq")
+    a.scatter([tv[0][1]], [tv[0][3 if i == 4 else 2]], s=180, marker="*",
+              color="#8a5a12", zorder=5, label="their recommended point")
+    a.set(xscale="log", xlabel="rate (b/px)", ylabel=lab)
+    a.grid(alpha=0.3); a.legend(fontsize=9)
+    if inv:
+        a.invert_yaxis()
+ax[0].set_title("higher is better"); ax[1].set_title("lower is better")
+plt.tight_layout(); plt.show()""")
+
+md("""### At matched rate
+
+Their recommended 11.0 b/px against our 10.85 b/px full depth -- the two
+codecs at, for practical purposes, the same budget.""")
+
+code("""rec_bpp, rec_rel, rec_r2 = tv[0][1], tv[0][2], tv[0][3]
+ours = rows[-1]                                   # 20-20-20, full depth
+r_tv = rvq_reconstruct_large(tile, 20, 256, seed=0)
+XNORM = R.model.source.XNORM        # source units -> model space, for the
+tv_t = torch.from_numpy(np.asarray(r_tv.recon).astype(np.float32)
+                        ).permute(2, 0, 1)[None] / XNORM   # shared PCA basis
+
+print(f"{'':>14} {'b/px':>8} {'rel L2':>8} {'R^2':>8}")
+print(f"{'tessera-vq':>14} {rec_bpp:8.3f} {rec_rel:8.4f} {rec_r2:8.4f}")
+print(f"{'this codec':>14} {ours[1]:8.3f} {ours[3]:8.4f} {ours[4]:8.4f}")
+
+fig, ax = plt.subplots(1, 3, figsize=(15, 5.2))
+for a, t, ttl in (
+        (ax[0], x, "original"),
+        (ax[1], recons[ours[0]],
+         f"this codec  {ours[1]:.2f} b/px\\nR2 {ours[4]:.3f}  relL2 {ours[3]:.3f}"),
+        (ax[2], tv_t,
+         f"tessera-vq k1=20 k2=256  {rec_bpp:.2f} b/px\\n"
+         f"R2 {rec_r2:.3f}  relL2 {rec_rel:.3f}")):
+    a.imshow(to_rgb(t, BASIS)); a.axis("off"); a.set_title(ttl, fontsize=10)
+plt.tight_layout(); plt.show()""")
 
 md("""## 7. Back to source units
 
