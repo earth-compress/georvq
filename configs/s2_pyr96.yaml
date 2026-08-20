@@ -63,8 +63,22 @@ model:
   # which measured ~11 B/tile on the same 26-value layout; the basis
   # itself is refitted on OUR windows.
   stats_pca: artifacts/s2_stats_pca.npz
-  min_depths: [6, 1, 0]
-  full_frac: 0.005
+  # [4,0,0], not pyr64's [6,1,0]: with a tier-1 minimum of 1, the coarse
+  # tier is NEVER the sole source of a reconstruction, so nothing ever
+  # pressures it to be informative on its own -- it can sit redundant with
+  # tier 1 and the encoder pays nothing. Measured consequence at step
+  # 8000 with [6,1,0]: tier-0 latent varied by 0.0033 across windows
+  # against a norm squared of ~99, and its first RVQ level collapsed to
+  # one code of 64. Both currently-validated presets (DEM, released
+  # Tessera) use [4,0,0] with path sampling; only the oldest one does not.
+  min_depths: [4, 0, 0]
+  # Sample along the truncation path, not nested. Nested sampling makes
+  # deep fine-tier levels vanishingly rare in training, by a factor
+  # FINDINGS measures directly (see "Depth must be sampled along the
+  # truncation path"). The schema default is "nested", which is why this
+  # has to be stated explicitly.
+  depth_sampling: path
+  full_frac: 0.15
   ff_ratio: 2.0
   tokenizer: {dim: 256, depth: 9}
   decoder: {dim: 384, depth: 12, heads: 8, head_feat: 64, cls_bridge: true}
@@ -120,4 +134,8 @@ eval:
   # front FINDINGS describes -- saturate coarse, then mid, then add fine
   # levels one at a time, because cells dominate rate (one tier-2 level
   # costs 3,072 bits against tier-1's 144 and tier-0's 6).
-  recon_tuples: ["8-1-0", "8-8-0", "8-8-1", "8-8-2", "8-8-4", "8-8-8"]
+  # 4-0-0 and 8-0-0 are now TRAINED operating points, so the ladder can
+  # start where the coarse tier stands alone -- which is the rung that
+  # says whether it learned to do anything by itself.
+  recon_tuples: ["4-0-0", "8-0-0", "8-8-0", "8-8-1", "8-8-2", "8-8-4",
+                 "8-8-8"]
