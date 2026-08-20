@@ -115,9 +115,25 @@ Single-plane sources (one `(bands, px, px)` array per chip) are fully
 wired: streaming `ChipPool` (coverage + cycle modes), the training loop,
 validation, figures, eval and inference all work out of the box.
 
-Multi-group sources (dict batches, e.g. S2) have model-level support
-(stems/heads/normalizer/quantization all tested) and a RAM-resident
-`GroupChipLoader`; wiring dict batches through the streaming pool and the
-standard train loop/validation is the designated next step — see
-`tests/test_s2.py::test_s2_toy_training` for the working training pattern
-in the meantime.
+Multi-group sources (dict batches, e.g. S2) are wired through the same
+path. `ChipPool` holds one resident tensor per group, all indexed by the
+same slot, and `sample_batch` returns a `GroupBatch` — a dict of per-group
+crops sharing one crop origin. Residency (coverage/cycle), the shuffled
+full-dataset cursor and the background refresh are group-agnostic and are
+not duplicated; only allocation, the shard read and the gather divide by
+each group's ratio.
+
+Two rules the geometry imposes, both asserted rather than assumed:
+
+- **Crop origins snap to the coarsest ratio.** One origin serves every
+  group, so on S2 it must be a multiple of 6 or a 20m/60m crop would begin
+  part-way into its own pixel and the groups would decode out of phase.
+  Multi-group `sample_batch` is therefore always aligned.
+- **`slot_rows` must divide by that period**, so each group's row-strip is
+  a whole number of its own rows.
+
+A source's `prep`, head output and normalizer should return `GroupBatch`
+rather than a bare dict: the shared stack slices batches, reads
+`.shape[0]` and calls `.to()`/`.float()` on them, and `GroupBatch`
+implements exactly those. `GroupChipLoader` remains for RAM-resident
+working sets.

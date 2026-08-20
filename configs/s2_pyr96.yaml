@@ -1,0 +1,73 @@
+# Sentinel-2 L1C: 13 bands at three native resolutions, Major-TOM Core-S2L1C.
+#
+# UNVALIDATED. Unlike every other preset in this directory, this one does
+# not reproduce a run that happened -- no S2 model has been trained. The
+# geometry below is derived from the measurements in
+# docs/SOURCE_ONBOARDING.md (the S2 column of the five-source table), not
+# copied from the AE/Tessera presets, and the derivation is written out so
+# the first run can argue with it.
+#
+# Build the store first:
+#   python scripts/build_store_s2.py --scenes-root /data/Major-TOM/Core-S2L1C \
+#       --out-dir /data/s2-store --chip-px 1020
+
+data:
+  source: s2
+  store_dir: /data/s2-store
+  val_frac: 0.04
+  pool:
+    # slot_rows must divide by 6 so every group's strip is a whole number
+    # of its own rows (the 60m grid is the binding one).
+    size: 4096
+    workers: 6
+    slot_rows: 120
+    refresh_per_s: 60.0
+    device: cpu
+    cycle: true          # 1.2 TB store: sweep it, never resample a resident subset
+    align_crops: true
+
+model:
+  # W=96, not the habitual 64: the fine-token patch (window / finest grid)
+  # must divide by 6 for all three native grids to decode exactly, and 96
+  # is the smallest such window that keeps a 1/4/16 pyramid. It also makes
+  # the fine cell 6 px = one 60m pixel exactly. S2 autocorrelation only
+  # falls below 0.5 at 32 px, so a 96 px window is not over-large.
+  window: 96
+  bands: 13
+  # dims 32/64/64 and K 64/512/4096 are the SOURCE_ONBOARDING table's row
+  # for S2 (d95 of 3/3/3 says the latents are generously sized already).
+  tiers: ["1:32:64:8", "4:64:512:8", "16:64:4096:8"]
+  min_depths: [6, 1, 0]
+  full_frac: 0.005
+  ff_ratio: 2.0
+  tokenizer: {dim: 256, depth: 9}
+  decoder: {dim: 384, depth: 12, heads: 8, head_feat: 64, cls_bridge: true}
+  vq:
+    commit_weight: 0.25
+    dead_threshold: 0.000625
+    ema_decay: 0.99
+    bf16_scores: true
+    skip_masked: true
+    warmup_steps: 500     # VQ-free warmup, then residual k-means codebook init
+    warmup_truncate: true
+    kmeans_sample: 32768
+
+train:
+  steps: 200000
+  # 384, not 512, is what the sample-budget rule wants here: the coarse
+  # tier sees batch x 1 cell x ema_window / K = 384 x 1 x 100 / 64 = 600
+  # vectors per codeword, above the ~450 crossover. At 256 it would be
+  # 400 and the coarse book would fit worse than not fitting.
+  batch_windows: 384
+  amp: true
+  grad_ckpt: true
+  tf32: true
+  optim: {lr: 5.0e-5, wd: 0.01, warmup: 5000}
+  val_interval: 1000
+  fig_interval: 2000
+  save_interval: 2500
+
+log:
+  run_tag: s2_pyr96
+  wandb: true
+  wandb_project: georvq

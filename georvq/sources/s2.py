@@ -20,6 +20,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from georvq.data.pool import GroupBatch
 from georvq.sources import Source
 
 BANDS_10M = ["B02", "B03", "B04", "B08"]
@@ -70,7 +71,10 @@ class S2MultiResHead(nn.Module):
             self.heads[name] = _PatchHead(in_dim, bands, pr, grid, head_feat)
 
     def forward(self, fine):                          # (B, g*g, in_dim)
-        return {name: h(fine) for name, h in self.heads.items()}
+        # GroupBatch, not a bare dict: the trainer calls .float() on the
+        # decoder output and validation slices it, and those have to mean
+        # the same thing for a multi-resolution source as for a plane.
+        return GroupBatch({name: h(fine) for name, h in self.heads.items()})
 
 
 class _PatchHead(nn.Module):
@@ -105,7 +109,7 @@ class S2Normalizer:
         nothing here and return None from `normalizer`.
         """
         stats = {}
-        out = {}
+        out = GroupBatch()
         for name, t in x.items():
             mu = t.mean((2, 3), keepdim=True)
             sd = t.std((2, 3), keepdim=True).clamp_min(1e-4)
@@ -114,8 +118,8 @@ class S2Normalizer:
         return out, stats
 
     def denormalize(self, x: dict, stats):
-        return {name: t * stats[name][1] + stats[name][0]
-                for name, t in x.items()}
+        return GroupBatch({name: t * stats[name][1] + stats[name][0]
+                           for name, t in x.items()})
 
     @staticmethod
     def stats_vector(stats):
@@ -138,7 +142,7 @@ class S2Source(Source):
 
     def prep(self, raw: dict, device):
         """Raw uint16 group dict -> normalized float dict + 10m validity."""
-        x = {}
+        x = GroupBatch()
         for name, t in raw.items():
             x[name] = t.to(device, non_blocking=True).float() / MAX_VALUE
         valid = x["10m"].sum(1) > 0
@@ -183,7 +187,7 @@ class S2Source(Source):
         transmitted as a side channel -- scoring against it would be
         scoring against part of the bitstream.
         """
-        from georvq.sources.report import (Metric, ReportSpec,
+        from georvq.sources.report import (FIGURES, Metric, ReportSpec,
                                            band_rgb_preview)
         sam = Metric("sam", "spectral angle (rad)", _s2_sam,
                      higher_better=False, bounded=False)
@@ -191,8 +195,13 @@ class S2Source(Source):
                       higher_better=False, bounded=False)
         # R=B04, G=B03, B=B02 within the 10m group's band order; the
         # preview selects that group out of the model's dict output.
+        # no error_hist: it does tensor arithmetic on the whole batch to
+        # build one signed-error distribution, which has no single meaning
+        # across three native grids. A per-group version would be worth
+        # having; it is not this figure.
         return ReportSpec(
             quality=sam, extra=(rmse,), baselines=(),
+            figures=tuple(f for f in FIGURES if f != "error_hist"),
             preview=band_rgb_preview(2, 1, 0, select=_s2_10m))
 
 
