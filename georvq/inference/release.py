@@ -94,12 +94,24 @@ def save_release(out_dir, model, cfg, step=0, cdfs_path=None,
     so every bundle in the project has one writer and one layout.
     """
     os.makedirs(out_dir, exist_ok=True)
-    save_checkpoint(os.path.join(out_dir, "model.pt"), model, cfg, step)
+    ckpt = os.path.join(out_dir, "model.pt")
+    save_checkpoint(ckpt, model, cfg, step)
     if cdfs_path:
         import shutil
         shutil.copy(cdfs_path, os.path.join(out_dir, "cdfs.npz"))
     if stats_pca is not None:
         np.savez(os.path.join(out_dir, "stats_pca.npz"), **stats_pca)
+
+    if fp16:
+        # Halve BEFORE hashing. An id that does not describe the bytes
+        # being shipped is not an id: `georvq.ae.cog.openr` and the tile
+        # backends RECOMPUTE it from the weights they loaded and refuse a
+        # mismatch, so a stored id that disagrees with the shipped
+        # weights would be rejected by the very check it exists to serve.
+        halve_weights(ckpt)
+        from georvq.factory import from_checkpoint
+        model = from_checkpoint(ckpt, "cpu")
+
     bid = bitstream_id(model, stats_pca,
                        os.path.join(out_dir, "cdfs.npz") if cdfs_path else None,
                        extra=extra_id)
@@ -112,8 +124,6 @@ def save_release(out_dir, model, cfg, step=0, cdfs_path=None,
     payload.update(meta or {})
     with open(os.path.join(out_dir, "bundle.json"), "w") as f:
         json.dump(payload, f, indent=1)
-    if fp16:
-        halve_weights(os.path.join(out_dir, "model.pt"))
     _write_readme(out_dir, model)
     return bid
 

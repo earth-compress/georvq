@@ -74,3 +74,36 @@ def test_the_flag_is_off_by_default(tmp_path):
     from georvq.tessera.release import build_bundle
     assert inspect.signature(save_release).parameters["fp16"].default is False
     assert inspect.signature(build_bundle).parameters["fp16"].default is False
+
+
+def test_the_id_hashes_the_weights_that_actually_ship(tmp_path):
+    """An id that does not describe the shipped bytes is not an id.
+
+    The tile backends RECOMPUTE bitstream_id from the weights they
+    loaded and refuse a mismatch, so a stored id that disagrees with the
+    shipped weights is rejected by the very check it exists to serve.
+    Hashing before the fp16 cast produced exactly that: a bundle
+    claiming an id it could not reproduce.
+    """
+    import json
+
+    from georvq.factory import from_checkpoint
+    from georvq.inference.release import bitstream_id, save_release
+
+    cfg = load_config("configs/smoke.yaml", [
+        "model.tiers=['1:16:32:3','4:8:32:3']"])
+    ids = {}
+    for fp16 in (False, True):
+        out = os.path.join(tmp_path, f"fp16_{fp16}")
+        m = build_model(cfg, "cpu").eval()
+        save_release(out, m, cfg, step=0, fp16=fp16)
+        stored = json.load(open(os.path.join(out, "bundle.json")))["bitstream_id"]
+        recomputed = bitstream_id(from_checkpoint(os.path.join(out, "model.pt"),
+                                                  "cpu"))
+        assert stored == recomputed, (
+            f"fp16={fp16}: bundle.json says {stored} but the shipped "
+            f"weights hash to {recomputed}")
+        ids[fp16] = stored
+    # ...and the two variants are honestly distinguishable, because their
+    # codebooks really do hold different values
+    assert ids[False] != ids[True]
