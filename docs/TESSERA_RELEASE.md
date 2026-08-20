@@ -18,7 +18,8 @@ other worked example, and the two differ in instructive places.
 - Model: `tessera_vq8_k256_statscond`, step 52,000 (cumulative 71,000 --
   the run completed),
   window 64, tiers `1:512:256:20 / 4:512:256:20 / 16:256:256:20`.
-- Bundle: `/data/georvq-releases/tessera-beta-v1/bundle/` — `model.pt`,
+- Bundle: `/data/georvq-releases/tessera-beta-v1/bundle/` (**fp16 weights**,
+  235 MiB) — `model.pt`,
   `mean_channel.npz`, `refine_table.npz`, `bundle.json` (carries
   `bitstream_id` and `decoder_id`).
 - Status: **beta.** Cut from the completed run. The last 20,000 steps
@@ -32,11 +33,11 @@ other worked example, and the two differ in instructive places.
 Weights are not in git.
 
 - *On the group server*: `/data/georvq-releases/tessera-beta-v1/bundle`.
-- *Elsewhere*: copy `tessera-beta-v1.tar.gz` (425 MB) and **verify it
+- *Elsewhere*: copy `tessera-beta-v1.tar.gz` (216 MB) and **verify it
   before loading**.
 
 ```bash
-sha256sum -c <<< "090b9d628c0d9b5520810d8f5eb62718a5caf310373e70def43241d73b523dc6  tessera-beta-v1.tar.gz"
+sha256sum -c <<< "ca776bbe0d679640d20193ded63863e9db7aa385cd5473fa61c2acc3ce38edb9  tessera-beta-v1.tar.gz"
 tar xzf tessera-beta-v1.tar.gz
 pip install -e .                  # decoding needs no extras at all
 ```
@@ -58,14 +59,20 @@ the way you would treat an unverified script.
 
 ## Weight precision
 
-The reference bundle stores fp32 weights -- exactly what was trained and
-validated. `scripts/build_release_tessera.py --fp16` produces an
-otherwise identical bundle at **half the size**:
+**What ships is the fp16 build**, `bitstream_id d5051eb0ac4f61a8`. The
+fp32 reference -- exactly what was trained and validated, id
+`3db03c9b246d9c94` -- stays on the group server at
+`tessera-beta-v1/bundle-fp32/` for anyone who wants to reproduce the
+validation numbers.
 
-| | model.pt |
-|---|---:|
-| fp32 (default) | 469 MiB |
-| `--fp16` | 235 MiB |
+| | model.pt | tarball |
+|---|---:|---:|
+| fp32 reference | 469 MiB | -- |
+| **fp16, shipped** | **235 MiB** | **216 MB** |
+
+The builder defaults to fp32 (`--fp16` opts in), so the reference
+artifact is always what was validated and the smaller one is a
+deliberate act.
 
 It costs nothing to decode. Rounding all 116M parameters to fp16 moved
 full-depth cosine by **-8.8e-07** and centred cosine by -8.0e-07 over
