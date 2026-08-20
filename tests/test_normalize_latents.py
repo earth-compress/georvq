@@ -1,4 +1,4 @@
-"""`model.normalize_latents`: stage-2 must quantize the same geometry
+"""`model.norm_latents`: stage-2 must quantize the same geometry
 stage-1 trained on.
 
 The bug this guards against was silent. A stage-2 run warm-started from a
@@ -18,12 +18,12 @@ from georvq.factory import build_model
 def _cfg(on):
     return load_config("configs/smoke.yaml", [
         "model.tiers=['1:16:32:3','4:8:32:3']",
-        f"model.normalize_latents={'true' if on else 'false'}"])
+        f"model.norm_latents={'true' if on else 'false'}"])
 
 
 def test_default_is_off_so_existing_checkpoints_are_unaffected():
     cfg = load_config("configs/smoke.yaml", [])
-    assert cfg.model.normalize_latents is False
+    assert cfg.model.norm_latents is False
 
 
 def test_normalized_latents_have_sqrt_dim_norm():
