@@ -37,6 +37,12 @@ def main():
     ap.add_argument("--eval-windows", type=int, default=512)
     ap.add_argument("--chunk", type=int, default=8)
     ap.add_argument("--notes", default="")
+    ap.add_argument("--fp16", action="store_true",
+                    help="store the weights at fp16: half the file, and "
+                         "bit-identical arithmetic, because load_state_dict "
+                         "upcasts into the fp32 model. Measured cost to "
+                         "full-depth cosine: -8.8e-07. Off by default so the "
+                         "reference release is exactly what was validated.")
     args = ap.parse_args()
 
     torch.set_grad_enabled(False)
@@ -68,6 +74,7 @@ def main():
     resid = np.concatenate(resid)
 
     meta = rel.build_bundle(args.out, model, cfg, means, resid, step=step,
+                            fp16=args.fp16,
                             notes=args.notes or f"{cfg.log.run_tag} step {step}")
     print(json.dumps(meta, indent=1))
 

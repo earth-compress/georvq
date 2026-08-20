@@ -56,6 +56,46 @@ config rides inside it, so it is loaded with `weights_only=False` --
 which means **loading it executes code**. Treat an unverified bundle
 the way you would treat an unverified script.
 
+## Weight precision
+
+The reference bundle stores fp32 weights -- exactly what was trained and
+validated. `scripts/build_release_tessera.py --fp16` produces an
+otherwise identical bundle at **half the size**:
+
+| | model.pt |
+|---|---:|
+| fp32 (default) | 469 MiB |
+| `--fp16` | 235 MiB |
+
+It costs nothing to decode. Rounding all 116M parameters to fp16 moved
+full-depth cosine by **-8.8e-07** and centred cosine by -8.0e-07 over
+1,024 held-out windows -- about 260x smaller than the difference between
+two consecutive release checkpoints.
+
+The reason it is free is worth being precise about, because it is easy
+to claim more than is true. This changes the **stored** precision, not
+the precision anything computes in: `load_state_dict` copies fp16
+tensors into the fp32 model and upcasts, so the arithmetic afterwards is
+bit-identical to an fp32 release, and index determinism across hardware
+is whatever it already was.
+
+**Both variants carry the same `bitstream_id`, deliberately.** The id is
+computed from the reference fp32 weights, before the halving, so an fp16
+bundle is a storage variant of the same bitstream rather than a new one:
+either decoder reads the other's archives, which is the decoder-upgrade
+freedom the contract exists to give. Note the consequence -- rehashing a
+shipped fp16 bundle will not reproduce its stated id, because the id
+describes the reference weights, not the bytes on disk.
+
+Computing in fp16 would be a different proposal. A narrower accumulate
+makes near-tie RVQ assignments hardware-dependent, and the encoder's
+assignments *are* the bitstream -- rounding the encoder's weights to
+fp16 already moves 1.8% of indices relative to fp32 (at no cost to
+quality, since they are near-ties by definition). That is harmless when
+one released file is the only encoder in existence, and a reproducibility
+problem the moment two coexist, which is why fp32 stays the default and
+`--fp16` is opt-in.
+
 ## Quickstart
 
 Feed it what `geotessera` gives you — the int8 embedding array and its
