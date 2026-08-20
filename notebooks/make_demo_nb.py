@@ -34,7 +34,8 @@ access, per-tile error metadata, and exact nodata + geo round-trip.
 
 This notebook: original → PCA visualization → encode → look at the
 codes → progressive decode → a client/server demo with rate-control and
-quality-control fetches.""")
+quality-control fetches → the two decoders (plain vs deblock) and their
+separate quality layers.""")
 
 code("""import json, os, subprocess, sys, time
 import numpy as np
@@ -281,6 +282,96 @@ plt.figure(figsize=(6, 6)); plt.imshow(pca_rgb(rec))
 plt.title(f"{point} (p90<=0.02) — {WIRE['bytes']/2**10:.0f} KiB on the wire")
 plt.axis("off");""")
 
+md("""## 6. Two decoders, one bitstream
+
+Windows decode independently, so the base decoder leaves faint seams at
+every 64 px boundary. The release ships a second decoder — **`deblock`**
+(`georvq-ae-tile decode --decoder deblock`) — that removes them: a
+2 M-param conditioned UNet applied by a **canonical recipe**: 512 px
+frames anchored at the tile origin, each deblocked with a one-window
+(64 px) halo, hard-cropped back. The recipe constants are hashed into
+the decoder's `decoder_id`, so a deblocked pixel is a pure function of
+the code indices within 64 px of its frame — every client, scheduler
+and viewport decode produces the same field.
+
+Our viewport happens to be 2×2 canonical frames. We fetch **one extra
+window ring** (the locality contract's support) and deblock each frame
+exactly as the CLI would — this is all a ranged-read client needs.""")
+
+code("""from georvq.ae.deblock import RECIPE
+be.load_deblock()
+print(f"deblock decoder {be.deblock_decoder_id}  recipe {RECIPE}")
+
+PT = (8, 8, 0)                               # browse rate: seams visible
+plain = read_region(ASSETS, wr0, wc0, 16, PT)
+sup = read_region(ASSETS, wr0 - 1, wc0 - 1, 18, PT)  # +1-window halo ring
+FR, HA = RECIPE["frame"], RECIPE["halo"]
+deblocked = np.empty_like(plain)
+for r0 in range(0, 1024, FR):                # crop is frame-aligned here
+    for c0 in range(0, 1024, FR):
+        y = be.deblock_frame(sup[:, r0:r0 + FR + 2*HA, c0:c0 + FR + 2*HA],
+                             PT)
+        deblocked[:, r0:r0 + FR, c0:c0 + FR] = y[:, HA:HA + FR,
+                                                 HA:HA + FR]
+
+def win_seam_adj(x):
+    \"\"\"Mean adjacency dcos across 64 px window boundaries.\"\"\"
+    win = (np.arange(1, x.shape[-1]) % 64) == 0
+    dh = 1 - (x[:, :, :-1] * x[:, :, 1:]).sum(0)
+    dv = 1 - (x[:, :-1, :] * x[:, 1:, :]).sum(0)
+    return float((dh[:, win].mean() + dv[win, :].mean()) / 2)
+
+Z = np.s_[:, 256:640, 256:640]               # 384px zoom
+fig, ax = plt.subplots(1, 3, figsize=(16.5, 5.8))
+for a, img, name in ((ax[0], x0, "original"), (ax[1], plain, "plain"),
+                     (ax[2], deblocked, "deblock")):
+    a.imshow(pca_rgb(img[Z])); a.axis("off")
+    if name == "original":
+        a.set_title("original (zoom)")
+    else:
+        d = float(1 - (img * x0).sum(0)[valid0].mean())
+        a.set_title(f"{name} @ {'-'.join(map(str, PT))} — dcos {d:.2e}, "
+                    f"seam adj {win_seam_adj(img):.1e}")""")
+
+md("""### Each decoder carries its own quality layer
+
+Decoder variants publish *separately measured* error metadata under
+their `decoder_id` — same blobs, different `quality/<decoder_id>.tif` +
+stats namespace, all minted server-side with the identical canonical
+routine. Pre-existing tiles upgrade in place (no index byte changes):
+
+```bash
+georvq-ae-tile restat --model <bundle> --device cuda <tile_dir> <source.tiff>
+```
+
+The payoff of anchoring the second quality layer: the **same quality
+bound resolves to a cheaper ladder point** under the better decoder —
+`--quality` + `--decoder deblock` composes into real rate savings.""")
+
+code("""meta = json.load(open(f"{ASSETS}/metadata.json"))
+# bound = the best the plain decoder can do on THIS tile (its measured
+# full-ladder mean) — plain resolves it at full rate by construction;
+# the question is what the deblock decoder pays for the same bound
+full = max(meta["quality_stats"], key=lambda k: meta["quality_stats"][k]["bits"])
+BOUND = ("mean", meta["quality_stats"][full]["mean"])
+
+def resolve(stats):
+    ok = [(v["bits"], k) for k, v in stats.items()
+          if v[BOUND[0]] <= BOUND[1]]
+    return min(ok) if ok else (None, "unreachable")
+
+bits_p, pt_p = resolve(meta["quality_stats"])
+print(f"{BOUND[0]} <= {BOUND[1]:.3e} (plain's measured best):")
+print(f"  plain    -> {pt_p:8s} {bits_p:8.0f} bits/window")
+if meta.get("decoders"):
+    for did, e in meta["decoders"].items():
+        bits_d, pt_d = resolve(e["quality_stats"])
+        print(f"  {e['name']:8s} -> {pt_d:8s} {bits_d:8.0f} bits/window "
+              f"({bits_p / bits_d:.1f}x fewer bits, decoder {did})")
+else:
+    print("  (no variant-decoder stats on this tile yet — mint them "
+          "with the restat command above)")""")
+
 md("""## Wrap-up
 
 - **~40× smaller** than the already-compressed source (2,250 → 58 MiB)
@@ -291,6 +382,9 @@ md("""## Wrap-up
   box; windowed region access costs KiB, not GiB.
 - **Self-measuring**: every tile carries its true error statistics per
   rate point — quality-controlled delivery instead of hope.
+- **Two decoders, one archive**: the deblock decoder removes window
+  seams under a canonical, hashed recipe (mean error −40% at full
+  rate) — same blobs, separately measured quality layers.
 
 Codec: `georvq` (frozen release `ae_pyr64_divfull`, bitstream
 `2f7c3527…`). Encoder/decoder run via PyTorch (GPU/CPU) or ONNX

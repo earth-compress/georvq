@@ -204,8 +204,11 @@ reproduces a result.
 
 - **New dataset** → builder + `Source` adapter + preset:
   `docs/ADDING_A_SOURCE.md`.
-- **Better decoder / post-decode enhancement (e.g. seam deblocker)** →
-  free under the bitstream contract: `docs/BITSTREAM.md`.
+- **Better decoder / post-decode enhancement** → free under the
+  bitstream contract (`docs/BITSTREAM.md`); the AE deblock decoder
+  (`georvq/ae/deblock.py`, shipped) is the worked example — note its
+  canonical-recipe pattern: post-processors whose output depends on
+  tiling must freeze the tiling into the decoder identity.
 - **Context-adaptive entropy coding** → the achievable rate is already
   measured (`model.entropy_level_bits`; order-0 coding was measured
   ~0.6% on AE and dropped — the win requires the context model); a coder

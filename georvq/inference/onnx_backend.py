@@ -36,6 +36,58 @@ META_NAME = "meta.json"
 CODEBOOKS_NAME = "codebooks.npz"
 ENCODER_NAME = "encoder.onnx"
 DECODER_NAME = "decoder.onnx"
+DEBLOCK_NAME = "deblock.onnx"
+
+
+def export_deblock_onnx(net, out_dir, entry, deblock_decoder_id,
+                        opset=17):
+    """Export a deblock post-processor (georvq.ae.deblock.AEDeblocker or
+    compatible) as deblock.onnx with dynamic batch/height/width, and
+    record its recipe + identity in the export dir's meta.json.
+
+    The seam mask is a graph INPUT (B,1,H,W) rather than computed
+    in-graph: it is two lines of numpy for the client and keeps the
+    graph free of shape-dependent index arithmetic. Height/width are
+    exported as 4*Dim (the down/up path needs divisibility by 4; every
+    window-aligned frame satisfies it). Returns the meta fragment."""
+    import torch
+
+    net = net.float().eval()
+
+    class _Deb(torch.nn.Module):
+        def __init__(self, n):
+            super().__init__()
+            self.n = n
+
+        def forward(self, x, mask, Ls):
+            return self.n(x, Ls, mask=mask)
+
+    B, C = 2, net.bands
+    x = torch.randn(B, C, 320, 384)          # H != W: keep dims distinct
+    from georvq.ae.deblock import boundary_mask
+    mask = boundary_mask(320, 384, net.win, x.device) \
+        .expand(B, -1, -1, -1).contiguous()
+    Ls = torch.tensor([[8, 8, 8]] * B, dtype=torch.long)
+    b = torch.export.Dim("batch", min=1)
+    h4 = torch.export.Dim("h4", min=16)
+    w4 = torch.export.Dim("w4", min=16)
+    sp = {0: b, 2: 4 * h4, 3: 4 * w4}
+    torch.onnx.export(
+        _Deb(net).eval(), (x, mask, Ls),
+        os.path.join(out_dir, DEBLOCK_NAME),
+        input_names=["x", "mask", "Ls"], output_names=["deblocked"],
+        dynamic_shapes=(sp, sp, {0: b}), opset_version=opset)
+
+    frag = {"recipe": entry["recipe"],
+            "trained_against": entry["trained_against"],
+            "decoder_id": deblock_decoder_id, "win": net.win}
+    mpath = os.path.join(out_dir, META_NAME)
+    with open(mpath) as f:
+        meta = json.load(f)
+    meta["deblock"] = frag
+    with open(mpath, "w") as f:
+        json.dump(meta, f, indent=1)
+    return frag
 
 
 # --------------------------------------------------------------------------
