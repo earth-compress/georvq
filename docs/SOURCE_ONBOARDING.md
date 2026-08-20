@@ -8,7 +8,7 @@ habit:
 > blocks, with these tricks."*
 
 Every measurement below exists to constrain one of those. Anything that
-does not is diagnostics, not design, and belongs in `ANALYSIS_SUITE.md`.
+does not is diagnostics, not design, and belongs in `analysis/README.md`.
 
 Status key: **[have]** committed and used, **[partial]** exists but
 source-specific or incomplete, **[missing]** not built.

@@ -64,11 +64,6 @@ class TokenizerConfig(StrictModel):
     # layer). High-frequency content is local: a few joint layers suffice
     # and the coarse-only prefix runs at a fraction of the sequence length
     late_join: int = 0
-    # with suffix_dim set, the finest tier becomes a NARROW stream: base
-    # tiers run the full self-attention stack alone (cheap — few tokens),
-    # and the finest tier runs `late_join` cross+local layers at this
-    # width over [projected base | fine] keys. None = shared-width trunk.
-    suffix_dim: Optional[int] = None
 
 
 class DecoderConfig(StrictModel):
@@ -78,7 +73,6 @@ class DecoderConfig(StrictModel):
     head_feat: int = 64
     cls_bridge: bool = True
     late_join: int = 0             # same contract as tokenizer.late_join
-    suffix_dim: Optional[int] = None
     head_dw: bool = False          # depthwise-separable head convs (8x fewer
                                    # MACs; smooths intra-window tile seams)
 
@@ -112,31 +106,6 @@ class VQConfig(StrictModel):
     # leaves the codec usable continuously. Costs a little capacity that
     # would otherwise go to the quantized path.
     passthrough_frac: float = 0.0
-    gain_shape: bool = False       # unit-sphere shape book + scalar gain
-    gain_bits: int = 5             # log-domain gain levels (gain_shape only)
-    # Periodic offline refit phases (georvq/train/refit.py). Every
-    # `refit_interval` steps, training pauses, ~`refit_per_code` latent
-    # vectors PER CODEWORD are gathered from the encoder, and every tier
-    # is refitted level by level in cascade order. 0 = off. Intended with
-    # freeze_books, so the books are static except in these phases.
-    refit_interval: int = 0
-    # Fire one step AFTER a validation so a validation never scores a book
-    # that was replaced moments earlier.
-    refit_offset: int = 1
-    refit_per_code: int = 100
-    refit_lloyd_iters: int = 3
-    # underused := count < this fraction of the mean count
-    refit_dead_frac: float = 0.02
-    # recycle at least this fraction of K per phase even if nothing is
-    # underused, so high-distortion splitting keeps happening
-    refit_recycle_frac: float = 0.05
-    # Encoder drift probe: push a FIXED batch through the encoder every
-    # N steps and compare with the previous reading, giving the encoder's
-    # velocity through latent space. 0 = off. Cheap (encoder-only, no
-    # decode/backward) and it is what turns the EMA decay from a
-    # hyperparameter into something derivable -- see georvq/train/drift.py
-    drift_interval: int = 0
-    drift_windows: int = 256          # windows in the fixed probe batch
     # How a dead code is revived. "random" reseeds from a random encoder
     # output (the historical behaviour); "split" sends it into the live
     # cell with the largest distortion contribution, at that cell's
@@ -471,6 +440,53 @@ class LogConfig(StrictModel):
     wandb: bool = True
     wandb_project: str = "georvq"
     out_dir: Path = Path("checkpoints")
+
+
+#: Fields removed from the schema, as "section.field" paths. A checkpoint
+#: embeds the config it was trained with, so retiring a knob would
+#: otherwise make every checkpoint that carried it unloadable under
+#: `extra="forbid"` -- including released weights. `drop_retired` strips
+#: them when rebuilding a config FROM A CHECKPOINT; YAML presets still
+#: hard-fail on unknown keys, because there a stray key is a typo, not
+#: history.
+RETIRED_FIELDS = (
+    "model.vq.gain_shape", "model.vq.gain_bits",           # negative result
+    "model.vq.refit_interval", "model.vq.refit_offset",    # superseded by
+    "model.vq.refit_per_code", "model.vq.refit_lloyd_iters",  # fit-once
+    "model.vq.refit_dead_frac", "model.vq.refit_recycle_frac",
+    "model.vq.drift_interval", "model.vq.drift_windows",   # served its purpose
+    "model.tokenizer.suffix_dim", "model.decoder.suffix_dim",
+)
+
+
+def drop_retired(raw: dict) -> dict:
+    """Remove retired fields from a raw config dict, in place-safe fashion.
+
+    Returns the same mapping when nothing was dropped, so the common path
+    allocates nothing.
+    """
+    import copy
+    hit = []
+    for path in RETIRED_FIELDS:
+        node, *rest = path.split(".")
+        cur = raw
+        keys = [node] + rest
+        for k in keys[:-1]:
+            cur = cur.get(k) if isinstance(cur, dict) else None
+            if cur is None:
+                break
+        if isinstance(cur, dict) and keys[-1] in cur:
+            hit.append(path)
+    if not hit:
+        return raw
+    raw = copy.deepcopy(raw)
+    for path in hit:
+        keys = path.split(".")
+        cur = raw
+        for k in keys[:-1]:
+            cur = cur[k]
+        cur.pop(keys[-1], None)
+    return raw
 
 
 class Config(StrictModel):

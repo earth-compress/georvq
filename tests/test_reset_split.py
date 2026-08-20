@@ -136,12 +136,12 @@ def test_end_to_end_through_the_model():
 
 
 def test_split_is_live_on_every_quantizer_path():
-    """QuantizedBookVQ and GainShapeVQ each override forward() with their
-    own copy of the EMA block. If a copy omits the SSE tracker, reset_mode
-    reports "split" and silently behaves as "random" -- no error anywhere.
+    """QuantizedBookVQ overrides forward() with its own copy of the EMA
+    block. If a copy omits the SSE tracker, reset_mode reports "split"
+    and silently behaves as "random" -- no error anywhere. Any future
+    quantizer variant belongs in this list.
     """
-    import pytest
-    for extra in ("book_bits: 8", "gain_shape: true, gain_bits: 4"):
+    for extra in ("book_bits: 8",):
         cfg = load_config("configs/smoke.yaml", [
             "model.tiers=['1:16:32:3','4:8:32:3']",
             f"model.vq={{warmup_steps: 0, reset_mode: split, {extra}}}"])

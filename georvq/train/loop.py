@@ -30,12 +30,10 @@ from georvq.model.vqinit import residual_init_rvq
 from georvq.repro import (run_metadata, save_checkpoint, seed_all,
                           write_resolved_config)
 from georvq.train.figures import (codebook_figure, cosdist_figure,
-                                   rd_figure, recon_figure, refit_figure,
+                                   rd_figure, recon_figure,
                                    reset_figure)
 from georvq.train.validate import canonical_tuples, load_rd_ref, tname, validate
 from georvq.train import dist as D
-from georvq.train.drift import DriftProbe
-from georvq.train.refit import collect_latents, refit_phase
 from georvq.train.warmstart import (decoder_tail_names, freeze_books,
                                     load_partial, set_encoder_frozen,
                                     set_params_frozen, trainable_params)
@@ -292,22 +290,6 @@ def train(cfg: Config, gpu=0):
         wandb.init(project=cfg.log.wandb_project, name=cfg.log.run_tag,
                    config=cfg.model_dump(mode="json") | run_metadata(cfg))
 
-    probe = None
-    if v.drift_interval:
-        # a FIXED batch, drawn once: drift must be measured on the same
-        # windows every time or it is confounded with sampling noise
-        # NB: `batch` / `align` are bound below, so read the config here
-        px = pool.sample_batch(
-            min(v.drift_windows, cfg.train.batch_windows), cfg.model.window,
-            align=cfg.data.pool.align_crops)
-        probe_x, _ = source.prep(px, device)
-        probe = DriftProbe(
-            probe_x, v.drift_interval,
-            tier_codes=[sp.codes for sp in specs],
-            vecs_per_step=[(cfg.train.batch_windows // max(ddp_world, 1))
-                           * sp.cells for sp in specs])
-        print(f"drift probe: {probe_x.shape[0]} fixed windows every "
-              f"{v.drift_interval} steps", flush=True)
 
     select_weight = (cfg.model.conditioning.weight
                      if cfg.model.conditioning is not None
@@ -336,40 +318,6 @@ def train(cfg: Config, gpu=0):
             enc_frozen = False
             print(f"step {step}: unfroze encoder (co-adaptation begins)",
                   flush=True)
-        # ---- periodic offline refit phase ----------------------------
-        # Fires one step AFTER a validation, so a validation never scores
-        # a book that was replaced moments earlier.
-        if v.refit_interval and step % v.refit_interval == v.refit_offset:
-            t_rf = time.time()
-            model.eval()
-            zs_fit, n_b = collect_latents(model, source, pool, cfg, device,
-                                          per_code=v.refit_per_code)
-            model.train()
-            if v.freeze_books:
-                freeze_books(model)
-            rst = refit_phase(model, zs_fit, cfg,
-                              lloyd_iters=v.refit_lloyd_iters,
-                              dead_frac=v.refit_dead_frac,
-                              recycle_frac=v.refit_recycle_frac)
-            n_rec = sum(val for k, val in rst.items()
-                        if k.endswith("_n_recycled"))
-            dt_rf = time.time() - t_rf
-            if D.is_main():
-                print(f"step {step}: REFIT on {n_b} batches "
-                      f"({sum(z.shape[0] for z in zs_fit):,} vectors), "
-                      f"{n_rec:.0f} codes recycled, {dt_rf:.0f}s",
-                      flush=True)
-            if use_wandb:
-                ff = refit_figure(rst, specs, step)
-                wandb.log({"figs/refit": wandb.Image(ff),
-                           "refit/total_recycled": n_rec,
-                           "refit/seconds": dt_rf,
-                           "refit/vectors": sum(z.shape[0] for z in zs_fit)},
-                          step=step)
-                plt.close(ff)
-            del zs_fit
-            torch.cuda.empty_cache()
-            t0 = time.time()          # don't bill the refit to tokens/s
 
         if head_names and step > cfg.train.freeze_head_steps:
             set_params_frozen(model, head_names, False)
@@ -542,54 +490,40 @@ def train(cfg: Config, gpu=0):
                 continue
         opt.step(); sched.step()
 
-        if probe is not None:
-            dstat = probe(model, step)
-            if dstat and use_wandb:
-                wandb.log(dstat, step=step)
-            if dstat and step % (v.drift_interval * 10) == 0 and D.is_main():
-                k0 = "drift/pyr0_per_step_over_sigma"
-                w0 = "drift/pyr0_optimal_ema_decay"
-                if k0 in dstat:
-                    print(f"step {step}: drift {dstat[k0]:.2e} sigma/step "
-                          f"(tier0), optimal ema_decay "
-                          f"{dstat.get(w0, float('nan')):.5f}", flush=True)
-
-        # reset diagnostics: emitted only on steps where a reset fired
-        if D.is_main() and not v.freeze_books:
-            rst = {}
-            for i, rvq in enumerate(model.rvqs):
-                for j, lev in enumerate(rvq.levels):
-                    st = getattr(lev, "last_reset", None)
-                    if st is None:
-                        continue
-                    lev.last_reset = None
-                    for k, val in st.items():
-                        if k != "step":
-                            rst[f"reset/pyr{i}_L{j+1}_{k}"] = val
-            if rst:
-                n_tot = sum(val for k, val in rst.items()
-                            if k.endswith("_n_reset"))
-                if use_wandb:
-                    # per-level detail as ONE figure, not 168 scalar
-                    # panels; only the aggregates stay as scalars so they
-                    # are still plottable over time
-                    fr = reset_figure(rst, specs, step)
-                    agg = {"reset/total_codes_reset": n_tot,
-                           "reset/mean_resid_gain": float(np.nanmean(
-                               [v for k, v in rst.items()
-                                if k.endswith("_resid_gain")])),
-                           "reset/mean_perp_gain": float(np.nanmean(
-                               [v for k, v in rst.items()
-                                if k.endswith("_perp_gain")])),
-                           "figs/reset": wandb.Image(fr)}
-                    wandb.log(agg, step=step)
-                    plt.close(fr)
-                worst = max((val, k) for k, val in rst.items()
-                            if k.endswith("_n_reset"))
-                print(f"step {step}: reset {n_tot:.0f} codes "
-                      f"({v.reset_mode}); most in "
-                      f"{worst[1].split('/')[1].rsplit('_', 2)[0]} "
-                      f"({worst[0]:.0f})", flush=True)
+        rst = {}
+        for i, rvq in enumerate(model.rvqs):
+            for j, lev in enumerate(rvq.levels):
+                st = getattr(lev, "last_reset", None)
+                if st is None:
+                    continue
+                lev.last_reset = None
+                for k, val in st.items():
+                    if k != "step":
+                        rst[f"reset/pyr{i}_L{j+1}_{k}"] = val
+        if rst:
+            n_tot = sum(val for k, val in rst.items()
+                        if k.endswith("_n_reset"))
+            if use_wandb:
+                # per-level detail as ONE figure, not 168 scalar
+                # panels; only the aggregates stay as scalars so they
+                # are still plottable over time
+                fr = reset_figure(rst, specs, step)
+                agg = {"reset/total_codes_reset": n_tot,
+                       "reset/mean_resid_gain": float(np.nanmean(
+                           [v for k, v in rst.items()
+                            if k.endswith("_resid_gain")])),
+                       "reset/mean_perp_gain": float(np.nanmean(
+                           [v for k, v in rst.items()
+                            if k.endswith("_perp_gain")])),
+                       "figs/reset": wandb.Image(fr)}
+                wandb.log(agg, step=step)
+                plt.close(fr)
+            worst = max((val, k) for k, val in rst.items()
+                        if k.endswith("_n_reset"))
+            print(f"step {step}: reset {n_tot:.0f} codes "
+                  f"({v.reset_mode}); most in "
+                  f"{worst[1].split('/')[1].rsplit('_', 2)[0]} "
+                  f"({worst[0]:.0f})", flush=True)
 
         if step % 50 == 0 and D.is_main():
             dt = time.time() - t0; t0 = time.time()

@@ -324,7 +324,6 @@ worked example.
 | file | what it is |
 |---|---|
 | `train_pyramid.py`, `train_stage1.py` | Entry-point bodies for the two trainers. |
-| `train_lite_decoder.py` | Lightweight decoder variants on the frozen bitstream (parked — see `docs/PARKED.md`). |
 | `build_store_ae.py` / `build_store_s2.py` | Store builders: equal-area sphere sampling of AEF blocks; S2 equivalent. |
 | `build_archive.py`, `bench_decode.py` | rANS archive builder + decode benchmarks (research). |
 | `baseline_classical.py` | PCA+J2K / HEVC baselines at matched granularity. |
@@ -345,5 +344,4 @@ worked example.
 | `docs/BITSTREAM.md` | Why the bitstream excludes the decoder, and what changes an id. |
 | `docs/ADDING_A_SOURCE.md` | The recipe for onboarding a new dataset. |
 | `docs/FINDINGS.md` | Empirical results behind the design, including negative ones. |
-| `docs/PARKED.md` | Validated-but-deferred ideas with their evidence (error-envelope predictor, lite decoders, deblocker). |
 | `notebooks/demo_ae_codec.ipynb` | Executed demo: original → encode → codes → progressive decode → client/server with live byte counts (`make_demo_nb.py` regenerates it). |

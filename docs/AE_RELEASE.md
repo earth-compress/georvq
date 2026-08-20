@@ -111,5 +111,6 @@ bucket is 302,466 tiles over 9 years.
   dominating decode time. The coarse tier's ~30% entropy gap is left on
   the table (a regional coarse-mosaic product is the fix if it matters).
 - **Single deep decoder**: lite variants trained and parked below the
-  quality bar (docs/PARKED.md), which also holds the deblocker and the
+  quality bar (see Deferred with evidence in docs/FINDINGS.md, which also
+  covers the deblocker and the
   error-envelope predictor.

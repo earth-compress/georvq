@@ -121,63 +121,6 @@ def reset_figure(rst, specs, step):
     return fig
 
 
-def refit_figure(st, specs, step):
-    """One page per tier for a refit phase.
-
-    Four rows: codes recycled, perplexity before/after, residual
-    before/after, and the CASCADE row -- the energy entering each level
-    with the old books versus with the newly refitted ones upstream. That
-    last row is the thing the old all-at-once reset could not show: a
-    repair at level l changes what every deeper level sees.
-    """
-    n = len(specs)
-    fig, axes = plt.subplots(4, n, figsize=(4.3 * n, 11.0),
-                             constrained_layout=True, squeeze=False)
-    for i, sp in enumerate(specs):
-        Ls = np.arange(1, sp.depth + 1)
-        x = np.arange(len(Ls))
-
-        def g(m):
-            return np.array([st.get(f"refit/pyr{i}_L{L}_{m}", np.nan)
-                             for L in Ls], dtype=float)
-
-        ax = axes[0][i]
-        ax.bar(x, 100 * g("frac_recycled"), 0.6, color="crimson")
-        ax.plot(x, 100 * g("n_zero_before") / sp.codes, "k.--", ms=7,
-                lw=1, label="zero-count before")
-        ax.plot(x, 100 * g("n_zero_after") / sp.codes, "w.-", ms=7, lw=1,
-                mec="k", label="zero-count after")
-        ax.set(title=f"tier {i} (K={sp.codes}) @ step {step}",
-               ylabel="% of K")
-        ax.legend(fontsize=6)
-
-        ax = axes[1][i]
-        ax.bar(x - 0.2, g("perp_before") / sp.codes, 0.4, label="before",
-               color="0.6")
-        ax.bar(x + 0.2, g("perp_after") / sp.codes, 0.4, label="after",
-               color="steelblue")
-        ax.set(ylabel="perplexity / K", ylim=(0, 1)); ax.legend(fontsize=7)
-
-        ax = axes[2][i]
-        ax.bar(x - 0.2, g("resid_before"), 0.4, label="before", color="0.6")
-        ax.bar(x + 0.2, g("resid_after"), 0.4, label="after",
-               color="seagreen")
-        ax.set(ylabel="residual after this level"); ax.legend(fontsize=7)
-
-        ax = axes[3][i]
-        ib, ia = g("input_energy_before"), g("input_energy_after")
-        ax.plot(x, ib, "o--", color="0.5", lw=1.5, ms=5, label="old books")
-        ax.plot(x, ia, "o-", color="darkorange", lw=1.8, ms=5,
-                label="refitted upstream")
-        ax.set(xlabel="RVQ level", ylabel="energy entering level")
-        ax.legend(fontsize=7)
-
-        for row in range(4):
-            axes[row][i].set_xticks(x)
-            axes[row][i].set_xticklabels(Ls)
-            axes[row][i].grid(alpha=0.3, axis="y")
-    return fig
-
 
 def cosdist_figure(cosdist, baseline, specs, step):
     """Per-tier cos-dist vs cumulative RVQ level (solid: this model; dotted:

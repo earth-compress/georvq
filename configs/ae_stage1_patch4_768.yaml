@@ -1,8 +1,0 @@
-# 1.33x compression point (mirror of tessera 1536-d probe)
-inherit: ae_stage1_patch4.yaml
-model:
-  tiers: ["1:768:2048:8"]
-  tokenizer: {dim: 768, depth: 8}
-  decoder: {dim: 768, depth: 8, heads: 8, head_feat: 64, cls_bridge: false}
-log:
-  run_tag: ae_s1_patch4_768
