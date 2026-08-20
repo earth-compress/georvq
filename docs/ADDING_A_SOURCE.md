@@ -46,7 +46,9 @@ you want), and a versioned `manifest.json` (geometry, dtype, nodata,
 handles shard allocation, atomic index checkpoints, and append/resume with
 dedup. See `scripts/build_store_ae.py` (dense embedding chips sampled from
 cloud COGs) and `scripts/build_store_s2.py` (multi-resolution store: one
-shard file per band group, shared index).
+shard file per band group, shared index — kept for anyone who wants S2 as
+shards, though the shipped S2 preset reads Major-TOM live instead; see
+section 0).
 
 Notes:
 - `grid_period`: if your pixels have periodic structure (e.g. a source
