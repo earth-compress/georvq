@@ -23,6 +23,7 @@ from georvq.model.decoder import PyramidAttnDecoder
 from georvq.model.layers import thermometer
 from georvq.model.rate import PyramidRateModel
 from georvq.model.tokenizer import ViTTokenizer
+from georvq.model.attnmask import build_local_mask
 from georvq.model.vq import ResidualVQ
 
 
@@ -53,6 +54,62 @@ def sample_monotone_depths(batch, specs, device, mins=None, full_frac=0.0):
     return Ls
 
 
+def path_tuples(specs, mins=None):
+    """The canonical monotone truncation PATH: add one codebook at a time.
+
+    Fill the coarsest tier to its depth, then the next, and so on --
+    (1,0,0), (2,0,0) ... (L,0,0), (L,1,0) ... (L,L,0), (L,L,1) ... So each
+    step adds exactly one book, and the path has sum(depths) points.
+
+    `mins[0]` sets where the path STARTS -- there is no point training a
+    1-0-0 point, which spends 8 bits on a 64x64 patch of 128-d vectors.
+
+    Sampling uniformly along this path gives every codebook an equal share
+    of the training signal. Nested sampling does not: it draws the coarse
+    depth uniformly and each finer tier conditionally, which makes deep
+    fine-tier levels vanishingly rare -- measured at P(active)=0.006 for
+    tier-2 level 14, i.e. those books train on 0.6% of rows.
+    """
+    mins = mins or [0] * len(specs)
+    cur = [mins[i] for i in range(len(specs))]
+    out = []
+    if cur[0] > 0:
+        # include the starting point itself, so mins[0]=4 means the path
+        # BEGINS at (4,0,0) rather than at (5,0,0)
+        out.append(tuple(cur))
+    for i, sp in enumerate(specs):
+        while cur[i] < sp.depth:
+            cur[i] += 1
+            # keep the tuple monotone: a finer tier can never exceed a
+            # coarser one, so clamp downstream entries as we grow
+            t = list(cur)
+            for j in range(1, len(t)):
+                t[j] = min(t[j], t[j - 1])
+            out.append(tuple(t))
+    return out
+
+
+def sample_path_depths(batch, specs, device, mins=None, full_frac=0.15,
+                       path_frac=0.70):
+    """Depth tuples: `full_frac` at full depth, the rest spread uniformly
+    along the monotone path so every codebook trains equally often.
+
+    (The remaining 1 - full_frac - path_frac of the batch is left for the
+    caller's unquantized pass-through rows, which never reach here.)
+    """
+    path = path_tuples(specs, mins)
+    P = torch.tensor(path, device=device, dtype=torch.long)
+    full = torch.tensor([sp.depth for sp in specs], device=device,
+                        dtype=torch.long)
+    u = torch.rand(batch, device=device)
+    denom = max(full_frac + path_frac, 1e-9)
+    is_full = u < (full_frac / denom)
+    pick = torch.randint(0, P.shape[0], (batch,), device=device)
+    Ls = P[pick]
+    Ls[is_full] = full
+    return Ls
+
+
 def monotone_tuples(specs):
     """All (L_0..L_n) with L_0>=1 and 0 <= L_i <= min(L_{i-1}, d_i)."""
     tuples = [[L] for L in range(1, specs[0].depth + 1)]
@@ -62,9 +119,15 @@ def monotone_tuples(specs):
     return tuples
 
 
-def tuple_bits(specs, ls):
-    """Nominal (uncoded) bits/window for one depth tuple."""
-    return float(sum(sp.bits(L) for sp, L in zip(specs, ls)))
+def tuple_bits(specs, ls, side_bits=0.0):
+    """Nominal (uncoded) bits/window for one depth tuple.
+
+    `side_bits` is any fixed per-window side channel outside the pyramid's
+    index stream -- currently the stats-conditioning mean. It is charged at
+    EVERY depth, including the coarsest, because it is always transmitted;
+    leaving it out was how the ring-space S2 work ended up with a stats
+    channel silently taking 34% of the bitstream at L=1."""
+    return float(sum(sp.bits(L) for sp, L in zip(specs, ls))) + side_bits
 
 
 # --------------------------------------------------------------------------
@@ -81,20 +144,35 @@ class PyramidCodec(nn.Module):
         self.bands = cfg.bands
         self.specs = list(cfg.tiers)
         self.continuous = cfg.vq is None
+        self.normalize_latents = cfg.normalize_latents
 
         self.stem = source.build_stem(cfg)
+        if cfg.local_attn and cfg.local_attn[-1] is not None:
+            sr = cfg.local_attn[-1]
         self.tokenizer = ViTTokenizer(
             self.specs, cfg.window, cfg.bands, dim=cfg.tokenizer.dim,
-            depth=cfg.tokenizer.depth, ff_ratio=cfg.ff_ratio)
+            depth=cfg.tokenizer.depth, ff_ratio=cfg.ff_ratio,
+            late_join=cfg.tokenizer.late_join)
+        if cfg.local_attn is not None:
+            m = build_local_mask(self.specs, cfg.window, cfg.local_attn)
+            # computed once; non-persistent so checkpoints stay unchanged
+            self.tokenizer.register_buffer("attn_mask", m, persistent=False)
 
         if not self.continuous:
             v = cfg.vq
+            from functools import partial
+            if v.book_bits:
+                from georvq.model.vq_quant import QuantizedResidualVQ
+                rvq_cls = partial(QuantizedResidualVQ, book_bits=v.book_bits)
+            else:
+                rvq_cls = ResidualVQ
             self.rvqs = nn.ModuleList([
-                ResidualVQ(num_levels=sp.depth, num_codes=sp.codes,
-                           dim=sp.dim, decay=v.ema_decay,
-                           dead_threshold=v.dead_threshold,
-                           grad_codebook=v.grad_codebook,
-                           bf16_scores=v.bf16_scores)
+                rvq_cls(num_levels=sp.depth, num_codes=sp.codes,
+                        dim=sp.dim, decay=v.ema_decay,
+                        dead_threshold=v.dead_threshold,
+                        grad_codebook=v.grad_codebook,
+                        bf16_scores=v.bf16_scores,
+                        reset_mode=v.reset_mode)
                 for sp in self.specs])
             self._skip_masked = v.skip_masked
             self._base_dead = v.dead_threshold
@@ -113,6 +191,16 @@ class PyramidCodec(nn.Module):
             from georvq.model.conditioning import build_conditioning
             build_conditioning(self, cfg.conditioning)
 
+        self.stats_cond = cfg.stats_cond
+        if cfg.stats_cond is not None:
+            from georvq.model.stats_cond import StatsEmbed
+            self.stats_enc = (StatsEmbed(cfg.bands, cfg.tokenizer.dim)
+                              if cfg.stats_cond.cond_encoder else None)
+            self.stats_dec = (StatsEmbed(cfg.bands, cfg.decoder.dim)
+                              if cfg.stats_cond.cond_decoder else None)
+        else:
+            self.stats_enc = self.stats_dec = None
+
         head_in = PyramidAttnDecoder.head_in_dim(
             self.specs, cfg.decoder.dim, cfg.decoder.cls_bridge)
         self.decoder = PyramidAttnDecoder(
@@ -120,18 +208,81 @@ class PyramidCodec(nn.Module):
             dim=cfg.decoder.dim, depth=cfg.decoder.depth,
             heads=cfg.decoder.heads, cls_bridge=cfg.decoder.cls_bridge,
             ff_ratio=cfg.ff_ratio, sigma_cond=cfg.sigma is not None,
-            sigma_freqs=cfg.sigma.freqs if cfg.sigma else 8)
+            sigma_freqs=cfg.sigma.freqs if cfg.sigma else 8,
+            late_join=cfg.decoder.late_join)
+        if cfg.local_attn is not None:
+            self.decoder.register_buffer(
+                "attn_mask", build_local_mask(self.specs, cfg.window,
+                                              cfg.local_attn),
+                persistent=False)
 
     # ---- encode / decode ----
 
-    def encode_levels(self, x):
-        """x: (B, C, W, W) -> list of per-tier latents [(B, cells, dim)]."""
-        return self.tokenizer(self.stem(x))
+    def encode_levels(self, x, stats=None, valid=None):
+        """x: (B, C, W, W) -> list of per-tier latents [(B, cells, dim)].
 
-    def decode(self, zqs, cond):
+        With `normalize_latents`, tiers come out in the SAME normalized
+        geometry `encode_stage1` produces, so a stage-2 run quantizes and
+        decodes exactly what stage-1 trained on. Without it, a decoder
+        warm-started from stage-1 is handed raw latents whose norms are a
+        fraction of sqrt(dim) (measured on w32hd: 5.3/6.0/9.7 vs 19.6),
+        and codebooks fitted on stage-1 latents are 2-4x too long for the
+        vectors they are matched against -- which leaves the 8-level RVQ
+        residual ABOVE the input energy on the coarse tiers, i.e. worse
+        than transmitting nothing.
+
+        Default off: this changes what the encoder emits, so every
+        existing checkpoint and bitstream keeps its current behaviour."""
+        self._require_stats(stats, "encode_levels")
+        if self.stats_cond is not None and self.stats_cond.subtract_mean:
+            from georvq.model.stats_cond import center
+            x = center(x, stats, valid)
+        bias = None if self.stats_enc is None else self.stats_enc(stats)
+        zs = self.tokenizer(self.stem(x), stats_bias=bias)
+        if self.normalize_latents:
+            zs = [F.normalize(z, dim=-1, eps=1e-6) * (z.shape[-1] ** 0.5)
+                  for z in zs]
+        return zs
+
+    def decode(self, zqs, cond, stats=None, valid=None):
         """zqs: list of (B, cells, dim); cond: (B, n_tiers) depths (or sigmas
-        in stage-1 mode)."""
-        return self.decoder(zqs, cond)
+        in stage-1 mode). stats: (B, bands) per-window mean when stats
+        conditioning is on -- REQUIRED then, because silently omitting it
+        would return a mean-removed field and quietly wreck every metric
+        rather than raising."""
+        self._require_stats(stats, "decode")
+        emb = None if self.stats_dec is None else self.stats_dec(stats)
+        out = self.decoder(zqs, cond, stats=emb)
+        if self.stats_cond is not None and self.stats_cond.subtract_mean:
+            from georvq.model.stats_cond import uncenter
+            out = uncenter(out, stats.to(out.dtype), valid)
+        return out
+
+    def _require_stats(self, stats, where):
+        if self.stats_cond is not None and stats is None:
+            raise ValueError(
+                f"{where}: model.stats_cond is enabled, so the per-window "
+                "mean must be passed (model.patch_mean(x, valid)). Omitting "
+                "it would silently produce a mean-removed field.")
+
+    def side_bits(self):
+        """Fixed per-window bits outside the index stream (stats channel)."""
+        if self.stats_cond is None:
+            return 0.0
+        from georvq.model.stats_cond import channel_bits
+        return float(channel_bits(self.stats_cond, self.bands))
+
+    def _stats_of(self, x, valid=None):
+        """The stats argument the encode/decode pair needs, or None when
+        stats conditioning is off. Keeps every eval helper a one-argument
+        call at the call site while staying explicit inside the model."""
+        if self.stats_cond is None:
+            return None
+        return self.patch_mean(x, valid)
+
+    def patch_mean(self, x, valid=None):
+        from georvq.model.stats_cond import patch_mean
+        return patch_mean(x, valid)
 
     # ---- quantization (the one routing point) ----
 
@@ -198,12 +349,12 @@ class PyramidCodec(nn.Module):
                 commit = commit + c
         return zqs, commit / len(self.specs), select
 
-    def forward_train(self, x, Ls, loc=None):
+    def forward_train(self, x, Ls, loc=None, stats=None, valid=None):
         """Convenience end-to-end pass (the trainer orchestrates the three
         stages itself to control autocast per stage)."""
-        zs = self.encode_levels(x)
+        zs = self.encode_levels(x, stats, valid)
         zqs, commit, select = self.quantize(zs, Ls, loc)
-        return self.decode(zqs, Ls), commit, select
+        return self.decode(zqs, Ls, stats, valid), commit, select
 
     # ---- stage-1: continuous, noise-robust, sigma-conditioned ----
 
@@ -216,12 +367,19 @@ class PyramidCodec(nn.Module):
         return [F.normalize(z, dim=-1, eps=1e-6) * (z.shape[-1] ** 0.5)
                 for z in self.encode_levels(x)]
 
-    def forward_stage1(self, x, sigmas):
+    def forward_stage1(self, x, sigmas, drop=None):
         """Encode -> normalize -> add per-tier additive-uniform noise
-        U(-s/2, s/2) -> sigma-conditioned decode. sigmas: (B, n_tiers) >= 0."""
+        U(-s/2, s/2) -> sigma-conditioned decode. sigmas: (B, n_tiers) >= 0.
+        drop: optional (B, n_tiers) bool — tiers zeroed to TRUE informational
+        absence (matryoshka truncation; heavy noise still leaks signal). The
+        sigma conditioning for dropped tiers should be sigma_max so the
+        decoder can tell."""
         zs = self.encode_stage1(x)
         noisy = [z + (torch.rand_like(z) - 0.5) * sigmas[:, i].view(-1, 1, 1)
                  for i, z in enumerate(zs)]
+        if drop is not None:
+            noisy = [nz * (~drop[:, i]).view(-1, 1, 1).to(nz.dtype)
+                     for i, nz in enumerate(noisy)]
         return self.decoder(noisy, sigmas)
 
     # ---- rate model ----
@@ -238,10 +396,10 @@ class PyramidCodec(nn.Module):
     # ---- eval ----
 
     @torch.no_grad()
-    def level_cumsums(self, x, loc=None):
+    def level_cumsums(self, x, loc=None, valid=None):
         """Encode once; per tier return (B, cells, depth+1, dim) cumulative
         quantized sums so any depth tuple is a gather + decode."""
-        zs = self.encode_levels(x)
+        zs = self.encode_levels(x, self._stats_of(x, valid), valid)
         cums = []
         if self.selector is not None:
             scores = self.selector(loc)
@@ -261,12 +419,12 @@ class PyramidCodec(nn.Module):
         return zs, cums
 
     @torch.no_grad()
-    def eval_tuple(self, cums, ls, batch_ref):
+    def eval_tuple(self, cums, ls, batch_ref, valid=None):
         """Decode one depth tuple from cached cumulative sums."""
         B = batch_ref.shape[0]
         Ls = torch.tensor(ls, device=batch_ref.device)[None].expand(B, -1)
         zqs = [c[:, :, L] for c, L in zip(cums, ls)]
-        return self.decode(zqs, Ls)
+        return self.decode(zqs, Ls, self._stats_of(batch_ref, valid), valid)
 
     @torch.no_grad()
     def codebook_health(self, x, loc=None):
@@ -274,9 +432,17 @@ class PyramidCodec(nn.Module):
         batch: 'pyr{i}_usage_L{l}', 'pyr{i}_entropy_L{l}',
         'pyr{i}_perplexity_L{l}'."""
         out = {}
-        zs = self.encode_levels(x)
+        zs = self.encode_levels(x, self._stats_of(x), None)
 
         def _tally(i, sp, per_level_idx):
+            """Per-level codebook diagnostics for one tier: fraction of codes
+            used, index entropy, and its perplexity.
+
+            Usage and perplexity are health hints only, never quality measures:
+            a codebook can reach near-full utilization while explaining almost
+            none of the variance (see docs/FINDINGS.md). Judge books by
+            rate-distortion; read these to spot a level that has collapsed.
+            """
             for j in range(sp.depth):
                 p = torch.bincount(per_level_idx[j].flatten(),
                                    minlength=sp.codes).float()
@@ -310,9 +476,10 @@ class PyramidCodec(nn.Module):
         return out
 
     @torch.no_grad()
-    def eval_ceiling(self, x):
+    def eval_ceiling(self, x, valid=None):
         """Decode the un-quantized latents: the encoder/decoder ceiling."""
-        zs = self.encode_levels(x)
+        st = self._stats_of(x, valid)
+        zs = self.encode_levels(x, st, valid)
         Ls = torch.tensor([sp.depth for sp in self.specs],
                           device=x.device)[None].expand(x.shape[0], -1)
-        return self.decode(zs, Ls)
+        return self.decode(zs, Ls, st, valid)

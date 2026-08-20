@@ -177,7 +177,7 @@ def read_region(base, wr0, wc0, n, depths):
         step = np.ascontiguousarray(sg[64:].reshape(2, -1).T).view(np.float16)[:, 0]
         star = unpack_star(codes, step, 1, 256)
     pk = [Packet(indices=[t[i] for t in tiers],
-                 coarse_residual=star[i] if star is not None else None)
+                 refinements=({0: star[i]} if star is not None else None))
           for i in range(n*n)]
     dec = be.decode(pk, list(depths))        # (n*n, 64, 64, 64)
     return dec.reshape(n, n, 64, 64, 64).transpose(2, 0, 3, 1, 4) \\

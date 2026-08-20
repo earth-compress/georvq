@@ -27,7 +27,17 @@ from georvq.inference.stats_codec import StatsPacker
 from georvq.repro import save_checkpoint
 
 
-def bitstream_id(model, stats_pca=None, cdfs_path=None) -> str:
+def bitstream_id(model, stats_pca=None, cdfs_path=None, extra=()) -> str:
+    """Hash of everything that DEFINES the bitstream.
+
+    Decoder weights are deliberately excluded, so a better decoder ships
+    against the same id and decodes existing archives. Everything a
+    decoder must agree on to reconstruct the same field is included, and
+    `extra` is how a source's release layer adds its own such state --
+    a transmitted-mean channel's constants, a refinement's table and
+    rotation seed. Leaving those out would let two incompatible bundles
+    claim one id, and mismatched-but-same-id state decodes to plausible
+    garbage rather than to an error."""
     h = hashlib.sha256()
     for sp in model.specs:
         h.update(str((sp.grid, sp.dim, sp.codes, sp.depth)).encode())
@@ -41,6 +51,8 @@ def bitstream_id(model, stats_pca=None, cdfs_path=None) -> str:
         h.update(np.asarray(stats_pca["components"]).tobytes())
     if cdfs_path and os.path.exists(cdfs_path):
         h.update(open(cdfs_path, "rb").read())
+    for blob in extra:
+        h.update(blob if isinstance(blob, bytes) else np.asarray(blob).tobytes())
     return h.hexdigest()[:16]
 
 
@@ -66,7 +78,20 @@ def decoder_id(model, extra_state=None, recipe=None) -> str:
 
 
 def save_release(out_dir, model, cfg, step=0, cdfs_path=None,
-                 stats_pca=None, notes=""):
+                 stats_pca=None, notes="", extra_id=(), meta=None):
+    """Write a self-contained bundle: weights, optional side tables, and
+    the ids that define what they decode.
+
+    The `bitstream_id` returned here hashes everything that DEFINES the
+    bitstream -- tier specs, codebooks, conditioning priors, the stats
+    basis and the CDF tables -- but deliberately NOT the decoder
+    weights, so a better decoder can ship against the same id and decode
+    existing archives without re-encoding. Source-specific release state
+    (containers, refinements, mean channels) belongs in that source's
+    release layer, but it is written THROUGH here: pass its
+    id-defining state as `extra_id` and its descriptive fields as `meta`,
+    so every bundle in the project has one writer and one layout.
+    """
     os.makedirs(out_dir, exist_ok=True)
     save_checkpoint(os.path.join(out_dir, "model.pt"), model, cfg, step)
     if cdfs_path:
@@ -75,13 +100,17 @@ def save_release(out_dir, model, cfg, step=0, cdfs_path=None,
     if stats_pca is not None:
         np.savez(os.path.join(out_dir, "stats_pca.npz"), **stats_pca)
     bid = bitstream_id(model, stats_pca,
-                       os.path.join(out_dir, "cdfs.npz") if cdfs_path else None)
+                       os.path.join(out_dir, "cdfs.npz") if cdfs_path else None,
+                       extra=extra_id)
+    payload = {"bitstream_id": bid,
+               "decoder_id": decoder_id(model),
+               "decoder_version": 1,
+               "window": model.window,
+               "tiers": [str(sp) for sp in model.specs],
+               "notes": notes}
+    payload.update(meta or {})
     with open(os.path.join(out_dir, "bundle.json"), "w") as f:
-        json.dump({"bitstream_id": bid,
-                   "decoder_version": 1,
-                   "window": model.window,
-                   "tiers": [str(sp) for sp in model.specs],
-                   "notes": notes}, f, indent=1)
+        json.dump(payload, f, indent=1)
     _write_readme(out_dir, model)
     return bid
 

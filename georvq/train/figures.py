@@ -13,9 +13,9 @@ from georvq.train.validate import canonical_tuples, tname
 
 
 def rd_figure(cos_by_tuple, vs, specs, tuples, step, ref_fronts=(), px=256,
-              dist_log=False):
+              dist_log=False, side_bits=0.0):
     """dist_log=True: y = 1 - cos on a log scale (separates the 0.99x's)."""
-    bits = np.array([tuple_bits(specs, t) for t in tuples]) / px
+    bits = np.array([tuple_bits(specs, t, side_bits) for t in tuples]) / px
     cos = np.array([cos_by_tuple[tname(t)] for t in tuples])
     L0s = np.array([t[0] for t in tuples])
     Y = (lambda c: 1.0 - np.asarray(c)) if dist_log else \
@@ -50,6 +50,14 @@ def rd_figure(cos_by_tuple, vs, specs, tuples, step, ref_fronts=(), px=256,
 
 
 def codebook_figure(vs, specs, step):
+    """One panel per tier: usage, perplexity and index entropy per RVQ
+    level, each normalized to [0, 1] so tiers with different K are
+    comparable side by side.
+
+    Read this to spot a level that has COLLAPSED, not to judge quality:
+    all three bars can sit near 1.0 on a codebook that explains almost
+    none of the variance (docs/FINDINGS.md).
+    """
     fig, axes = plt.subplots(1, len(specs), figsize=(5 * len(specs), 3.3),
                              constrained_layout=True, squeeze=False)
     for i, (ax, sp) in enumerate(zip(axes[0], specs)):
@@ -66,6 +74,52 @@ def codebook_figure(vs, specs, step):
         ax.set_xticks(x); ax.set_xticklabels(Ls)
         ax.grid(alpha=0.3, axis="y"); ax.legend(fontsize=7)
     return fig
+
+
+def reset_figure(rst, specs, step):
+    """One figure per reset event: what the reset actually did, per level.
+
+    Three panels per tier -- codes revived as a fraction of K, perplexity
+    before vs after, and residual before vs after -- all measured on the
+    SAME batch either side of the reset, so the bars isolate the reset
+    rather than a step of training.
+
+    This exists because the per-level detail is 7 numbers x 8 levels x 3
+    tiers; as individual wandb scalars that is 168 panels nobody can read.
+    """
+    n = len(specs)
+    fig, axes = plt.subplots(3, n, figsize=(4.2 * n, 8.4),
+                             constrained_layout=True, squeeze=False)
+    for i, sp in enumerate(specs):
+        Ls = np.arange(1, sp.depth + 1)
+        x = np.arange(len(Ls))
+
+        def g(metric):
+            return np.array([rst.get(f"reset/pyr{i}_L{L}_{metric}", np.nan)
+                             for L in Ls], dtype=float)
+
+        ax = axes[0][i]
+        ax.bar(x, 100 * g("frac_reset"), 0.6, color="crimson")
+        ax.set(title=f"tier {i} (K={sp.codes}) @ step {step}",
+               ylabel="% of K revived")
+        ax.set_xticks(x); ax.set_xticklabels(Ls); ax.grid(alpha=0.3, axis="y")
+
+        ax = axes[1][i]
+        pb, pa = g("perp_before") / sp.codes, g("perp_after") / sp.codes
+        ax.bar(x - 0.2, pb, 0.4, label="before", color="0.6")
+        ax.bar(x + 0.2, pa, 0.4, label="after", color="steelblue")
+        ax.set(ylabel="perplexity / K", ylim=(0, 1)); ax.legend(fontsize=7)
+        ax.set_xticks(x); ax.set_xticklabels(Ls); ax.grid(alpha=0.3, axis="y")
+
+        ax = axes[2][i]
+        rb, ra = g("resid_before"), g("resid_after")
+        ax.bar(x - 0.2, rb, 0.4, label="before", color="0.6")
+        ax.bar(x + 0.2, ra, 0.4, label="after", color="seagreen")
+        ax.set(xlabel="RVQ level", ylabel="residual (mean sq err)")
+        ax.legend(fontsize=7)
+        ax.set_xticks(x); ax.set_xticklabels(Ls); ax.grid(alpha=0.3, axis="y")
+    return fig
+
 
 
 def cosdist_figure(cosdist, baseline, specs, step):
@@ -115,6 +169,32 @@ def _pca_rgb(t, basis):
 def recon_figure(model, source, val_s, step, n=8, mins=None, tuples=None,
                  val_loc=None):
     """Original vs reconstructions at named depth tuples, PCA-RGB rendered."""
+    # eval() is load-bearing, not hygiene: VectorQuantizer.forward runs its
+    # lazy `_data_init` under `self.training`, so drawing this figure in
+    # train mode INITIALISES the codebooks -- from 8 val windows, by random
+    # sampling rather than the configured init_mode, and at whatever step
+    # the first figure lands on. It also lets an EMA update and a step
+    # increment run on validation data. (stage1_recon_figure below has
+    # always done this correctly; this one never did.)
+    was_training = model.training
+    model.eval()
+    try:
+        return _recon_figure(model, source, val_s, step, n, mins, tuples,
+                             val_loc)
+    finally:
+        if was_training:
+            model.train()
+
+
+def _recon_figure(model, source, val_s, step, n, mins, tuples, val_loc):
+    """Reconstruction contact sheet: the original over one row per depth
+    tuple, projected to RGB through a shared PCA basis.
+
+    The basis is fitted on the ORIGINALS and reused for every row, so
+    rows are comparable to each other and to the source; a per-row
+    basis would hide exactly the errors this figure exists to show.
+    Call `recon_figure`, which owns the eval-mode guard.
+    """
     val_x, val_valid = source.prep(val_s[:n], val_s.device)
     loc = val_loc[:n] if val_loc is not None else None
     if tuples:

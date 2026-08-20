@@ -4,8 +4,8 @@ Pyramidal residual-VQ compression for geospatial datasets.
 
 One model, one bitstream, a whole rate–distortion front: georvq trains
 hierarchical (coarse→fine) residual-VQ codecs over gridded geospatial data —
-embedding fields (e.g. AlphaEarth), multispectral imagery (e.g. Sentinel-2),
-or any source you write an adapter for.
+embedding fields (e.g. AlphaEarth, Tessera), multispectral imagery
+(e.g. Sentinel-2), elevation, SAR, or any source you write an adapter for.
 
 ## The method
 
@@ -28,7 +28,14 @@ or any source you write an adapter for.
   writes real rANS files with byte-exact verification so claimed ratios
   are realized ones.
 - **Stats side-channel.** Sources that need per-tile normalization ship
-  their stats as ~11-byte adaptive-PCA packets.
+  their stats as ~11-byte adaptive-PCA packets. Sources whose windows
+  carry most of their energy in the mean can instead *transmit* it and
+  code only what is left — cheap, and worth far more per bit than extra
+  pyramid depth where it applies.
+- **Additive refinements.** A tier's post-RVQ residual can be scalar-
+  quantized and added back at decode, buying back the quantizer gap
+  without touching the codebooks. Optional by construction: ignoring one
+  still decodes.
 - **Location conditioning (optional).** Predict-and-subtract cascades
   (frozen location→latent prior + cross-tier predictors) and
   location-gated codebook subsetting, via SatCLIP embeddings
@@ -102,7 +109,9 @@ georvq-train -c configs/hybrid_rate.yaml --gpu 0 train.init_from=checkpoints/sta
 
 Presets in `configs/`: `pyr64` (the standard recipe), `stage1`,
 `hybrid_rate` (entropy model + gradient codebooks), `cascade` and
-`satclip_select` (location conditioning), `smoke` (CI).
+`satclip_select` (location conditioning), `tessera_*` (the Tessera
+lineage, ending at the released `tessera_vq8_k256_statscond`), `smoke`
+(CI). Multi-GPU: `torchrun --nproc_per_node N -m georvq.train.dist`.
 
 ## Data
 
@@ -110,8 +119,10 @@ Sources are converted once into a standard chip store (sharded memmaps +
 parquet index + versioned manifest); training streams it through a
 GPU/CPU-resident pool with background refresh (whole-dataset FIFO sweeps
 for multi-TB stores). Builders: `scripts/build_store_ae.py`,
-`scripts/build_store_s2.py`. Adding a source = builder + `Source` adapter
-+ YAML preset — see `docs/ADDING_A_SOURCE.md`.
+`scripts/build_store_tessera.py`, `scripts/build_store_s2.py`. Adding a
+source = builder + `Source` adapter + YAML preset — see
+`docs/ADDING_A_SOURCE.md`, and `docs/SOURCE_ONBOARDING.md` for measuring
+the source *before* choosing an architecture for it.
 
 ## Evaluate
 
@@ -136,7 +147,10 @@ xhat = codec.decode(codec.encode(x), depths=[8, 4, 2])
 ```
 
 On top of the generic machinery, each shipped source gets its own
-**release layer** with source-appropriate containers and executables.
+**release layer** with source-appropriate containers, side channels and
+executables. Two are shipped, and they differ in every place the data
+differs.
+
 The AlphaEarth release (`georvq/ae/`, `docs/AE_RELEASE.md`) turns a
 2.25 GB source tile into ~58 MB of georeferenced COG assets with
 progressive rate, quality-controlled decode against encode-time
@@ -147,15 +161,26 @@ georvq-ae-tile encode --model <bundle> src.tiff out_dir/
 georvq-ae-tile decode --model <bundle> out_dir/ recon.tiff --quality "p90<=0.02"
 ```
 
+The Tessera release (`georvq/tessera/`, `docs/TESSERA_RELEASE.md`) codes
+128-band embedding windows across 0.23–10.9 b/px, transmitting the patch
+mean as a side channel and offering an opt-in fine-tier refinement:
+
+```python
+from georvq.tessera import load
+R = load("/data/georvq-releases/tessera-beta-v1/bundle", device="cuda")
+recon = R.decode(R.encode(x, valid=v), depths=[20, 20, 5], valid=v)
+```
+
 ## Docs
 
 - `docs/OVERVIEW.md` — codebase map, invariants, personas, working knowledge
 - `docs/FURTHER_READING.md` — architecture explainer + file-by-file guide
 - `docs/AE_RELEASE.md` — the shipped AlphaEarth codec's complete contract
+- `docs/TESSERA_RELEASE.md` — the shipped Tessera codec's complete contract
 - `docs/ADDING_A_SOURCE.md` — the plug-point for new datasets
+- `docs/SOURCE_ONBOARDING.md` — measuring a new source into an architecture
 - `docs/BITSTREAM.md` — what defines a bitstream; decoder-upgrade contract
 - `docs/FINDINGS.md` — the empirical results behind the design choices
-- `docs/PARKED.md` — validated-but-deferred ideas, with their evidence
 
 ## Tests
 

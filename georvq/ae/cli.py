@@ -45,6 +45,10 @@ import time
 
 import numpy as np
 
+from georvq.inference.refine import RefinementSpec
+from georvq.inference.refine import pack as refine_pack
+from georvq.inference.refine import unpack as refine_unpack
+
 NODATA = -128
 FORMAT = "georvq-ae/2"
 _FRAME_BATCH = 4      # deblock frames per forward (~1.25 GB VRAM each)
@@ -95,27 +99,27 @@ def check_fill(a, valid, fill=NODATA):
 
 STAR_BITS, STAR_SIGMA = 2, 2.0
 
+#: The AlphaEarth release refines the COARSE tier: its coarse codebook
+#: carries the OOD error tail, while the mid and fine books already sit at
+#: their ceiling, where a sidecar is worthless-to-harmful. Other models
+#: leave their slack elsewhere and refine a different tier — the shared
+#: mechanism is georvq.inference.refine.
+STAR_SPEC = RefinementSpec(tier=0, bits=STAR_BITS, quantizer="uniform",
+                           sigma=STAR_SIGMA)
+
 
 def pack_star(res):
     """(N, cells, dim) float residuals -> (codes uint8 packed, step f16).
-    Symmetric mid-rise uniform quantizer, 4 levels at (+-0.5, +-1.5)*step,
-    step = STAR_SIGMA*std/1.5 per window. Retains 98% of the float-star
-    gain incl. the OOD tail (per-window scale adapts to outliers)."""
-    r = res.reshape(res.shape[0], -1).astype(np.float32)
-    step = (STAR_SIGMA * r.std(axis=1, keepdims=True) / 1.5)         .clip(min=1e-12)
-    c = np.clip(np.round(r / step - 0.5) + 0.5, -1.5, 1.5) + 1.5  # {0..3}
-    packed = np.packbits(
-        ((c.astype(np.uint8)[:, :, None] >> np.arange(1, -1, -1)) & 1)
-        .reshape(c.shape[0], -1), axis=1)
-    return packed, step[:, 0].astype(np.float16)
+
+    The shipped `star.tif` payload. Retains 98% of the float-star gain
+    incl. the OOD tail, because the per-window scale adapts to outliers.
+    Byte-frozen: this release is public."""
+    return refine_pack(res, STAR_SPEC)
 
 
 def unpack_star(packed, step, cells, dim):
     """Inverse of pack_star -> (N, cells, dim) float32."""
-    bits = np.unpackbits(packed, axis=1, count=cells * dim * 2)         .reshape(packed.shape[0], -1, 2)
-    c = (bits[:, :, 0] << 1 | bits[:, :, 1]).astype(np.float32)
-    r = (c - 1.5) * step.astype(np.float32)[:, None]
-    return r.reshape(-1, cells, dim)
+    return refine_unpack(packed, step, STAR_SPEC, cells, dim)
 
 
 # --------------------------------------------------------------------------
@@ -147,7 +151,7 @@ class TorchBackend:
                           for sp in self.codec.specs]
         self.device = device
         sp0 = self.codec.specs[0]
-        self.star_cost_bits = sp0.cells * sp0.dim * STAR_BITS + 16
+        self.star_cost_bits = STAR_SPEC.cost_bits(sp0.cells, sp0.dim)
         from georvq.inference.release import bitstream_id, decoder_id
         self.bitstream_id = bitstream_id(self.codec.model)
         self.decoder_id = decoder_id(self.codec.model)
@@ -371,7 +375,7 @@ class TorchBackend:
         res_np = res0.cpu().numpy() if res0 is not None else None
         packets = [Packet(
             indices=[a[b] for a in idxs],
-            coarse_residual=res_np[b] if res_np is not None else None)
+            refinements=({0: res_np[b]} if res_np is not None else None))
             for b in range(x.shape[0])]
         return packets, dcos
 
@@ -385,6 +389,14 @@ def seam_mask_np(h, w, win=64):
 
 
 class OnnxBackend:
+    """Torch-free backend over an exported ONNX directory.
+
+    Writes the same container as `TorchBackend`, so a tile encoded by
+    either decodes with the other. Encoders are backend-CONSISTENT but
+    not bit-identical -- ONNX runs fp32 throughout where torch may use
+    bf16 decoder forwards -- so indices can differ on near-ties without
+    any quality difference.
+    """
     def __init__(self, export_dir, device="cpu", threads=None):
         from georvq.inference.onnx_backend import OnnxCodec
         self.codec = OnnxCodec(export_dir, device=device, threads=threads)
@@ -397,7 +409,7 @@ class OnnxBackend:
         self.bitstream_id = self.codec.meta.get("bitstream_id")
         self.decoder_id = self.codec.meta.get("decoder_id")
         t0 = self.codec.tiers[0]
-        self.star_cost_bits = t0["grid"] ** 2 * t0["dim"] * STAR_BITS + 16
+        self.star_cost_bits = STAR_SPEC.cost_bits(t0["grid"] ** 2, t0["dim"])
 
     def load_deblock(self):
         """Attach the export dir's deblock.onnx session (idempotent)."""
@@ -455,6 +467,13 @@ class OnnxBackend:
 
 
 def load_backend(args):
+    """Pick the torch or ONNX backend, defaulting to whichever the model
+    directory actually contains.
+
+    Both read and write the same container, so the choice is a
+    deployment detail: ONNX needs no torch at all, torch is required to
+    encode on GPU.
+    """
     kind = args.backend
     if kind == "auto":
         kind = "onnx" if (os.path.isdir(args.model) and os.path.exists(
@@ -614,7 +633,7 @@ def read_container(path, depths=None):
         star = unpack_star(z["t0star"][:], z["t0star_step"][:],
                            sig[0][0], dim)
     packets = [Packet(indices=[a[i] for a in tiers],
-                      coarse_residual=star[i] if star is not None else None)
+                      refinements=({0: star[i]} if star is not None else None))
                for i in range(n)]
     valid = None
     if "mask" in z:
@@ -649,6 +668,10 @@ def nominal_bits(specs_sig, depths=None):
 # --------------------------------------------------------------------------
 
 def _common_args(ap):
+    """Arguments shared by every `georvq-ae-*` entry point: which model,
+    which backend, which device. Kept in one place so the executables
+    cannot drift apart in how they are addressed.
+    """
     ap.add_argument("--model", required=True,
                     help="torch checkpoint .pt, release bundle dir, or "
                          "ONNX export dir")
@@ -677,6 +700,10 @@ def _check_bitstream(header, be, path):
 
 
 def _parse_tuple(s, specs_sig):
+    """Parse `--tuple L0,L1,L2` into per-tier depths, validated against
+    the model's own tier depths so an over-deep request fails here
+    rather than silently truncating at decode.
+    """
     if not s:
         return None
     ls = [int(v) for v in s.split(",")]
@@ -749,6 +776,14 @@ def _quality_arg(sub):
 
 
 def _resolve_quality(stats, spec_arg):
+    """Turn `--quality STAT<=X` into the cheapest depth tuple that meets
+    it, using the error stats measured at ENCODE time.
+
+    This is why quality control needs no predictor network: the encoder
+    already decoded its own rate ladder and recorded the true per-window
+    error. Blobs encoded without stats can only be addressed by
+    `--tuple`.
+    """
     import re
     m = re.fullmatch(r"(mean|p50|p90|p99|max)<=([0-9.eE+-]+)", spec_arg)
     if not m:
@@ -794,6 +829,14 @@ def _report(tag, header, n_windows, window, file_bytes, t0, depths=None):
 # --------------------------------------------------------------------------
 
 def export_onnx_main(argv=None):
+    """Export encoder, decoder and codebooks to ONNX, then verify parity
+    against the torch model before writing.
+
+    The parity check is the point: an export that silently disagrees
+    with its checkpoint would produce a bitstream no other backend can
+    read, and the failure would only surface as degraded reconstructions
+    much later.
+    """
     ap = argparse.ArgumentParser(
         description="Export a georvq checkpoint to an ONNX dir usable by "
                     "the onnx backend of the codec executables.")
@@ -863,6 +906,10 @@ def export_onnx_main(argv=None):
 # --------------------------------------------------------------------------
 
 def _load_windows(path, window, bands):
+    """Read pre-cut (B, C, W, W) windows from an npz for the patch dev
+    tool. This is the development container, not the release one -- real
+    tiles go through the COG asset path.
+    """
     a = np.load(path)
     if a.ndim == 3:
         a = a[None]

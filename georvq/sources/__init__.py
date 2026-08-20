@@ -43,8 +43,15 @@ class Source:
 
 
 def get_source(name: str, model_cfg) -> Source:
+    """Look up a `Source` adapter by its config name.
+
+    S2 is imported lazily and skipped if its optional dependencies are
+    absent, so a missing extra narrows the available sources rather than
+    breaking the import of every other one.
+    """
     from georvq.sources.ae import AESource
-    SOURCES = {"ae": AESource}
+    from georvq.sources.tessera import TesseraSource
+    SOURCES = {"ae": AESource, "tessera": TesseraSource}
     try:
         from georvq.sources.s2 import S2Source
         SOURCES["s2"] = S2Source

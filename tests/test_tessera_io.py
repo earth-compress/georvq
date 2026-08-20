@@ -1,0 +1,101 @@
+"""The external entry point must be the same door, not a second one.
+
+`georvq.tessera.io` exists so the Tessera team never has to reproduce
+the chip store's internal 130-band packing. That is only safe if it
+produces bit-identical tensors to the store path -- otherwise the codec
+sees a slightly different field than it was trained and measured on.
+"""
+import numpy as np
+import pytest
+import torch
+
+from georvq.sources.tessera import TesseraSource
+from georvq.tessera import io
+
+
+def _fake(bands=128, h=64, w=64, seed=0, n=2):
+    g = np.random.default_rng(seed)
+    q = g.integers(-127, 127, (n, bands, h, w), dtype=np.int8)
+    scale = np.full((n, h, w), 0.065, np.float16)
+    q[0, :, 0, 0] = 0                      # nodata: all-zero vector
+    if n > 1:
+        scale[1, 5, 5] = 0.0               # nodata: zero scale
+        scale[1, 6, 6] = 9.0               # nodata: absurd scale
+    return q, scale
+
+
+def _store_layout(q, scale):
+    """What ChipStore hands the loader: 128 bands + the f16 scale plane
+    reinterpreted as two trailing int8 bands."""
+    sb = scale.view(np.int8).reshape(scale.shape[0], scale.shape[1],
+                                     scale.shape[2], 2).transpose(0, 3, 1, 2)
+    return np.concatenate([q, sb], axis=1)
+
+
+class _Cfg:
+    bands = 128
+
+
+def test_io_prep_matches_the_store_path_exactly():
+    q, scale = _fake()
+    src = TesseraSource(_Cfg())
+    x_ref, v_ref = src.prep(torch.from_numpy(_store_layout(q, scale)), "cpu")
+    x_new, v_new = io.prep(q, scale, device="cpu")
+    assert torch.equal(v_new, v_ref)
+    assert torch.equal(x_new, x_ref)
+
+
+def test_io_prep_reproduces_every_nodata_convention():
+    q, scale = _fake()
+    _, valid = io.prep(q, scale, device="cpu")
+    assert not valid[0, 0, 0]      # all-zero vector
+    assert not valid[1, 5, 5]      # zero scale
+    assert not valid[1, 6, 6]      # absurd scale
+    assert valid[0, 30, 30]        # ordinary pixel survives
+
+
+def test_int8_without_a_scale_is_an_error_not_a_guess():
+    q, _ = _fake()
+    with pytest.raises(ValueError, match="scale plane"):
+        io.prep(q)
+
+
+def test_float_input_takes_the_dequantized_path():
+    x = np.random.default_rng(1).standard_normal((128, 64, 64)).astype(np.float32)
+    got, valid = io.prep(x)
+    assert torch.allclose(got[0], torch.from_numpy(x) / TesseraSource.XNORM)
+    with pytest.raises(ValueError, match="already dequantized"):
+        io.prep(x, scale=np.ones((64, 64), np.float32))
+
+
+def test_mismatched_scale_plane_is_rejected():
+    q, _ = _fake()
+    with pytest.raises(ValueError, match="does not match"):
+        io.prep(q, np.ones((2, 32, 32), np.float32))
+
+
+def test_windowing_round_trips_and_crops_rather_than_pads():
+    x = torch.randn(1, 4, 150, 200)
+    valid = torch.ones(1, 150, 200, dtype=torch.bool)
+    xw, vw, grid = io.to_windows(x, valid, window=64)
+    assert grid == (1, 2, 3) and xw.shape == (6, 4, 64, 64)
+    assert vw.shape == (6, 64, 64)
+    back = io.from_windows(xw, grid, window=64)
+    assert torch.equal(back, x[:, :, :128, :192])     # cropped, never padded
+
+
+def test_a_tile_smaller_than_one_window_is_an_error():
+    with pytest.raises(ValueError, match="smaller than one"):
+        io.to_windows(torch.randn(1, 4, 32, 32),
+                      torch.ones(1, 32, 32, dtype=torch.bool), window=64)
+
+
+def test_requantize_returns_to_source_units():
+    q, scale = _fake(n=1)
+    x, _ = io.prep(q, scale, device="cpu")
+    orig = io.requantize(x)
+    assert torch.allclose(orig, x * TesseraSource.XNORM)
+    _, codes = io.requantize(x, scale[0].astype(np.float32))
+    assert codes.dtype == torch.int8
+    ok = torch.from_numpy(q[0]).ne(0).any(0)          # ignore nodata pixels
+    assert torch.equal(codes[0][:, ok], torch.from_numpy(q[0])[:, ok])
