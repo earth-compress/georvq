@@ -19,3 +19,6 @@ err.log
 
 # local agent scratch (archived internal docs, worktrees)
 .claude/
+
+# geotessera downloads its tiles into the CWD; keep them out of git
+global_0.1_degree_representation/
