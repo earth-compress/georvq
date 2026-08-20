@@ -22,9 +22,9 @@ import torch
 
 from georvq.config import Config
 from georvq.factory import build_model
-from georvq.metrics import centered_cos
 from georvq.repro import (run_metadata, save_checkpoint, seed_all,
                           write_resolved_config)
+from georvq.sources.report import resolve_report
 from georvq.train.figures import stage1_recon_figure
 from georvq.train.loop import resolve_device, setup_data
 from georvq.train.warmstart import load_partial
@@ -51,9 +51,13 @@ def sample_sigmas(sig_cfg, batch, n_tiers, device):
 
 @torch.no_grad()
 def validate_stage1(model, source, val_s, sigma_max, device, batch=256,
-                    trunc=False):
-    """Recon cosine at several uniform (all-tier) sigma levels. frac=0 is
-    the near-lossless ceiling; higher frac = more corruption = lossier."""
+                    trunc=False, spec=None):
+    """Reconstruction quality at several uniform (all-tier) sigma levels.
+    frac=0 is the near-lossless ceiling; higher frac = more corruption =
+    lossier. Metrics come from the run's `ReportSpec`, so this reports the
+    source's own headline measure rather than a cosine by assumption."""
+    if spec is None:
+        spec = source.report(getattr(model, "cfg", None))
     model.eval()
     n_tiers = len(model.specs)
     chunks = [source.prep(val_s[i:i + batch], device)
@@ -65,13 +69,9 @@ def validate_stage1(model, source, val_s, sigma_max, device, batch=256,
             sig = torch.full((x.shape[0], n_tiers), sigma_max * frac,
                              device=device)
             rec = model.forward_stage1(x, sig)
-            _, st = source.recon_stats(rec, x, valid)
             nb = int(valid.sum()); n += nb
-            for k in ("cos", "vec_rel_l2"):
-                if k in st:
-                    agg[k] = agg.get(k, 0.0) + float(st[k]) * nb
-            agg["ccos"] = agg.get("ccos", 0.0) \
-                + float(centered_cos(rec, x, valid)) * nb
+            for m in spec.metrics:
+                agg[m.key] = agg.get(m.key, 0.0) + float(m(rec, x, valid)) * nb
         out[frac] = {k: v / n for k, v in agg.items()}
     # truncation ladder: keep the k coarsest tiers clean, drop the rest
     # (sigma=max) — the stage-1 analog of the stage-2 recon tuples. Only
@@ -83,9 +83,9 @@ def validate_stage1(model, source, val_s, sigma_max, device, batch=256,
                              device=device)
             sig[:, :k] = 0.0
             rec = model.forward_stage1(x, sig, drop=sig == sigma_max)
-            _, st = source.recon_stats(rec, x, valid)
-            nb = int(valid.sum()); cs += float(st["cos"]) * nb; n += nb
-        out[f"keep{k}"] = {"cos": cs / n}
+            nb = int(valid.sum())
+            cs += float(spec.quality(rec, x, valid)) * nb; n += nb
+        out[f"keep{k}"] = {spec.quality.key: cs / n}
     model.train()
     return out
 
@@ -111,6 +111,13 @@ def train(cfg: Config, gpu=0):
 
     model = build_model(cfg, device)
     source = model.source
+    # same contract as the stage-2 trainer: the source declares what this
+    # run reports, log.report.* may narrow it, and a bad selection fails
+    # here rather than at the first validation
+    report = resolve_report(source, cfg)
+    qm = report.quality
+    print(f"report: quality={qm.key} extra={[m.key for m in report.extra]}",
+          flush=True)
     store, train_rows, val_rows, val_s, pool = setup_data(cfg, source, device)
     val_rows.to_parquet(os.path.join(run_dir, "val_chips.parquet"))
     print(f"model: {sum(p.numel() for p in model.parameters())/1e6:.2f}M "
@@ -148,7 +155,7 @@ def train(cfg: Config, gpu=0):
         return pool.sample_batch(batch, token=cfg.model.window, align=align)
     nxt = _fetcher.submit(_fetch)
     t0 = time.time()
-    acc = {"loss": 0.0, "cos": 0.0}; na = 0
+    acc = {"loss": 0.0, qm.key: 0.0}; na = 0
     vs = {0.0: {}}
     for step in range(1, cfg.train.steps + 1):
         s = nxt.result()
@@ -166,9 +173,15 @@ def train(cfg: Config, gpu=0):
         loss.backward()
         gn = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         opt.step(); sched.step()
-        acc["loss"] += loss.item(); acc["cos"] += float(st["cos"]); na += 1
-        if "vec_rel_l2" in st:
-            acc["rel"] = acc.get("rel", 0.0) + float(st["vec_rel_l2"])
+        acc["loss"] += loss.item(); na += 1
+        # the source's own train-time metrics, whatever it named them.
+        # detach first: a source may return its loss term among the
+        # metrics (Tessera's "mse" IS the loss), and float() on a
+        # grad-carrying tensor warns.
+        for k, val in st.items():
+            if k != "loss":
+                acc[k] = acc.get(k, 0.0) + float(
+                    val.detach() if torch.is_tensor(val) else val)
 
         if step % 100 == 0:
             a = {k: val / na for k, val in acc.items()}
@@ -176,54 +189,59 @@ def train(cfg: Config, gpu=0):
             now = time.time()
             sps = 100 / (now - t0)          # windowed, not cumulative
             t0 = now
-            print(f"step {step}: loss={a['loss']:.4f} cos={a['cos']:.4f} "
-                  + (f"rel={a['rel']:.4f} " if "rel" in a else "")
+            qstr = (f"{qm.key}={a[qm.key]:.4f} " if qm.key in a else "")
+            print(f"step {step}: loss={a['loss']:.4f} {qstr}"
                   + f"gn={gn:.2f} lr={sched.get_last_lr()[0]:.1e} "
                   f"{1000/sps:.0f}ms/step", flush=True)
             if use_wandb:
-                log = {"train/loss": a["loss"], "train/cos": a["cos"],
+                log = {"train/loss": a["loss"],
                        "train/grad_norm": float(gn),
                        "train/lr": sched.get_last_lr()[0],
                        "train/steps_per_s": sps,
                        "train/windows_per_s": sps * batch}
-                if "rel" in a:
-                    log["train/vec_rel_l2"] = a["rel"]
+                log.update({f"train/{k}": val for k, val in a.items()
+                            if k != "loss"})
                 if pool.cycle:
                     log["data/epochs"] = pool.epochs
                     log["data/reuse_per_patch"] = pool.reuse_estimate
                 wandb.log(log, step=step)
         if step % cfg.train.val_interval == 0 or step == cfg.train.steps:
             vs = validate_stage1(model, source, val_s, sigma_max, device,
-                                 trunc=cfg.model.sigma.truncate is not None)
-            ceil = vs[0.0]["cos"]
+                                 trunc=cfg.model.sigma.truncate is not None,
+                                 spec=report)
+            ceil = vs[0.0][qm.key]
             trunc = {k: v for k, v in vs.items() if isinstance(k, str)}
-            print(f"step {step} VAL ceiling(σ=0)={ceil:.4f}"
-                  + (f" rel={vs[0.0]['vec_rel_l2']:.4f}"
-                     if "vec_rel_l2" in vs[0.0] else "") + "  "
-                  + " ".join(f"σ{f:.2f}={vs[f]['cos']:.4f}"
+            extra0 = "".join(f" {m.key}={vs[0.0][m.key]:.4f}"
+                             for m in report.extra if m.key in vs[0.0])
+            print(f"step {step} VAL[{qm.key}] ceiling(σ=0)={ceil:.4f}"
+                  + extra0 + "  "
+                  + " ".join(f"σ{f:.2f}={vs[f][qm.key]:.4f}"
                              for f in SIG_FRACS[1:])
-                  + ("  " + " ".join(f"{k}={v['cos']:.4f}"
+                  + ("  " + " ".join(f"{k}={v[qm.key]:.4f}"
                                      for k, v in trunc.items())
                      if trunc else ""), flush=True)
             if use_wandb:
-                log = {f"val/cos_sigma{f:.2f}": vs[f]["cos"]
+                log = {f"val/{qm.key}_sigma{f:.2f}": vs[f][qm.key]
                        for f in SIG_FRACS}
-                log["val/ceiling_cos"] = ceil
-                log.update({f"val/ccos_sigma{f:.2f}": vs[f]["ccos"]
-                            for f in SIG_FRACS})
-                log.update({f"val/vec_rel_l2_sigma{f:.2f}": vs[f]["vec_rel_l2"]
-                            for f in SIG_FRACS if "vec_rel_l2" in vs[f]})
-                log.update({f"val/cos_{k}": v["cos"]
+                log[f"val/ceiling_{qm.key}"] = ceil
+                for m in report.extra:
+                    log.update({f"val/{m.key}_sigma{f:.2f}": vs[f][m.key]
+                                for f in SIG_FRACS if m.key in vs[f]})
+                log.update({f"val/{qm.key}_{k}": v[qm.key]
                             for k, v in trunc.items()})
                 # recon panels are meaningless for near-pixel windows
-                if step % cfg.train.fig_interval == 0 and cfg.model.window >= 16:
+                if (report.has_figure("recon")
+                        and step % cfg.train.fig_interval == 0
+                        and cfg.model.window >= 16):
                     fig = stage1_recon_figure(model, source, val_s,
-                                              sigma_max, step)
+                                              sigma_max, step,
+                                              preview=report.preview)
                     log["figs/recon"] = wandb.Image(fig); plt.close(fig)
                 wandb.log(log, step=step)
         if step % cfg.train.save_interval == 0 or step == cfg.train.steps:
             save_checkpoint(os.path.join(run_dir, "model.pt"), model, cfg,
-                            step, {"cos_sigma0": vs[0.0].get("cos")
+                            step, {"quality_key": qm.key,
+                                   f"{qm.key}_sigma0": vs[0.0].get(qm.key)
                                    if step >= cfg.train.val_interval else None})
     _fetcher.shutdown(wait=False, cancel_futures=True)
     pool.shutdown()

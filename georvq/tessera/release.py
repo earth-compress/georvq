@@ -174,7 +174,7 @@ class TesseraRelease:
 # --------------------------------------------------------------------------
 
 def build_bundle(out_dir, model, cfg, means, refine_residuals=None,
-                 step=0, notes=""):
+                 step=0, notes="", fp16=False):
     """Write a release bundle: weights, mean channel, refinement table.
 
     means:             (N, bands) window means from the training corpus
@@ -202,13 +202,15 @@ def build_bundle(out_dir, model, cfg, means, refine_residuals=None,
         extra += [table, json.dumps(REFINEMENT.to_json(), sort_keys=True).encode()]
     bid = save_release(
         out_dir, model, cfg, step=step, notes=notes, extra_id=extra,
+        fp16=fp16,
         meta={"source": "tessera",
               "bands": model.bands,
               "mean_channel": {"bits_per_band": bits,
                                "bits_per_window": ch.cost_bits()},
               "refinement": (REFINEMENT.to_json() if table is not None
                              else None),
-              "refine_by_default": REFINE_BY_DEFAULT})
+              "refine_by_default": REFINE_BY_DEFAULT,
+              "weight_dtype": "float16" if fp16 else "float32"})
     with open(os.path.join(out_dir, "bundle.json")) as f:
         return json.load(f)
 

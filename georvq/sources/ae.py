@@ -59,3 +59,10 @@ class AESource(Source):
     def recon_stats(self, out, x, valid):
         mse, cos = masked_recon_stats(out, x, valid)
         return mse, {"mse": mse, "cos": cos}
+
+    def report(self, model_cfg):
+        """Cosine on a unit-norm field, with the block-mean floor: the
+        published embeddings are exactly unit-norm, so the best constant
+        direction is the honest zero-rate reference."""
+        from georvq.sources.report import embedding_field_spec
+        return embedding_field_spec()

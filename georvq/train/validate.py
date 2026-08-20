@@ -8,7 +8,6 @@ import numpy as np
 import torch
 
 from georvq.config import TierSpec, parse_tier
-from georvq.metrics import centered_cos
 from georvq.model.codec import tuple_bits
 
 
@@ -37,19 +36,42 @@ def canonical_tuples(specs, mins=None):
 
 @torch.no_grad()
 def validate(model, source, val_s, tuples, canon_names=(), val_loc=None,
-             quantized=True):
+             quantized=True, spec=None):
     """val_s: raw val tokens resident on the eval device (converted per
     chunk). val_loc: per-token location embeddings when the model carries a
-    conditioner/selector. Returns (scalars dict, cos-by-tuple dict)."""
+    conditioner/selector. `spec`: the run's resolved `ReportSpec`, which
+    names the headline quality metric, the extra diagnostics and the
+    zero-rate baselines -- nothing here knows what a cosine is.
+
+    Returns (scalars dict, quality-by-tuple dict). Scalar keys are built
+    from the metric keys, so an embedding field still publishes
+    `cos_ceiling` / `cos_blockmean` while a scalar field publishes
+    `r2_ceiling` and no block-mean at all.
+    """
+    if spec is None:        # ad-hoc callers (tests, scripts): unnarrowed
+        spec = source.report(getattr(model, "cfg", None))
+    q = spec.quality
     was_training = model.training
     model.eval()
     specs = model.specs
-    out, cos_by_tuple, ccos_by_tuple = {}, {}, {}
+    out, q_by_tuple = {}, {}
+    extra_by_tuple = {m.key: {} for m in spec.extra}
     vchunk = max(64, 65536 // specs[-1].cells)
     chunks = []
     for i in range(0, val_s.shape[0], vchunk):
         x, v = source.prep(val_s[i:i + vchunk], val_s.device)
         chunks.append((x, v, val_loc[i:i + vchunk] if val_loc is not None else None))
+
+    def _baselines():
+        """Zero-rate reference points, scored with the run's own metric."""
+        for b in spec.baselines:
+            tot, n_tot = 0.0, 0
+            for x, v, _ in chunks:
+                n = int(v.sum())
+                tot += float(q(b.fn(x, v), x, v)) * n
+                n_tot += n
+            out[f"{q.key}_{b.key}"] = tot / max(n_tot, 1)
+
     if not quantized:
         # VQ-free warmup: the codebooks hold whatever nn.Embedding was
         # initialised with, so every quantized tuple would be measuring the
@@ -57,29 +79,24 @@ def validate(model, source, val_s, tuples, canon_names=(), val_loc=None,
         # quantization per validation, producing numbers that look like
         # results and are not. Only the unquantized ceiling means anything
         # until the books are fitted.
-        ceil_sum = [0.0, 0, 0.0]
-        bm_sum, bm_n = 0.0, 0
+        ceil = {m.key: [0.0, 0] for m in spec.metrics}
         for cx, cv, _ in chunks:
             o = model.eval_ceiling(cx, valid=cv)
             n = int(cv.sum())
-            ceil_sum[0] += float(source.recon_stats(o, cx, cv)[1]["cos"]) * n
-            ceil_sum[1] += n
-            ceil_sum[2] += float(centered_cos(o, cx, cv)) * n
-            vm = cv.unsqueeze(1).float()
-            mean = (cx * vm).sum((2, 3)) / vm.sum((2, 3)).clamp_min(1)
-            mean = torch.nn.functional.normalize(mean, dim=1)
-            bm_sum += float((mean[:, :, None, None].expand_as(cx)
-                             * cx).sum(1)[cv].sum()); bm_n += n
-        out["cos_ceiling"] = ceil_sum[0] / ceil_sum[1]
-        out["ccos_ceiling"] = ceil_sum[2] / ceil_sum[1]
-        out["cos_blockmean"] = bm_sum / bm_n
-        out["_ccos"] = {}
+            for m in spec.metrics:
+                ceil[m.key][0] += float(m(o, cx, cv)) * n
+                ceil[m.key][1] += n
+        for k, (tot, n) in ceil.items():
+            out[f"{k}_ceiling"] = tot / max(n, 1)
+        _baselines()
+        out["_extra"] = {}
         if was_training:
             model.train()
         return out, {}
 
-    sums = {tname(t): [0.0, 0, 0.0] for t in tuples}
-    ceil_sum = [0.0, 0, 0.0]
+    sums = {tname(t): [0.0, 0] for t in tuples}
+    esums = {m.key: {tname(t): [0.0, 0] for t in tuples} for m in spec.extra}
+    ceil = {m.key: [0.0, 0] for m in spec.metrics}
     track_cd = model.conditioner is not None
     cd_sum = [np.zeros(sp.depth + 1) for sp in specs] if track_cd else None
     cd_n = 0
@@ -95,22 +112,27 @@ def validate(model, source, val_s, tuples, canon_names=(), val_loc=None,
         n = int(cv.sum())
         for t in tuples:
             o = model.eval_tuple(cums, t, cx, valid=cv)
-            c = source.quality(o, cx, cv)
-            s = sums[tname(t)]; s[0] += float(c) * n; s[1] += n
+            s = sums[tname(t)]; s[0] += float(q(o, cx, cv)) * n; s[1] += n
+            # the extras are the expensive ones and only the canonical
+            # operating points are ever read, so skip the rest
             if tname(t) in canon_names:
-                s[2] += float(centered_cos(o, cx, cv)) * n
+                for m in spec.extra:
+                    e = esums[m.key][tname(t)]
+                    e[0] += float(m(o, cx, cv)) * n; e[1] += n
         o = model.eval_ceiling(cx, valid=cv)
-        c = source.quality(o, cx, cv)
-        ceil_sum[0] += float(c) * n; ceil_sum[1] += n
-        ceil_sum[2] += float(centered_cos(o, cx, cv)) * n
+        for m in spec.metrics:
+            ceil[m.key][0] += float(m(o, cx, cv)) * n
+            ceil[m.key][1] += n
     for t in tuples:
         s = sums[tname(t)]
-        cos_by_tuple[tname(t)] = s[0] / s[1]
-        if tname(t) in canon_names:
-            ccos_by_tuple[tname(t)] = s[2] / s[1]
-    out["cos_ceiling"] = ceil_sum[0] / ceil_sum[1]
-    out["ccos_ceiling"] = ceil_sum[2] / ceil_sum[1]
-    out["_ccos"] = ccos_by_tuple
+        q_by_tuple[tname(t)] = s[0] / s[1]
+        for m in spec.extra:
+            e = esums[m.key][tname(t)]
+            if e[1]:
+                extra_by_tuple[m.key][tname(t)] = e[0] / e[1]
+    for k, (tot, n) in ceil.items():
+        out[f"{k}_ceiling"] = tot / max(n, 1)
+    out["_extra"] = extra_by_tuple
 
     # codebook health per tier/level (on one chunk)
     cx, cv, cloc = chunks[0]
@@ -118,21 +140,13 @@ def validate(model, source, val_s, tuples, canon_names=(), val_loc=None,
     if model.selector is not None:
         out.update(model.selector.diagnostics(model, cx, cloc, cv))
 
-    # block-mean baseline (accumulated per chunk)
-    bm_sum, bm_n = 0.0, 0
-    for x, v, _ in chunks:
-        vm = v.unsqueeze(1).float()
-        mean = (x * vm).sum((2, 3)) / vm.sum((2, 3)).clamp_min(1)
-        mean = torch.nn.functional.normalize(mean, dim=1)
-        bm = mean[:, :, None, None].expand_as(x)
-        bm_sum += float((bm * x).sum(1)[v].sum()); bm_n += int(v.sum())
-    out["cos_blockmean"] = bm_sum / bm_n
+    _baselines()
     if track_cd and cd_n:
         out["cosdist"] = [(cd_sum[ti] / cd_n).tolist()
                           for ti in range(len(specs))]
     if was_training:
         model.train()
-    return out, cos_by_tuple
+    return out, q_by_tuple
 
 
 def load_rd_ref(spec_str):
@@ -147,7 +161,9 @@ def load_rd_ref(spec_str):
     else:
         path, lvls, ref_window, label = parts
         ref_specs = [TierSpec(**parse_tier(t)) for t in lvls.split(",")]
-        cbt = json.load(open(path))["cos_by_tuple"]
+        blob = json.load(open(path))
+        # runs before the per-source report layer wrote "cos_by_tuple"
+        cbt = blob.get("quality_by_tuple") or blob["cos_by_tuple"]
         px = float(ref_window) ** 2
         pts = sorted((tuple_bits(ref_specs, [int(v) for v in k.split("-")])
                       / px, c) for k, c in cbt.items())

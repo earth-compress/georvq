@@ -9,40 +9,55 @@ import numpy as np
 import torch
 
 from georvq.model.codec import tuple_bits
+from georvq.sources.report import PCA_RGB
 from georvq.train.validate import canonical_tuples, tname
 
 
-def rd_figure(cos_by_tuple, vs, specs, tuples, step, ref_fronts=(), px=256,
-              dist_log=False, side_bits=0.0):
-    """dist_log=True: y = 1 - cos on a log scale (separates the 0.99x's)."""
+def rd_figure(q_by_tuple, vs, specs, tuples, step, spec, ref_fronts=(),
+              px=256, dist_log=False, side_bits=0.0):
+    """Rate-distortion scatter for the run's own quality metric.
+
+    `spec` is the resolved `ReportSpec`: it supplies the axis label, which
+    direction is better, and the baselines to draw. dist_log=True plots
+    `1 - m` on a log scale (separates the 0.99x's) and is only offered for
+    a bounded metric -- `resolve_report` drops it otherwise, since there is
+    no such transform for an RMSE or an angle in radians.
+    """
+    q = spec.quality
     bits = np.array([tuple_bits(specs, t, side_bits) for t in tuples]) / px
-    cos = np.array([cos_by_tuple[tname(t)] for t in tuples])
+    vals = np.array([q_by_tuple[tname(t)] for t in tuples])
     L0s = np.array([t[0] for t in tuples])
     Y = (lambda c: 1.0 - np.asarray(c)) if dist_log else \
         (lambda c: np.asarray(c))
     fig, ax = plt.subplots(figsize=(6.5, 4.5), constrained_layout=True)
-    sc = ax.scatter(bits, Y(cos), c=L0s, cmap="viridis", s=22, zorder=3)
+    sc = ax.scatter(bits, Y(vals), c=L0s, cmap="viridis", s=22, zorder=3)
     for label, front in ref_fronts:
         fb, fc = zip(*front)
         ax.plot(fb, Y(fc), "--", lw=1.2, alpha=0.8, label=label)
     fig.colorbar(sc, label="L0 (coarse depth)")
-    # Pareto front
+    # Pareto front -- "better" is metric-dependent: an angle or an RMSE
+    # improves DOWNWARD, so the frontier tracks the running min there.
     order = np.argsort(bits)
-    fb, fc, best = [], [], -1
+    fb, fc = [], []
+    best = -np.inf if q.higher_better else np.inf
     for i in order:
-        if cos[i] > best:
-            fb.append(bits[i]); fc.append(cos[i]); best = cos[i]
+        if (vals[i] > best) if q.higher_better else (vals[i] < best):
+            fb.append(bits[i]); fc.append(vals[i]); best = vals[i]
     ax.plot(fb, Y(fc), "k-", lw=1, alpha=0.6, label="Pareto front")
-    ax.axhline(Y(vs["cos_ceiling"]), color="r", ls="--", lw=1,
-               label=f"ceiling ({vs['cos_ceiling']:.4f})")
-    ax.axhline(Y(vs["cos_blockmean"]), color="grey", ls=":", lw=1,
-               label=f"block-mean ({vs['cos_blockmean']:.4f})")
+    ceil = vs[f"{q.key}_ceiling"]
+    ax.axhline(Y(ceil), color="r", ls="--", lw=1,
+               label=f"ceiling ({ceil:.4f})")
+    for b in spec.baselines:
+        bv = vs.get(f"{q.key}_{b.key}")
+        if bv is not None:
+            ax.axhline(Y(bv), color="grey", ls=":", lw=1,
+                       label=f"{b.label} ({bv:.4f})")
     if dist_log:
         ax.set(xscale="log", yscale="log", xlabel="bits / pixel",
-               ylabel="1 - cosine (log)", ylim=(1e-3, 1e-1),
+               ylabel=f"1 - {q.label} (log)", ylim=(1e-3, 1e-1),
                title=f"pyramid R-D (distortion) @ step {step}")
     else:
-        ax.set(xscale="log", xlabel="bits / pixel", ylabel="cosine",
+        ax.set(xscale="log", xlabel="bits / pixel", ylabel=q.label,
                title=f"pyramid R-D @ step {step}")
     ax.grid(alpha=0.3, which="both")
     ax.legend(fontsize=7, loc="lower left" if dist_log else "lower right")
@@ -146,28 +161,16 @@ def cosdist_figure(cosdist, baseline, specs, step):
     return fig
 
 
-def pca_rgb_basis(x, valid):
-    """Fit a 3-PC RGB rendering basis on valid pixels of a batch."""
-    C = x.shape[1]
-    flat = x.permute(0, 2, 3, 1).reshape(-1, C)[valid.reshape(-1)]
-    mu = flat.mean(0)
-    _, _, v = torch.linalg.svd(flat - mu, full_matrices=False)
-    pcs = v[:3]
-    proj = (flat - mu) @ pcs.T
-    lo = torch.quantile(proj, 0.02, 0)
-    hi = torch.quantile(proj, 0.98, 0)
-    return mu, pcs, lo, hi
-
-
-def _pca_rgb(t, basis):
-    mu, pcs, lo, hi = basis
-    rgb = ((t.permute(0, 2, 3, 1) - mu) @ pcs.T - lo) / (hi - lo)
-    return rgb.clamp(0, 1).cpu().numpy()
+# Back-compat aliases: the PCA-RGB renderer moved into the report layer so
+# that a source can declare a different one (grayscale relief, true colour)
+# instead of every plane being forced through three principal components.
+pca_rgb_basis = PCA_RGB.basis
+_pca_rgb = PCA_RGB.render
 
 
 @torch.no_grad()
 def recon_figure(model, source, val_s, step, n=8, mins=None, tuples=None,
-                 val_loc=None):
+                 val_loc=None, preview=PCA_RGB):
     """Original vs reconstructions at named depth tuples, PCA-RGB rendered."""
     # eval() is load-bearing, not hygiene: VectorQuantizer.forward runs its
     # lazy `_data_init` under `self.training`, so drawing this figure in
@@ -180,13 +183,14 @@ def recon_figure(model, source, val_s, step, n=8, mins=None, tuples=None,
     model.eval()
     try:
         return _recon_figure(model, source, val_s, step, n, mins, tuples,
-                             val_loc)
+                             val_loc, preview)
     finally:
         if was_training:
             model.train()
 
 
-def _recon_figure(model, source, val_s, step, n, mins, tuples, val_loc):
+def _recon_figure(model, source, val_s, step, n, mins, tuples, val_loc,
+                  preview):
     """Reconstruction contact sheet: the original over one row per depth
     tuple, projected to RGB through a shared PCA basis.
 
@@ -205,11 +209,11 @@ def _recon_figure(model, source, val_s, step, n, mins, tuples, val_loc):
     rows = {"orig": val_x}
     for name, t in pts.items():
         rows[f"{name}\n({tname(t)})"] = model.eval_tuple(cums, t, val_x)
-    basis = pca_rgb_basis(val_x, val_valid)
+    basis = preview.basis(val_x, val_valid)
     fig, axes = plt.subplots(len(rows), n, figsize=(1.3 * n, 1.45 * len(rows)),
                              constrained_layout=True)
     for r, (name, t) in enumerate(rows.items()):
-        rgb = _pca_rgb(t, basis)
+        rgb = preview.render(t, basis)
         for c in range(n):
             axes[r, c].imshow(rgb[c]); axes[r, c].axis("off")
         axes[r, 0].axis("on"); axes[r, 0].set_xticks([])
@@ -219,7 +223,8 @@ def _recon_figure(model, source, val_s, step, n, mins, tuples, val_loc):
 
 
 @torch.no_grad()
-def stage1_recon_figure(model, source, val_s, sigma_max, step, n=6):
+def stage1_recon_figure(model, source, val_s, sigma_max, step, n=6,
+                        preview=PCA_RGB):
     """Original vs sigma-sweep reconstructions (stage-1 continuous mode)."""
     was_training = model.training
     model.eval()
@@ -227,14 +232,14 @@ def stage1_recon_figure(model, source, val_s, sigma_max, step, n=6):
     var = x.reshape(x.shape[0], x.shape[1], -1).var(-1).mean(-1)
     sel = var.topk(min(n, x.shape[0])).indices
     x = x[sel]; valid = valid[sel]
-    basis = pca_rgb_basis(x, valid)
+    basis = preview.basis(x, valid)
     n_tiers = len(model.specs)
-    rows = [("orig", _pca_rgb(x, basis))]
+    rows = [("orig", preview.render(x, basis))]
     for fr in (0.0, 0.25, 0.5, 1.0):
         sig = torch.full((x.shape[0], n_tiers), sigma_max * fr,
                          device=x.device)
         rows.append((f"σ={fr:.2f}×max",
-                     _pca_rgb(model.forward_stage1(x, sig), basis)))
+                     preview.render(model.forward_stage1(x, sig), basis)))
     fig, axes = plt.subplots(len(rows), x.shape[0],
                              figsize=(1.4 * x.shape[0], 1.5 * len(rows)),
                              constrained_layout=True)
