@@ -20,7 +20,7 @@ import torch
 
 from georvq.config import Config, VQConfig
 from georvq.data.pool import ChipPool, fixed_val_tokens
-from georvq.data.store import ChipStore
+from georvq.data.store import open_store
 from georvq.factory import build_model
 from georvq.model.codec import (monotone_tuples, path_tuples,
                                 sample_monotone_depths,
@@ -30,8 +30,8 @@ from georvq.model.vqinit import residual_init_rvq
 from georvq.repro import (run_metadata, save_checkpoint, seed_all,
                           write_resolved_config)
 from georvq.train.figures import (codebook_figure, cosdist_figure,
-                                   rd_figure, recon_figure,
-                                   reset_figure)
+                                   error_hist_figure, rd_figure,
+                                   recon_figure, reset_figure)
 from georvq.train.validate import canonical_tuples, load_rd_ref, tname, validate
 from georvq.train import dist as D
 from georvq.train.warmstart import (decoder_tail_names, freeze_books,
@@ -66,11 +66,19 @@ def setup_data(cfg: Config, source, device):
     rank still draws from ALL training chips and refreshes from disk at
     the configured rate, so this costs no corpus coverage -- it only
     halves how much each rank holds in RAM at any moment. Seeds are
-    offset by rank so ranks hold and sample different chips."""
-    store = ChipStore(cfg.data.store_dir)
+    offset by rank so ranks hold and sample different chips.
+
+    val_frac=0 is closed-distribution mode (compress a fixed corpus):
+    train on every chip and let "val" measure training-set fit."""
+    store = open_store(cfg.data.store_dir)
     train_rows, val_rows = store.split(cfg.data.val_frac,
                                        seed=cfg.data.split_seed)
-    if D.is_main():
+    if cfg.data.val_frac == 0:
+        val_rows = train_rows
+        if D.is_main():
+            print(f"data: {len(store.index)} chips, closed distribution "
+                  "(val tokens drawn from train chips)", flush=True)
+    elif D.is_main():
         print(f"data: {len(store.index)} chips -> {len(train_rows)} train / "
               f"{len(val_rows)} val", flush=True)
     if cfg.data.limit_chips:

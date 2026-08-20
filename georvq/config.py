@@ -219,7 +219,8 @@ class RateConfig(StrictModel):
 
 
 class LocationConfig(StrictModel):
-    encoder: Literal["satclip"] = "satclip"
+    encoder: Literal["satclip", "sphharm"] = "satclip"
+    degree: int = 40    # sphharm only: SH band limit (degree^2 features)
     standardize: bool = True
 
 
@@ -273,6 +274,10 @@ class ModelConfig(StrictModel):
     # rises to 0.197).
     depth_sampling: Literal["nested", "path"] = "nested"
     ff_ratio: float = 2.0
+    # L2-normalize per-cell latents (x sqrt(dim)) in encode_levels — REQUIRED
+    # when warm-starting from a stage-1 checkpoint (its decoder only ever saw
+    # normalized latents); default off preserves all legacy checkpoints
+    norm_latents: bool = False
     tokenizer: TokenizerConfig = Field(default_factory=TokenizerConfig)
     decoder: DecoderConfig = Field(default_factory=DecoderConfig)
     vq: Optional[VQConfig] = Field(default_factory=VQConfig)

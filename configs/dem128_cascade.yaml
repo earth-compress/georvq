@@ -1,0 +1,36 @@
+# DEM128 with the SatCLIP predict-and-subtract cascade: a frozen
+# location->coarse prior (pretrained on copdem_356 latents from the
+# dem128_overnight_resume codec) plus trainable cross-tier predictors;
+# the codebooks quantize the residuals. Encoder frozen for the whole run,
+# same as cascade.yaml. Hypothesis check: SatCLIP embeddings carry more
+# climate/land-cover than relief signal, so the win may be small — the
+# coarse-tier residual entropy vs dem128_overnight_resume is the readout.
+# Prior:
+#   python scripts/pretrain_location_prior.py \
+#       --store-dir /data/georvq-stores/copdem_356 \
+#       --encoder-ckpt checkpoints/dem128_overnight_resume/model_best.pt \
+#       --out checkpoints/location_prior/dem128.pt
+inherit: dem128.yaml
+
+model:
+  vq:
+    dead_threshold: 0.01
+    warmup_steps: 2000   # k-means re-init: codebooks now quantize residuals
+  conditioning:
+    kind: cascade
+    coarse_prior_ckpt: checkpoints/location_prior/dem128.pt
+    location: {encoder: satclip, standardize: true}
+    hidden: 512
+    layers: 3
+
+train:
+  steps: 60000
+  init_from: checkpoints/dem128_overnight_resume/model_best.pt
+  freeze_encoder_steps: 60000
+  # fine-tune schedule (init from a trained codec), not dem128's hot LR
+  optim: {lr: 2.5e-4, wd: 0.01, warmup: 500}
+  val_interval: 1000
+  fig_interval: 4000
+
+log:
+  run_tag: dem128_cascade
