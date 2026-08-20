@@ -210,20 +210,36 @@ class S2Source(Source):
         channel -- scoring against it would be scoring against part of the
         bitstream.
 
-        CAVEAT ON THE ANGLE. `prep` standardizes each band per tile before
-        the model sees anything, so this measures the angle between
-        STANDARDIZED ANOMALY vectors, not between reflectance spectra. It
-        is still the right shape of metric -- scale-invariant, sensitive to
-        the relative pattern across bands rather than to overall
-        brightness -- but it is not the spectral angle a remote-sensing
-        reader will assume, and the two do not have the same numeric scale
-        (random anomaly vectors sit at pi/2; random reflectance spectra,
-        being all-positive, sit far below it). Reporting true-reflectance
-        SAM means denormalizing through `last_stats()` first; until that
-        exists, the label says what is actually computed.
+        WHY R2 AND NOT THE SPECTRAL ANGLE. The angle is arccos of a
+        per-pixel cosine, so it is a DIRECTION-ONLY measure: it discards
+        how bright a pixel is relative to its window and reads only the
+        pattern across bands. `docs/SOURCE_ONBOARDING.md` makes magnitude
+        spread the deciding test -- AlphaEarth is exactly unit-norm so
+        cosine is unarguable there, Tessera spans 1.57x so an absolute
+        loss measures something real -- and S2 spans **6.6x**, the widest
+        of any source in that table. It is the strongest case for an
+        absolute metric, not the weakest.
+
+        It also has to agree with the objective: the loss is MSE, so
+        selecting `model_best.pt` on a direction metric would select on
+        something the run is not optimising. R2 here is
+        `1 - sum_g MSE_g / sum_g Var_g` over the three native grids,
+        weighted per group exactly as the loss weights them. On
+        standardized inputs the denominator is ~1 per band, so R2 reads as
+        one minus the loss -- the interpretable form of the same number.
+
+        The angle stays as a diagnostic, because band RATIOS are what
+        spectral indices read and a model can degrade them while its MSE
+        looks fine. Note it is computed on standardized ANOMALY vectors,
+        not reflectance spectra, so it is not the SAM a remote-sensing
+        reader expects (random anomalies sit at pi/2; random all-positive
+        reflectance sits far below); true-reflectance SAM needs
+        denormalizing through `last_stats()` first.
         """
         from georvq.sources.report import (FIGURES, Metric, ReportSpec,
                                            band_rgb_preview)
+        r2 = Metric("r2", "R² (variance explained)", _s2_r2,
+                    higher_better=True, bounded=True)
         sam = Metric("sam", "spectral angle, standardized (rad)", _s2_sam,
                      higher_better=False, bounded=False)
         rmse = Metric("rmse", "RMSE (standardized)", _s2_rmse,
@@ -235,13 +251,30 @@ class S2Source(Source):
         # across three native grids. A per-group version would be worth
         # having; it is not this figure.
         return ReportSpec(
-            quality=sam, extra=(rmse,), baselines=(),
+            quality=r2, extra=(rmse, sam), baselines=(),
             figures=tuple(f for f in FIGURES if f != "error_hist"),
             preview=band_rgb_preview(2, 1, 0, select=_s2_10m))
 
 
 def _s2_10m(t):
     return t["10m"] if isinstance(t, dict) else t
+
+
+def _s2_r2(out, x, valid):
+    """Variance explained across all three native grids.
+
+    Per-group MSE over per-group variance, summed with equal group weight
+    so the metric weights the grids the way `recon_stats` weights them.
+    Unmasked, for the same reason the loss is: S2 L1C is 99.5% valid and
+    the loss the model actually minimises does not mask either, so a
+    masked metric would report on a different quantity than the objective.
+    """
+    num, den = 0.0, 0.0
+    for name in GROUPS:
+        t = x[name]
+        num = num + (t - out[name]).pow(2).mean()
+        den = den + t.var()
+    return 1.0 - num / den.clamp_min(1e-8)
 
 
 def _s2_sam(out, x, valid):
