@@ -172,3 +172,39 @@ class S2Source(Source):
         err = ((out["10m"] - x["10m"]) ** 2).mean(1)
         losses["cos"] = 1.0 - err[valid].mean().clamp(max=1.0)
         return total / len(GROUPS), losses
+
+    def report(self, model_cfg):
+        """Reflectance, not an embedding field, so nothing here is
+        inherited: quality is the spectral angle (it reads the band RATIOS
+        that indices and classifiers use, which a per-band MSE averages
+        away), RMSE accompanies it in standardized units, and the preview
+        is true colour off the 10m group rather than a PCA projection.
+        There is no block-mean floor because the per-tile mean is already
+        transmitted as a side channel -- scoring against it would be
+        scoring against part of the bitstream.
+        """
+        from georvq.sources.report import (Metric, ReportSpec,
+                                           band_rgb_preview)
+        sam = Metric("sam", "spectral angle (rad)", _s2_sam,
+                     higher_better=False, bounded=False)
+        rmse = Metric("rmse", "RMSE (standardized)", _s2_rmse,
+                      higher_better=False, bounded=False)
+        # R=B04, G=B03, B=B02 within the 10m group's band order; the
+        # preview selects that group out of the model's dict output.
+        return ReportSpec(
+            quality=sam, extra=(rmse,), baselines=(),
+            preview=band_rgb_preview(2, 1, 0, select=_s2_10m))
+
+
+def _s2_10m(t):
+    return t["10m"] if isinstance(t, dict) else t
+
+
+def _s2_sam(out, x, valid):
+    from georvq.metrics import spectral_angle
+    return spectral_angle(_s2_10m(out), _s2_10m(x), valid)
+
+
+def _s2_rmse(out, x, valid):
+    from georvq.metrics import masked_rmse
+    return masked_rmse(_s2_10m(out), _s2_10m(x), valid)
