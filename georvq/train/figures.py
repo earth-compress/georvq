@@ -254,3 +254,56 @@ def stage1_recon_figure(model, source, val_s, sigma_max, step, n=6,
     if was_training:
         model.train()
     return fig
+
+
+@torch.no_grad()
+def error_hist_figure(model, source, val_s, step, tuples=None, mins=None,
+                      val_loc=None, max_tokens=1024, chunk=128,
+                      unit="source units"):
+    """Signed reconstruction-error histograms, one colored line per depth
+    tuple (default: the canonical R-D points): model (normalized) space
+    plus, when the source has a per-tile normalizer, the denormalized
+    source units (e.g. DEM metres)."""
+    was_training = model.training
+    model.eval()
+    pts = ({tname(t): t for t in tuples} if tuples
+           else canonical_tuples(model.specs, mins))
+    norm = source.normalizer(source.cfg)
+    rel = {k: [] for k in pts}
+    absu = {k: [] for k in pts} if norm is not None else None
+    for i in range(0, min(max_tokens, val_s.shape[0]), chunk):
+        x, v = source.prep(val_s[i:i + chunk], val_s.device)
+        loc = val_loc[i:i + chunk] if val_loc is not None else None
+        _, cums = model.level_cumsums(x, loc=loc)
+        stats = source.last_stats() if norm is not None else None
+        for k, t in pts.items():
+            out = model.eval_tuple(cums, t, x).float()
+            m = v.unsqueeze(1).expand_as(out)
+            rel[k].append((out - x)[m].cpu())
+            if norm is not None:
+                absu[k].append((norm.denormalize(out, stats)
+                                - norm.denormalize(x, stats))[m].cpu())
+    panels = [("model space (per-tile normalized)", rel)]
+    if absu is not None:
+        panels.append((unit, absu))
+    colors = plt.cm.viridis(np.linspace(0.1, 0.9, len(pts)))
+    fig, axes = plt.subplots(1, len(panels), figsize=(5.2 * len(panels), 3.6),
+                             constrained_layout=True, squeeze=False)
+    for ax, (name, errs) in zip(axes[0], panels):
+        es = {k: torch.cat(v).numpy() for k, v in errs.items()}
+        lim = max(np.quantile(np.abs(e), 0.999) for e in es.values())
+        edges = np.linspace(-lim, lim, 202)
+        for c, (k, e) in zip(colors, es.items()):
+            h, _ = np.histogram(np.clip(e, -lim, lim), bins=edges)
+            ax.stairs(h, edges, color=c, lw=1.2,
+                      label=f"{k}  rmse={np.sqrt((e ** 2).mean()):.3g}  "
+                            f"med={np.median(e):.2g}")
+        ax.set_yscale("log")
+        ax.axvline(0, color="k", lw=0.8)
+        ax.set_title(name, fontsize=9)
+        ax.set_xlabel("error (out - x)", fontsize=8)
+        ax.legend(fontsize=6.5)
+    fig.suptitle(f"recon error by depth tuple, step {step}", fontsize=9)
+    if was_training:
+        model.train()
+    return fig

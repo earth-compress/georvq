@@ -12,6 +12,15 @@ def masked_recon_stats(out, x, valid):
     return mse, cos
 
 
+def masked_r2(out, x, valid, eps=1e-8):
+    """Variance explained: 1 - MSE/Var over valid pixels. The quality metric
+    for standardized non-unit-norm sources, where the plain channel dot
+    product is an unbounded covariance (amplitude overshoot reads > 1)."""
+    err = ((out - x) ** 2).sum(1)[valid].mean()
+    var = (x ** 2).sum(1)[valid].mean()
+    return 1 - err / var.clamp_min(eps)
+
+
 def centered_cos(out, x, valid, eps=1e-8):
     """Spatial-structure probe: per-pixel cosine after subtracting each
     token's own valid-pixel mean from both sides. A constant (block-mean)

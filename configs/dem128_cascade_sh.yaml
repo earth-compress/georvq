@@ -1,0 +1,26 @@
+# STATUS 2026-07-12: not launched. The sphharm prior never beat the mean
+# out-of-sample (deg40 flat: val R^2 -0.58; deg20+bottleneck+dropout:
+# -0.09) — raw position carries ~no OOS signal about standardized relief.
+# Kept for a corpus-fit variant (high degree, no early stop, prior params
+# counted against rate), where memorization is the point.
+#
+# SatCLIP ablation: same predict-and-subtract cascade as dem128_cascade,
+# but the location features are raw analytic spherical harmonics — the
+# prior MLP becomes our own INR fit to the DEM corpus, with no pretrained
+# geography. degree=40 band-limits it to ~4.5 deg (a smooth global relief-
+# statistics map, not chip memorization); degree is the capacity knob.
+# Prior:
+#   python scripts/pretrain_location_prior.py \
+#       --store-dir /data/georvq-stores/copdem_356 \
+#       --encoder-ckpt checkpoints/dem128_overnight_resume/model_best.pt \
+#       --encoder sphharm --degree 40 \
+#       --out checkpoints/location_prior/dem128_sh40.pt
+inherit: dem128_cascade.yaml
+
+model:
+  conditioning:
+    coarse_prior_ckpt: checkpoints/location_prior/dem128_sh40.pt
+    location: {encoder: sphharm, degree: 40, standardize: true}
+
+log:
+  run_tag: dem128_cascade_sh

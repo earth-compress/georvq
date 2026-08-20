@@ -199,7 +199,8 @@ def band_rgb_preview(r, g, b, select=None) -> Preview:
 # Figures the trainer knows how to draw. `cosdist` additionally requires a
 # conditioned model (it plots the per-tier prior-to-level cascade), and
 # `rd_log` an unbounded-free metric; both are filtered where inapplicable.
-FIGURES = ("rd", "rd_log", "codebook", "recon", "reset", "cosdist")
+FIGURES = ("rd", "rd_log", "codebook", "recon", "reset", "cosdist",
+           "error_hist")
 
 
 @dataclass(frozen=True)
@@ -210,6 +211,10 @@ class ReportSpec:
     baselines: tuple[Baseline, ...] = ()
     figures: tuple[str, ...] = FIGURES
     preview: Optional[Preview] = None
+    #: Physical unit of the source's DEQUANTIZED values (e.g. "metres").
+    #: Only the error histogram uses it, to label the panel it draws in
+    #: source units via the normalizer; "source units" when unstated.
+    units: str = "source units"
 
     @property
     def metrics(self) -> tuple[Metric, ...]:
@@ -235,16 +240,25 @@ def embedding_field_spec(preview=PCA_RGB) -> ReportSpec:
     a coarse-only decode reading 0.9154 while contributing no spatial
     structure is exactly the failure it catches.
     """
+    # no error histogram: without a per-tile normalizer its second panel
+    # is a duplicate of the first, so it costs a decode for nothing
     return ReportSpec(quality=COS, extra=(CCOS,), baselines=(BLOCKMEAN,),
-                      preview=preview)
+                      preview=preview,
+                      figures=tuple(f for f in FIGURES if f != "error_hist"))
 
 
-def scalar_field_spec(quality=R2, preview=GRAY) -> ReportSpec:
+def scalar_field_spec(quality=R2, preview=GRAY,
+                      units="source units") -> ReportSpec:
     """The reporting surface for a single-plane scalar field (elevation,
     backscatter): variance explained plus RMSE, no direction-based metric,
-    no unit-norm block-mean floor, and a grayscale preview."""
+    no unit-norm block-mean floor, and a grayscale preview.
+
+    Includes the signed-error histogram, which such a source can render in
+    its own physical unit (`units`) through its normalizer -- the form the
+    result is actually judged in.
+    """
     return ReportSpec(quality=quality, extra=(RMSE,), baselines=(),
-                      preview=preview)
+                      preview=preview, units=units)
 
 
 def replace_extra(spec, add=(), drop=()) -> ReportSpec:

@@ -141,10 +141,10 @@ def test_grad_clip_is_on_by_default_and_bounds_the_update():
     unclipped batch blew up a run at step 1900 and Adam never recovered."""
     from georvq.config import load_config
     cfg = load_config("configs/smoke.yaml", [])
-    assert cfg.train.optim.grad_clip == 1.0, "clipping must default ON"
+    assert cfg.model.vq.clip_norm == 1.0, "clipping must default ON"
 
     ps = [torch.nn.Parameter(torch.zeros(4))]
     ps[0].grad = torch.full((4,), 1e6)          # a pathological gradient
-    n = float(torch.nn.utils.clip_grad_norm_(ps, cfg.train.optim.grad_clip))
+    n = float(torch.nn.utils.clip_grad_norm_(ps, cfg.model.vq.clip_norm))
     assert n > 1e6, "clip_grad_norm_ must report the PRE-clip norm"
     assert abs(float(ps[0].grad.norm()) - 1.0) < 1e-4, "grad not clipped"

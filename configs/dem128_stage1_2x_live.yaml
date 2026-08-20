@@ -1,0 +1,14 @@
+# The 2x-trunk stage-1 on the global live COPDEM store (same pool recipe
+# as dem128_stage1_live).
+inherit: dem128_stage1_2x.yaml
+
+data:
+  store_dir: /data/georvq-stores/copdem_live
+  pool:
+    size: 470000
+    workers: 6
+    refresh_per_s: 100.0
+    cycle: true
+
+log:
+  run_tag: dem128_stage1_2x_live

@@ -1,0 +1,17 @@
+# dem128_stage1 on the GLOBAL live COPDEM store (1.57M Major-TOM cells,
+# windowed reads from the GLO-30 COGs — see georvq/data/live_dem.py).
+# Coverage pool is impossible at this scale (~330 GiB); FIFO cycle pool
+# capped at ~100 GiB (470k strip slots of 160x356 float32), one epoch =
+# a full sweep of every (chip, row-band) tile.
+inherit: dem128_stage1.yaml
+
+data:
+  store_dir: /data/georvq-stores/copdem_live
+  pool:
+    size: 470000
+    workers: 6
+    refresh_per_s: 100.0
+    cycle: true
+
+log:
+  run_tag: dem128_stage1_live

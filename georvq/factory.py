@@ -46,8 +46,8 @@ def from_checkpoint(path, device="cpu") -> PyramidCodec:
         raise KeyError(
             f"{path}: no embedded config — for legacy research checkpoints "
             "use georvq.compat.from_legacy_checkpoint")
-    from georvq.config import drop_retired
-    cfg = Config.model_validate(drop_retired(ck["config"]))
+    from georvq.config import migrate
+    cfg = Config.model_validate(migrate(ck["config"]))
     model = build_model(cfg, device)
     model.load_state_dict(ck["model"], strict=True)
     model.eval()
