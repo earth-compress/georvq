@@ -9,12 +9,32 @@ from georvq.sources import get_source
 
 
 def build_model(cfg: Config, device="cpu") -> PyramidCodec:
+    """The one way to construct a model from a config.
+
+    Also attaches `source` and `full_config` to the model, which is what
+    lets a checkpoint rebuild itself and what every eval and inference
+    path reads. Construct models through here rather than calling
+    `PyramidCodec` directly, or those attributes go missing.
+    """
     source = get_source(cfg.data.source, cfg.model)
     model = PyramidCodec(cfg.model, source).to(device)
     model.tokenizer.grad_ckpt = cfg.train.grad_ckpt
+    model.decoder.grad_ckpt = cfg.train.grad_ckpt
     model.source = source
     model.full_config = cfg
+    if cfg.train.compile and device != "cpu":
+        compile_trunks(model)
     return model
+
+
+def compile_trunks(model):
+    """torch.compile the per-layer forwards of both trunks. Compiling bound
+    forwards (not the modules) keeps state-dict names untouched, so
+    checkpoints stay loadable everywhere."""
+    for layer in model.tokenizer.vit.layers:
+        layer.forward = torch.compile(layer.forward)
+    for blk in model.decoder.blocks:
+        blk.forward = torch.compile(blk.forward)
 
 
 def from_checkpoint(path, device="cpu") -> PyramidCodec:
@@ -26,7 +46,8 @@ def from_checkpoint(path, device="cpu") -> PyramidCodec:
         raise KeyError(
             f"{path}: no embedded config — for legacy research checkpoints "
             "use georvq.compat.from_legacy_checkpoint")
-    cfg = Config.model_validate(ck["config"])
+    from georvq.config import drop_retired
+    cfg = Config.model_validate(drop_retired(ck["config"]))
     model = build_model(cfg, device)
     model.load_state_dict(ck["model"], strict=True)
     model.eval()

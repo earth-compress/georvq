@@ -52,7 +52,8 @@ def sweep_ckpt(ckpt, windows, t, X_orig, y, groups, meta, args, device):
 
     win, inv, lr, lc = codec_ab.unique_windows(windows, t, W)
     recons = codec_ab.reconstruct_tuples(model, win, inv, lr, lc, tuples,
-                                         device)
+                                         device,
+                                         source=meta.get("source", "ae"))
     budgets = [None if b == "all" else int(b) for b in args.budgets.split(",")]
     probes = tuple(args.probes.split(","))
 
@@ -123,11 +124,17 @@ def main():
     ap.add_argument("--probes", default="knn3,linear")
     ap.add_argument("--test-frac", type=float, default=0.3)
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--device", default="cuda" if torch.cuda.is_available()
+    # GPU0 usually carries other people's jobs on this box -- default to 1
+    ap.add_argument("--device", default="cuda:1" if torch.cuda.is_available()
                     else "cpu")
     ap.add_argument("--out-dir", default="plots/ae_downstream")
     ap.add_argument("--label-col", default="label",
                     help="label column to evaluate (e.g. label_lu for land use)")
+    ap.add_argument("--restrict-parquet", default=None,
+                    help="targets.parquet of a matched dataset (e.g. the "
+                         "tessera re-extraction): keep only this dataset's "
+                         "rows whose index appears in its ae_idx column, so "
+                         "both sources are probed on the same points")
     ap.add_argument("--wandb", action="store_true")
     args = ap.parse_args()
     os.makedirs(args.out_dir, exist_ok=True)
@@ -135,6 +142,12 @@ def main():
     meta = json.load(open(os.path.join(args.dataset, "meta.json")))
     windows = np.load(os.path.join(args.dataset, "windows.npy"), mmap_mode="r")
     t = pd.read_parquet(os.path.join(args.dataset, "targets.parquet"))
+    if args.restrict_parquet:
+        keep = set(pd.read_parquet(args.restrict_parquet,
+                                   columns=["ae_idx"]).ae_idx)
+        t = t[t.index.isin(keep)]
+        print(f"restricted to {len(t)} matched targets "
+              f"({args.restrict_parquet})", flush=True)
     lc = args.label_col
     if lc not in t.columns:
         raise SystemExit(f"--label-col {lc} not in dataset ({list(t.columns)})")
@@ -144,7 +157,8 @@ def main():
         t = t[t[lc].isin(vc[vc >= 50].index)].reset_index(drop=True)
     tag = meta["benchmark"] + ("" if lc == "label" else f"_{lc}")
     y, groups = t[lc].to_numpy(), t.fid.to_numpy()
-    X_orig = codec_ab.orig_embeddings(windows, t)
+    X_orig = codec_ab.orig_embeddings(windows, t,
+                                      source=meta.get("source", "ae"))
     print(f"dataset: {tag} ({meta['task']}, {meta['metric']}) | "
           f"{len(t)} targets / {t.fid.nunique()} tiles | "
           f"classes={sorted(set(y.tolist())) if meta['task']=='classification' else 'reg'}",

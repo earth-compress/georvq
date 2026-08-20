@@ -245,7 +245,7 @@ class OnnxCodec:
                 idx = rvq_assign_np(z, books)
             stacked.append(idx)
         return [Packet(indices=[t[b] for t in stacked],
-                       coarse_residual=res0[b] if res0 is not None else None)
+                       refinements=({0: res0[b]} if res0 is not None else None))
                 for b in range(x.shape[0])]
 
     def decode(self, packets: list[Packet], depths=None):

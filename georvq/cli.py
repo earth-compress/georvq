@@ -7,6 +7,11 @@ from georvq.config import load_config
 
 
 def _parse(argv=None, description=""):
+    """Shared argument handling for every `georvq-train*` entry point:
+    a preset, a device, and trailing `key.path=value` overrides. Returns
+    the fully resolved config, so overrides are validated by the same
+    schema as the YAML rather than applied later.
+    """
     ap = argparse.ArgumentParser(description=description)
     ap.add_argument("-c", "--config", required=True, help="YAML preset")
     ap.add_argument("--gpu", type=int, default=0,

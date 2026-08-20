@@ -23,8 +23,10 @@ class VectorQuantizer(nn.Module):
 
     def __init__(self, num_codes=512, dim=128, decay=0.99, eps=1e-5,
                  kmeans_init=True, reset_interval=2500, dead_threshold=0.01,
-                 grad_codebook=False, bf16_scores=False):
+                 grad_codebook=False, bf16_scores=False,
+                 reset_mode="random"):
         super().__init__()
+        self.reset_mode = reset_mode
         self.grad_codebook = grad_codebook
         self.num_codes = num_codes
         self.dim = dim
@@ -42,6 +44,15 @@ class VectorQuantizer(nn.Module):
         self.register_buffer("ema_sum", torch.zeros(num_codes, dim))
         self.register_buffer("initialized", torch.tensor(not kmeans_init, dtype=torch.bool))
         self.register_buffer("step", torch.zeros((), dtype=torch.long))
+        if reset_mode == "split":
+            # EMA of each code's total squared error: the distortion
+            # CONTRIBUTION (count x within-cell spread), which is what a
+            # split should be targeted at. Non-persistent, so the
+            # state-dict layout -- and therefore every existing
+            # checkpoint's strict load -- is untouched; it re-accumulates
+            # within a few hundred steps after a resume.
+            self.register_buffer("ema_sse", torch.zeros(num_codes),
+                                 persistent=False)
 
     @torch.no_grad()
     def _sample_from(self, z_flat, k):
@@ -67,20 +78,132 @@ class VectorQuantizer(nn.Module):
         self.initialized.fill_(True)
 
     @torch.no_grad()
-    def _reset_dead(self, z_flat):
-        """Replace codes with EMA mass below threshold with samples from z_flat.
+    def _reset_dead(self, z_flat, indices=None, z_q=None):
+        """Revive codes whose EMA mass has fallen below threshold.
+
+        reset_mode="random" (default, unchanged): reseed from random rows
+        of z_flat. Cheap, but a uniformly drawn point lands in a DENSE
+        region by construction -- usually one already well covered -- so
+        the revived code steals a few points from a healthy neighbour,
+        contributes little, and often dies again at the next reset.
+
+        reset_mode="split": send each dead code into the live cell with
+        the largest distortion CONTRIBUTION (EMA of summed squared
+        error) and split that cell in two -- see `_split_targets` for
+        where the pair is placed. This is LBG splitting: the new
+        codeword lands where the error actually is. Point count alone
+        would be the wrong target, since a large but tight cluster gains
+        nothing from a second codeword; what matters is count x spread,
+        which is what the SSE EMA measures.
 
         `replacements` is cast to the codebook dtype: z_flat may be bf16 under
         autocast while the codebook is fp32."""
         dead = self.ema_count < self.dead_threshold
         n_dead = int(dead.sum().item())
+        # Before-state, measured on this batch with the pre-reset book.
+        # Recorded even when NOTHING is dead: otherwise a level that never
+        # loses a code emits no diagnostic at all and is indistinguishable
+        # in the figure from one that is broken -- which is exactly
+        # backwards, since it is the healthiest level in the model.
+        stats = None
+        if indices is not None and z_q is not None:
+            p_ = torch.bincount(indices, minlength=self.num_codes).float()
+            p_ = p_ / p_.sum().clamp_min(1)
+            stats = {
+                "n_reset": float(n_dead),
+                "frac_reset": n_dead / self.num_codes,
+                "perp_before": float(torch.exp(
+                    -(p_ * p_.clamp_min(1e-12).log()).sum())),
+                "resid_before": float((z_flat - z_q).pow(2).sum(1).mean()),
+            }
         if n_dead == 0:
+            if stats is not None:              # nothing changed: after == before
+                stats["perp_after"] = stats["perp_before"]
+                stats["resid_after"] = stats["resid_before"]
+                stats["perp_gain"] = 0.0
+                stats["resid_gain"] = 0.0
+                stats["step"] = int(self.step.item())
+                self.last_reset = stats
             return 0
-        replacements = self._sample_from(z_flat, n_dead).to(self.codebook.weight.data.dtype)
+        if self.reset_mode == "split" and indices is not None:
+            reps = self._split_targets(z_flat, indices, z_q, dead, n_dead)
+        else:
+            reps = self._sample_from(z_flat, n_dead)
+        replacements = reps.to(self.codebook.weight.data.dtype)
         self.codebook.weight.data[dead] = replacements
         self.ema_sum[dead] = replacements
         self.ema_count[dead] = 1.0
+        if stats is not None:
+            # after-state: re-assign the SAME batch to the revived book, so
+            # before/after differ only by the reset. One chunked pass every
+            # reset_interval steps -- negligible against 2500 training steps.
+            idx2 = _chunked_assign(z_flat.float(),
+                                   self.codebook.weight.data.float())
+            q2 = self.codebook.weight.data[idx2]
+            p2 = torch.bincount(idx2, minlength=self.num_codes).float()
+            p2 = p2 / p2.sum().clamp_min(1)
+            stats["perp_after"] = float(torch.exp(
+                -(p2 * p2.clamp_min(1e-12).log()).sum()))
+            stats["resid_after"] = float(
+                (z_flat.float() - q2).pow(2).sum(1).mean())
+            stats["perp_gain"] = stats["perp_after"] - stats["perp_before"]
+            stats["resid_gain"] = stats["resid_before"] - stats["resid_after"]
+            stats["step"] = int(self.step.item())
+            self.last_reset = stats           # plain attr: no state-dict impact
         return n_dead
+
+    @torch.no_grad()
+    def _split_targets(self, z_flat, indices, z_q, dead, n_dead):
+        """LBG split of the top-SSE live cells: the pair straddles the
+        donor centroid, offset along a data-driven direction.
+
+        The previous version put the revived code on the donor's
+        WORST-FITTING point. That is an outlier by construction, so the
+        new codeword served almost nobody and died again -- measured on
+        this model, the instantaneous residual drop was 91% at tier1 L8
+        and ~100% of it evaporated before the next reset, every reset, for
+        23000 steps (resid_before 86.1 -> 85.1). Classical LBG splits the
+        CENTROID into c +/- eps*delta so both members are viable.
+
+        `delta` is (random member - centroid): a TYPICAL offset for that
+        cell, which gives both a direction and a scale for free and stays
+        fully vectorized. A per-cell principal direction would be better
+        in principle, but at K=16384 a batch gives a donor ~16 points in
+        256 dims, so that estimate is mostly noise.
+
+        Any dead code that cannot be paired with a live cell holding a
+        point in this batch falls back to a random row."""
+        eps = 0.5
+        se = (z_flat - z_q).pow(2).sum(1).float()
+        # one RANDOM member per code: shuffle, then scatter row ids so the
+        # last write per code is an arbitrary member (not the worst one)
+        order = torch.randperm(z_flat.shape[0], device=z_flat.device)
+        worst = torch.full((self.num_codes,), -1, dtype=torch.long,
+                           device=z_flat.device)
+        worst[indices[order]] = order
+        score = self.ema_sse.clone()
+        score[dead] = -1.0                    # never split a dead cell
+        score[worst < 0] = -1.0               # nothing in this batch to use
+        srcs = torch.argsort(score, descending=True)[:n_dead]
+        ok = score[srcs] > 0
+        reps = torch.empty(n_dead, self.dim, device=z_flat.device,
+                           dtype=z_flat.dtype)
+        if bool(ok.any()):
+            src_ok = srcs[ok]
+            C = self.codebook.weight.data
+            delta = z_flat[worst[src_ok]].to(C.dtype) - C[src_ok]
+            # pair straddles the old centroid: donor moves +eps*delta, the
+            # revived code takes -eps*delta
+            reps[ok] = (C[src_ok] - eps * delta).to(reps.dtype)
+            C[src_ok] = C[src_ok] + eps * delta
+            # halve the source's mass and error: the pair now shares the
+            # cell, and one hot cell must not win every slot in a round
+            self.ema_count[src_ok] *= 0.5
+            self.ema_sum[src_ok] = C[src_ok] * self.ema_count[src_ok, None]
+            self.ema_sse[src_ok] *= 0.5
+        if bool((~ok).any()):
+            reps[~ok] = self._sample_from(z_flat, int((~ok).sum()))
+        return reps
 
     def forward(self, z):
         """
@@ -133,9 +256,18 @@ class VectorQuantizer(nn.Module):
                 count_stable = (self.ema_count + self.eps) / (n + self.num_codes * self.eps) * n
                 self.codebook.weight.data.copy_(self.ema_sum / count_stable.unsqueeze(1))
 
+                if self.reset_mode == "split":
+                    # per-code EMA of TOTAL squared error = the distortion
+                    # contribution a split would recover
+                    se = (z_flat - z_q).pow(2).sum(1).float()
+                    self.ema_sse.mul_(self.decay).add_(
+                        torch.zeros_like(self.ema_sse).index_add_(
+                            0, indices, se), alpha=1 - self.decay)
+
                 self.step += 1
                 if self.reset_interval > 0 and (self.step.item() % self.reset_interval == 0):
-                    self._reset_dead(z_flat.detach())
+                    self._reset_dead(z_flat.detach(), indices,
+                                     z_q.detach())
 
         # Commitment loss: encoder outputs should be close to codebook entries
         commit_loss = F.mse_loss(z_flat, z_q.detach())
@@ -190,9 +322,18 @@ class VectorQuantizer(nn.Module):
                 n = self.ema_count.sum()
                 cs = (self.ema_count + self.eps) / (n + self.num_codes * self.eps) * n
                 self.codebook.weight.data.copy_(self.ema_sum / cs.unsqueeze(1))
+                if self.reset_mode == "split":
+                    # per-code EMA of TOTAL squared error = the distortion
+                    # contribution a split would recover
+                    se = (z_flat - z_q).pow(2).sum(1).float()
+                    self.ema_sse.mul_(self.decay).add_(
+                        torch.zeros_like(self.ema_sse).index_add_(
+                            0, indices, se), alpha=1 - self.decay)
+
                 self.step += 1
                 if self.reset_interval > 0 and (self.step.item() % self.reset_interval == 0):
-                    self._reset_dead(z_flat.detach())
+                    self._reset_dead(z_flat.detach(), indices,
+                                     z_q.detach())
 
         # selector gradient: one cell per window (B rows, all locations). The
         # soft subset mask is folded into the softmax LOGITS (log space) so the
@@ -260,7 +401,8 @@ class ResidualVQ(nn.Module):
 
     def __init__(self, num_levels=8, num_codes=256, dim=128, decay=0.99,
                  kmeans_init=True, reset_interval=2500, dead_threshold=0.01,
-                 grad_codebook=False, bf16_scores=False):
+                 grad_codebook=False, bf16_scores=False,
+                 reset_mode="random"):
         super().__init__()
         self.num_levels = num_levels
         self.levels = nn.ModuleList([
@@ -269,7 +411,8 @@ class ResidualVQ(nn.Module):
                             reset_interval=reset_interval,
                             dead_threshold=dead_threshold,
                             grad_codebook=grad_codebook,
-                            bf16_scores=bf16_scores)
+                            bf16_scores=bf16_scores,
+                            reset_mode=reset_mode)
             for _ in range(num_levels)
         ])
 

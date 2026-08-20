@@ -77,6 +77,15 @@ class ChipStore:
         self.nodata = m.get("nodata")
         self.grid_period = m.get("grid_period")
 
+        # Optional per-pixel aux-plane sidecars (scales_XXXX.npy: float16
+        # (shard_size, px, px), same shard/slot layout — e.g. tessera dequant
+        # scales). Surfaced to the pool as extra trailing byte-bands so the
+        # source's `prep` can reassemble the dequantized values on the GPU.
+        self.aux_bands = 0
+        self._aux_shards = {}
+        if glob.glob(os.path.join(self.dir, "scales_????.npy")):
+            self.aux_bands = np.dtype(np.float16).itemsize
+
         idx = pd.read_parquet(os.path.join(self.dir, "index.parquet"))
         have = set(self._shards_on_disk)
         n0 = len(idx)
@@ -94,6 +103,19 @@ class ChipStore:
         """Memory-mapped (shard_size, bands, px, px) array (one group of a
         multi-group store, or the whole shard of a single-group store)."""
         return np.load(self.shard_path(sh, group), mmap_mode="r")
+
+    def aux_bytes(self, sh: int, slot: int, r0: int, r1: int):
+        """Aux plane of one chip's row range as (aux_bands, rows, px) int8 —
+        the float16 plane's bytes as trailing pseudo-bands, so aux data can
+        ride through the int8 pool and be reinterpreted in `Source.prep`."""
+        if sh not in self._aux_shards:
+            self._aux_shards[sh] = np.load(
+                os.path.join(self.dir, f"scales_{int(sh):04d}.npy"),
+                mmap_mode="r")
+        a = np.ascontiguousarray(self._aux_shards[sh][slot][r0:r1])
+        rows, px = a.shape
+        return a.view(np.int8).reshape(rows, px, self.aux_bands) \
+                .transpose(2, 0, 1)
 
     def split(self, val_frac=0.04, seed=0, cell_deg=10.0):
         return geographic_split(self.index, val_frac, cell_deg, seed)

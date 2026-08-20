@@ -60,6 +60,10 @@ def parse_tier(v):
 class TokenizerConfig(StrictModel):
     dim: int = 256
     depth: int = 9
+    # finest tier joins the trunk only for the last k layers (0 = every
+    # layer). High-frequency content is local: a few joint layers suffice
+    # and the coarse-only prefix runs at a fraction of the sequence length
+    late_join: int = 0
 
 
 class DecoderConfig(StrictModel):
@@ -68,6 +72,9 @@ class DecoderConfig(StrictModel):
     heads: int = 8
     head_feat: int = 64
     cls_bridge: bool = True
+    late_join: int = 0             # same contract as tokenizer.late_join
+    head_dw: bool = False          # depthwise-separable head convs (8x fewer
+                                   # MACs; smooths intra-window tile seams)
 
 
 class VQConfig(StrictModel):
@@ -83,13 +90,108 @@ class VQConfig(StrictModel):
     bf16_scores: bool = False
     skip_masked: bool = False      # skip VQ work for levels the sampled depth masks off
     grad_codebook: bool = False
+    book_bits: Optional[int] = None  # b-bit QAT codebooks (vq_quant.py); None = fp32
+    # Hard-freeze warm-started codebooks: no EMA, no dead-code resets, no
+    # gradient. `mature_codebooks` only SLOWS the EMA (decay 0.9995), which
+    # still drifts a corpus-fitted book over a long run; this stops it dead
+    # so the shipped books stay bit-identical to the fitted ones.
+    freeze_books: bool = False
+    # Fraction of each batch decoded from UNQUANTIZED latents at full
+    # depth (the `cos_ceiling` path). Without it a stage-2 decoder
+    # specializes to quantized inputs and its continuous path decays --
+    # measured on w32hd, the ceiling fell 0.9899 -> 0.9830 over 25k
+    # decoder-only steps. Keeping a slice of clean batches holds the
+    # encoder/decoder pair honest on the un-quantized mapping, keeps
+    # cos_ceiling a meaningful diagnostic rather than a drifting one, and
+    # leaves the codec usable continuously. Costs a little capacity that
+    # would otherwise go to the quantized path.
+    passthrough_frac: float = 0.0
+    # How a dead code is revived. "random" reseeds from a random encoder
+    # output (the historical behaviour); "split" sends it into the live
+    # cell with the largest distortion contribution, at that cell's
+    # worst-fitting point (LBG splitting).
+    reset_mode: Literal["random", "split"] = "random"
+    # Codebook seeding. "kmeans" draws K random data rows (historical);
+    # "tree" builds a balanced PCA tree of median splits, which cannot
+    # emit an empty leaf and does not waste seeds on near-duplicates in
+    # dense regions. Lloyd iterations follow either way.
+    init_mode: Literal["kmeans", "tree"] = "kmeans"
+    # Per-tier init budget, in vectors PER CODEWORD. The legacy path sizes
+    # the init by batch count, which couples the tiers: at
+    # kmeans_sample=32768 and batch 2048 the coarse tier sees 16 vectors
+    # per centroid while the finest sees 512 and costs 12 GiB. Setting
+    # this gives each tier its own target and subsamples the fine tiers
+    # per batch. 0 = legacy behaviour.
+    init_per_code: int = 0
+    # load_partial "matures" warm-started codebooks: dead-code resets off,
+    # EMA decay 0.9995. That is right when the books arrive already fitted
+    # to the encoder and should barely move -- and WRONG when the point of
+    # the run is to keep them live, because it silently overrides
+    # ema_decay and disables reset_mode entirely.
+    mature_warmstart: bool = True
+    # Matryoshka truncation DURING the VQ-free warmup. The warmup branch
+    # otherwise decodes at full depth every step, so the model has no
+    # reason to make the coarse tiers informative -- the decoder always
+    # has the fine tier available -- and "ignore tier 0" is a perfectly
+    # good solution to the warmup objective. Measured on a run with an
+    # 11k-step warmup: tier 0's latent fell to 1.16 effective dimensions
+    # of 512 with its first codebook level at perplexity 1 (one codeword
+    # for every window), while tiers 1 and 2 rose to 5.2 and 7.3. It was
+    # the RICHEST tier at step 5000 and atrophied from there.
+    # With this on, a random prefix of tiers is kept and the rest are
+    # zeroed to true informational absence, so a coarse-only row has to be
+    # reconstructed from the coarse tier alone.
+    warmup_truncate: bool = True
+
+
+class StatsCondConfig(StrictModel):
+    """Transmit the per-window mean as a side channel; code what is left.
+
+    The mean is subtracted before the encoder and added back after the
+    decoder, so loss and metrics stay on the full field. Both encoder and
+    decoder are conditioned on it. See georvq/model/stats_cond.py.
+
+    use_std is off and BLOCKED, not merely defaulted off: matching the
+    std was measured to hurt full-depth cosine, unlike the S2 version this
+    is ported from, whose bands have genuinely different physical scales.
+    The measurement is in docs/FINDINGS.md and the mechanism's reasoning
+    in georvq/model/stats_cond.py.
+
+    bits_per_band is rate accounting only -- it does not quantize anything
+    during training. 6 bits/band reaches cos 0.9767 against 0.9769 for the
+    exact mean, and below 4 the channel is worse than nothing."""
+    subtract_mean: bool = True
+    cond_encoder: bool = True
+    cond_decoder: bool = True
+    use_std: bool = False
+    bits_per_band: int = 6
+
+    @model_validator(mode="after")
+    def _check(self):
+        """Refuse the combinations that would silently do nothing, and
+        `use_std`, which the class docstring above explains is not merely
+        unimplemented but measured to be harmful."""
+        assert not self.use_std, "stats_cond.use_std is not implemented"
+        assert self.subtract_mean or self.cond_encoder or self.cond_decoder, \
+            "stats_cond does nothing with every option off"
+        assert self.bits_per_band > 0
+        return self
 
 
 class SigmaConfig(StrictModel):
     """Stage-1 continuous mode: no codebooks; the decoder is conditioned on a
-    per-tier additive-noise level instead of the matryoshka depth."""
+    per-tier additive-noise level instead of the matryoshka depth.
+
+    truncate: nested tier-wise matryoshka sampling — probability of keeping
+    the k coarsest tiers, ordered [all, all-but-finest, ..., coarse only]
+    (must have one entry per tier and sum to ~1). Dropped tiers train at
+    sigma=max (informationally absent); kept tiers draw U(0, kept_max) so
+    the decoder stays quantization-noise-robust. None = legacy independent
+    U(0, max) per tier."""
     max: float = 4.0
     freqs: int = 8
+    truncate: Optional[list[float]] = None
+    kept_max: float = 1.0
 
 
 class RateConfig(StrictModel):
@@ -149,13 +251,33 @@ class ModelConfig(StrictModel):
     tiers: list[TierSpec]
     min_depths: Optional[list[int]] = None
     full_frac: float = 0.0
+    # "nested": draw the coarse depth uniformly and each finer tier
+    # conditionally. Weights the R-D curve toward the high-rate end, but
+    # starves deep fine-tier books: the deepest fine levels train on a
+    # fraction of a percent of rows. See `path_tuples` in model/codec.py
+    # for the measurement and the fix.
+    # "path": spread uniformly along the monotone truncation path, one
+    # step per codebook, so every book gets an equal share (same level
+    # rises to 0.197).
+    depth_sampling: Literal["nested", "path"] = "nested"
     ff_ratio: float = 2.0
     tokenizer: TokenizerConfig = Field(default_factory=TokenizerConfig)
     decoder: DecoderConfig = Field(default_factory=DecoderConfig)
     vq: Optional[VQConfig] = Field(default_factory=VQConfig)
+    # Emit L2-normalized * sqrt(dim) latents from encode_levels, i.e. the
+    # geometry encode_stage1 (and therefore stage-1 training) uses. Set
+    # this on any stage-2 run warm-started from a stage-1 checkpoint;
+    # without it the decoder and the fitted codebooks are handed raw
+    # latents from a different scale. Default off so existing checkpoints
+    # and the bitstream contract are unaffected.
+    normalize_latents: bool = False
     sigma: Optional[SigmaConfig] = None
+    stats_cond: Optional[StatsCondConfig] = None
     conditioning: Optional[Conditioning] = None
     rate: Optional[RateConfig] = None
+    # hierarchical local attention: per-tier radius in own-tier cells
+    # (null = global tier). e.g. [null, null, 2, 4]. None = full attention.
+    local_attn: Optional[list[Optional[int]]] = None
 
     @field_validator("tiers", mode="before")
     @classmethod
@@ -166,6 +288,16 @@ class ModelConfig(StrictModel):
 
     @model_validator(mode="after")
     def _check(self):
+        """Reject model geometries the rest of the stack assumes away.
+
+        The pyramid contract is strictly ascending grids starting at 1, each
+        dividing the window: the coarsest tier's single cell IS the window,
+        and `level_cumsums` and the decoder both index cells by that
+        relationship. `vq` xor `sigma` separates quantized training from
+        stage-1 continuous mode -- they are different objectives, not a
+        flag. The rate-model warning is not pedantry: with EMA codebooks
+        dR/dC is identically zero, so a rate model trains against a codebook
+        it cannot move."""
         assert self.tiers, "at least one tier required"
         grids = [t.grid for t in self.tiers]
         assert grids == sorted(grids) and len(set(grids)) == len(grids), \
@@ -220,6 +352,9 @@ class DataConfig(StrictModel):
     store_dir: Path
     val_frac: float = 0.04
     split_seed: int = 0
+    limit_chips: Optional[int] = None   # data-scaling probes: train on a
+    #   deterministic subsample of N chips (nested: N ⊂ 2N for the same
+    #   split_seed); the val split always stays full
     pool: PoolConfig = Field(default_factory=PoolConfig)
 
     @field_validator("val_frac")
@@ -238,17 +373,55 @@ class OptimConfig(StrictModel):
     wd: float = 0.01
     warmup: int = 500
     lr0_steps: int = 0              # optional initial LR hold
+    # "cosine" anneals to zero over train.steps -- the run must finish to
+    # get its final LR. "constant" holds `lr` after warmup, so the run can
+    # be stopped at any point without leaving the schedule half-applied.
+    schedule: Literal["cosine", "constant"] = "cosine"
+    # Global grad-norm clip; 0 disables. ON by default because its absence
+    # is a live failure mode, not a tuning choice: with no clip a single
+    # bad batch blew up a run at step 1900 (loss 0.035 -> 0.148, centred
+    # ceiling cosine 0.807 -> 0.036, i.e. collapse to emitting only the
+    # transmitted mean) and Adam did not recover, because the enormous
+    # gradient inflates the second moment and suppresses every subsequent
+    # update. Small batches make this more likely, so it matters most
+    # exactly where we want to run.
+    grad_clip: float = 1.0
+
+
+class BatchRamp(StrictModel):
+    """Run the opening steps at a fraction of the batch, then step up.
+
+    Early training is an easy problem -- getting through many parameter
+    updates matters more than the gradient quality of any one of them --
+    so a small batch buys more progress per unit of wall-clock. Note the
+    learning rate is NOT rescaled: a quarter batch at the same lr means
+    ~2x the gradient noise, which is usually benign (and mildly helpful)
+    this early, and the lr warmup covers the first steps regardless."""
+    until: int = 5000
+    divisor: int = 4
+
+    @model_validator(mode="after")
+    def _check(self):
+        assert self.until > 0 and self.divisor > 1
+        return self
 
 
 class TrainConfig(StrictModel):
     steps: int = 20000
     batch_windows: int = 512
+    batch_ramp: Optional[BatchRamp] = None
     amp: bool = True
     grad_ckpt: bool = False
     tf32: bool = True
+    compile: bool = False          # torch.compile the trunk layer forwards
     init_from: Optional[Path] = None
     freeze_encoder_steps: int = 0
     freeze_codec: bool = False
+    # Hold the decoder's output end still while its internal representation
+    # re-adapts to quantized latents: freeze the last `freeze_head_blocks`
+    # decoder blocks plus norm_out/head for this many steps.
+    freeze_head_steps: int = 0
+    freeze_head_blocks: int = 3
     optim: OptimConfig = Field(default_factory=OptimConfig)
     seed: int = 0
     val_interval: int = 1000
@@ -269,7 +442,62 @@ class LogConfig(StrictModel):
     out_dir: Path = Path("checkpoints")
 
 
+#: Fields removed from the schema, as "section.field" paths. A checkpoint
+#: embeds the config it was trained with, so retiring a knob would
+#: otherwise make every checkpoint that carried it unloadable under
+#: `extra="forbid"` -- including released weights. `drop_retired` strips
+#: them when rebuilding a config FROM A CHECKPOINT; YAML presets still
+#: hard-fail on unknown keys, because there a stray key is a typo, not
+#: history.
+RETIRED_FIELDS = (
+    "model.vq.gain_shape", "model.vq.gain_bits",           # negative result
+    "model.vq.refit_interval", "model.vq.refit_offset",    # superseded by
+    "model.vq.refit_per_code", "model.vq.refit_lloyd_iters",  # fit-once
+    "model.vq.refit_dead_frac", "model.vq.refit_recycle_frac",
+    "model.vq.drift_interval", "model.vq.drift_windows",   # served its purpose
+    "model.tokenizer.suffix_dim", "model.decoder.suffix_dim",
+)
+
+
+def drop_retired(raw: dict) -> dict:
+    """Remove retired fields from a raw config dict, in place-safe fashion.
+
+    Returns the same mapping when nothing was dropped, so the common path
+    allocates nothing.
+    """
+    import copy
+    hit = []
+    for path in RETIRED_FIELDS:
+        node, *rest = path.split(".")
+        cur = raw
+        keys = [node] + rest
+        for k in keys[:-1]:
+            cur = cur.get(k) if isinstance(cur, dict) else None
+            if cur is None:
+                break
+        if isinstance(cur, dict) and keys[-1] in cur:
+            hit.append(path)
+    if not hit:
+        return raw
+    raw = copy.deepcopy(raw)
+    for path in hit:
+        keys = path.split(".")
+        cur = raw
+        for k in keys[:-1]:
+            cur = cur[k]
+        cur.pop(keys[-1], None)
+    return raw
+
+
 class Config(StrictModel):
+    """The whole of a run, validated.
+
+    This object is the reproducibility spine: it is embedded in every
+    checkpoint, hashed into `config_hash`, and is the only place a
+    setting that affects a run may live. `extra="forbid"` throughout, so
+    a typo in a YAML key is an error rather than a silently ignored
+    setting.
+    """
     schema_version: int = SCHEMA_VERSION
     data: DataConfig
     model: ModelConfig
@@ -279,6 +507,21 @@ class Config(StrictModel):
 
     @model_validator(mode="after")
     def _check(self):
+        """Cross-section checks: the ones that need more than one section
+        of the config to be visible at once, and so cannot live on the
+        individual models above."""
+        v = self.model.vq
+        if v is not None:
+            # these two partition one batch -- full-depth rows, path-sampled
+            # rows, and un-quantized pass-through rows -- but they live in
+            # different sections, so nothing else notices when they overrun
+            # it. Over 1.0 the path fraction goes negative and the sampler
+            # silently returns full depth for everything.
+            assert self.model.full_frac + v.passthrough_frac <= 1.0, (
+                f"model.full_frac ({self.model.full_frac}) + "
+                f"model.vq.passthrough_frac ({v.passthrough_frac}) > 1: they "
+                "are shares of the same batch and leave no rows for the "
+                "sampled depth tuples")
         if self.train.freeze_codec:
             assert self.train.init_from is not None, \
                 "train.freeze_codec requires train.init_from"
@@ -354,6 +597,11 @@ def config_hash(cfg: Config) -> str:
 
 
 def _flatten(d, prefix=""):
+    """Nested config -> {"a.b.0.c": value}, so two configs can be diffed
+    as flat key sets rather than by walking two trees in parallel. List
+    indices become path components, which means a reordered list reads
+    as several changed keys.
+    """
     out = {}
     if isinstance(d, dict):
         for k, v in d.items():
@@ -370,6 +618,9 @@ def config_diff(a, b) -> list[tuple[str, object, object]]:
     """Key-level diff of two configs (Config, dict, or checkpoint path).
     Returns [(dotted_key, a_value, b_value)] for keys that differ."""
     def as_dict(x):
+        """Accept a Config, a plain dict, or a checkpoint path, so runs can
+        be diffed against each other without first being loaded.
+        """
         if isinstance(x, Config):
             return x.model_dump(mode="json")
         if isinstance(x, dict):

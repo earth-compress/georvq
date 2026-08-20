@@ -11,6 +11,8 @@ chip store (sharded memmaps + parquet index + manifest)
   → ChipPool / GroupChipLoader      # resident pool, background refresh
   → Source.prep                     # dequant + nodata mask, on device
   → PyramidCodec
+      [stats_cond]                  # optional: remove the per-window mean,
+                                    #   condition both ends on it, send it
       source stem                   # raw plane(s) → (B, C, W, W) features
       ViTTokenizer                  # CLS = coarse tier, conv patch embeds per tier
       per-tier ResidualVQ           # coarse→fine residual codebooks
@@ -19,6 +21,7 @@ chip store (sharded memmaps + parquet index + manifest)
       [PyramidRateModel]            # optional: learned entropy model
       PyramidAttnDecoder            # AdaLN attention trunk, all tiers → fine tokens
       source head                   # fine tokens → pixel plane(s)
+      [stats_cond]                  #   ...and add the mean back
   → Source.recon_stats              # loss + metrics in model space
 ```
 
@@ -39,19 +42,23 @@ submodules exist. Everything is assembled from one validated `Config`
 | `georvq/metrics.py` | `masked_recon_stats`, `centered_cos` |
 | `georvq/repro.py` | Seeding, git/env metadata, `save_checkpoint` (embeds config + hash) |
 | `georvq/cli.py` | `georvq-train`, `georvq-train-stage1` entry points |
-| `georvq/model/vq.py` | `VectorQuantizer`, `ResidualVQ`, k-means init — **parity-sacred, see below** |
+| `georvq/model/vq.py` | `VectorQuantizer`, `ResidualVQ`, k-means init, dead-code revival (`reset_mode`) — **parity-sacred, see below** |
+| `georvq/model/vqinit.py` | Codebook seeding: balanced-PCA-tree init, per-tier init budgets (`init_per_code`) |
+| `georvq/model/vq_quant.py` | b-bit quantization-aware codebooks (`vq.book_bits`) — int8 books are ~4x smaller to download |
+| `georvq/model/stats_cond.py` | The transmitted-mean side channel: centre before the encoder, condition both ends, restore after the decoder |
 | `georvq/model/codec.py` | `PyramidCodec`, matryoshka depth sampling, `level_cumsums`/`eval_tuple` (encode once, decode any rate) |
 | `georvq/model/tokenizer.py`, `decoder.py`, `layers.py` | ViT encoder, AdaLN attention decoder + `DenseHead`, shared blocks |
 | `georvq/model/rate.py` | `ContextRateModel`, `PyramidRateModel`, `soft_rate`, `calib_tau` |
 | `georvq/model/conditioning.py` | `TierPredictor` (cascade), `CodebookSelector` (gated subset) |
 | `georvq/model/location.py` | SatCLIP clone-on-demand loader, location tables, location→latent prior MLPs |
 | `georvq/data/` | `store.py` chip-store v1 + `geographic_split`; `pool.py` resident pools; `build.py` `ShardWriter` |
-| `georvq/sources/` | `Source` interface + registry; `ae.py` (minimal reference), `s2.py` (multi-resolution example) |
-| `georvq/train/` | `loop.py` the one trainer; `stage1.py` σ-conditioned pretrain; `validate.py`, `figures.py`, `warmstart.py` |
+| `georvq/sources/` | `Source` interface + registry; `ae.py` (minimal reference), `tessera.py` (dense embeddings with a per-pixel scale), `s2.py` (multi-resolution example) |
+| `georvq/train/` | `loop.py` the one trainer; `stage1.py` σ-conditioned pretrain; `dist.py` data-parallel launch; `validate.py`, `figures.py`, `warmstart.py` |
 | `georvq/eval/` | Held-out extraction, probes, benchmark registry, codec A/B helpers |
 | `georvq/viz/` | Panel/GIF styling and builders |
-| `georvq/inference/` | Source-agnostic deployment machinery: `api.py` Codec/Packet, `stats_codec.py`, `archive.py` rANS (research tool), `release.py` bundles + bitstream/decoder ids, `onnx_backend.py` ONNX export + torch-free runtime |
-| `georvq/ae/` | **The AlphaEarth release codec** — AE-specific policy (pixel prep, 8* sidecar, quality ladder, COG asset container, executables). See `docs/AE_RELEASE.md`; treat as the worked example of a release layer, not a template |
+| `georvq/inference/` | Source-agnostic deployment machinery: `api.py` Codec/Packet, `stats_codec.py`, `archive.py` rANS (research tool), `refine.py` additive residual refinements, `mean_codec.py` the `stats_cond` channel on the wire, `release.py` bundles + bitstream/decoder ids, `onnx_backend.py` ONNX export + torch-free runtime |
+| `georvq/ae/` | **The AlphaEarth release codec** — AE-specific policy (pixel prep, 8* coarse sidecar, quality ladder, COG asset container, executables). See `docs/AE_RELEASE.md` |
+| `georvq/tessera/` | **The Tessera release codec** — Tessera-specific policy (transmitted mean, rate ladder, fine-tier refinement). See `docs/TESSERA_RELEASE.md` |
 | `scripts/` | Thin drivers over the above (train, store builders, eval, archive, GIFs) |
 | `configs/` | Presets — each reproduces a specific historical run (see Provenance) |
 
@@ -73,14 +80,21 @@ submodules exist. Everything is assembled from one validated `Config`
    where used — `docs/BITSTREAM.md`). Decoder-side improvements must
    never require re-encoding; anything that changes the bitstream
    changes `bitstream_id`, and decoder-specific artifacts are keyed by
-   `decoder_id`.
-4. **VQ state stays fp32 under bf16 autocast.** Assignment scores may run
+   `decoder_id`. Additive refinements (`inference/refine.py`) sit
+   *outside* this: they extend a packet without touching its indices, so
+   ignoring one always yields a valid decode at a lower rate.
+4. **A released quantizer's payload is frozen.** `georvq/ae`'s `star.tif`
+   is public, so its bytes cannot change even when the code behind them
+   is generalised; `tests/test_refine.py` pins the packing against an
+   inlined copy of the original implementation. Treat any shipped
+   container the same way.
+5. **VQ state stays fp32 under bf16 autocast.** Assignment scores may run
    bf16 (`vq.bf16_scores`); residuals, EMA buffers and codebooks must not.
-5. **Sources own all data-specific behavior.** The shared stack
+6. **Sources own all data-specific behavior.** The shared stack
    (tokenizer→decoder, trainer, evals, inference) must stay
    source-agnostic. If you're adding an `if source == ...` anywhere
    outside `sources/`, it belongs in the adapter instead.
-6. **Configs are the reproducibility spine.** Every training artifact
+7. **Configs are the reproducibility spine.** Every training artifact
    embeds its resolved config; anything that affects a run must live in
    the `Config` schema (validated, `extra="forbid"`), not in an env var
    or an edit-the-source knob.
@@ -100,10 +114,15 @@ python scripts/eval_run_ab.py --dataset <ds> --sanity identity   # eval harness 
 python scripts/eval_rate_sweep.py --dataset <ds> --ckpt <ckpt>   # Pareto-front A/B
 python scripts/build_archive.py --ckpt <ckpt> --store-dir <dir> --out <dir>  # research rANS archives
 
+torchrun --nproc_per_node 2 -m georvq.train.dist -c <cfg>       # data-parallel
+
 # AlphaEarth release codec (georvq/ae — see docs/AE_RELEASE.md)
 georvq-ae-tile encode --model <bundle> src.tiff out_dir/    # -> COG assets
 georvq-ae-tile decode --model <bundle> out_dir/ recon.tif --quality "p90<=0.02"
 georvq-ae-export-onnx --ckpt <bundle> --out <onnx-dir>      # torch-free decode
+
+# Tessera release codec (georvq/tessera — see docs/TESSERA_RELEASE.md)
+python scripts/build_release_tessera.py --ckpt <ckpt> --out <bundle>
 ```
 
 ## Who touches what
@@ -113,9 +132,13 @@ georvq-ae-export-onnx --ckpt <bundle> --out <onnx-dir>      # torch-free decode
   `docs/ADDING_A_SOURCE.md` + `docs/FINDINGS.md`. The parity-sacred
   rules above are yours to uphold.
 - **Release engineer** (ship a trained codec): `georvq/inference/`
-  (bundles, ids, ONNX export) plus a source-specific release layer —
-  `georvq/ae/` is the worked example (its container/policy choices are
-  AE-specific responses, measured in `docs/AE_RELEASE.md`).
+  (bundles, ids, refinements, ONNX export) plus a source-specific release
+  layer. `georvq/ae/` and `georvq/tessera/` are two worked examples of
+  the same contract, and reading them side by side is the fastest way to
+  see which decisions are policy: they differ on whether a stats channel
+  is sent at all, on which tier carries a refinement, and on whether that
+  refinement is a default or an opt-in — each difference measured, in
+  `docs/AE_RELEASE.md` and `docs/TESSERA_RELEASE.md`.
 - **Data end user** (decode archive tiles): the `georvq-ae-*`
   executables and the COG assets only — `docs/AE_RELEASE.md` is the
   complete contract; nothing in training or `georvq/inference` concerns
@@ -137,6 +160,12 @@ cycle, with its settings verified against the original runs' logged argv:
   codebooks + entropy model (its small 256-slot pool is historical).
 - `cascade.yaml` — location prior + cross-tier predictors, encoder frozen
   for the whole run (co-adaptation degrades the ceiling — `FINDINGS.md`).
+- `tessera_pyr64.yaml` — the 3-tier pyramid on Tessera embeddings.
+- `tessera_vq8.yaml` — that geometry with int8 QAT codebooks.
+- `tessera_vq8_k256.yaml` — graded-down codebooks (K=256 x 20 levels),
+  the sizing the sample-budget rule implies.
+- `tessera_vq8_k256_statscond.yaml` — the released Tessera codec: the
+  above plus the transmitted patch mean.
 - `satclip_select.yaml` — selector-only on a frozen codec. The
   4×-codebooks-from-scratch variant in its header comment is an
   **unvalidated research direction**: it never trained past k-means

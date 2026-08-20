@@ -38,6 +38,10 @@ class Benchmark:
 
 
 def _download(url, fp, session=None):
+    """Fetch to `fp` unless a plausible copy is already cached.
+
+    Downloads to a .tmp and renames, so an interrupted fetch cannot leave
+    a truncated file that the size check would later accept as complete."""
     import requests
     if os.path.exists(fp) and os.path.getsize(fp) > 1e5:
         return fp
@@ -143,6 +147,14 @@ class AsterGED(Benchmark):
         return lab, valid
 
     def attach_labels(self, targets, cache_dir):
+        """Sample ASTER GED emissivity at each target point.
+
+        Tiles are fetched per 1-degree NW corner and cached, so repeated
+        runs cost nothing. Targets whose tile is unavailable (ocean, no
+        data) or whose pixel is invalid are DROPPED rather than filled --
+        an imputed label would quietly become a class the probes learn to
+        predict from context instead of from the embedding.
+        """
         import requests
         os.makedirs(cache_dir, exist_ok=True)
         nw = np.array([self._nw_corner(lo, la)
@@ -201,6 +213,15 @@ class LucasLandCover(Benchmark):
           "U22": "Industry", "U32": "Industry", "U33": "Industry"}
 
     def load_points(self, cache_dir):
+        """LCMAP reference points for the configured survey year, reprojected
+        to lon/lat.
+
+        The archive's own .prj is used for the source CRS rather than an
+        assumed EPSG, since the reference grid is not in a common code.
+        Note LCMAP's probe noise floor is wide (+/-0.023 balanced accuracy
+        under repeated splits), so it cannot resolve small differences --
+        see docs/FINDINGS.md before reading its numbers.
+        """
         import io
         import zipfile
         fp = _download(self.ZIP_URL, os.path.join(cache_dir,
@@ -236,6 +257,14 @@ class LcmapLandCover(Benchmark):
                "71a5309afe8c927921f45da77d5dad96b8ea9630")
 
     def load_points(self, cache_dir):
+        """LCMAP reference points for the configured survey year,
+        reprojected to lon/lat.
+
+        The archive's own .prj gives the source CRS rather than an assumed
+        EPSG, since the reference grid is not in a common code. LCMAP's
+        probe noise floor is wide (+/-0.023 balanced accuracy under
+        repeated splits), so it cannot resolve small differences -- see
+        docs/FINDINGS.md before reading its numbers."""
         import glob
         import zipfile
 

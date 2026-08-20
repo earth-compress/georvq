@@ -22,6 +22,12 @@ CDF_PRECISION = 16   # bits — the standard rANS precision
 
 
 def _rans():
+    """Import the compressai rANS primitives, with an actionable error.
+
+    Entropy coding is an optional extra because it is not used by any
+    shipped release -- order-0 coding was measured at ~0.6% over
+    deflated indices and dropped.
+    """
     try:
         from compressai._CXX import pmf_to_quantized_cdf
         from compressai.ans import BufferedRansEncoder, RansDecoder
@@ -63,6 +69,14 @@ class CdfTable:
         return cls(cdfs, lengths, offsets, sig)
 
     def save(self, path):
+        """Persist the calibrated CDF tables.
+
+        CDFs are right-padded to a common width so they can live in one
+        rectangular array; `lengths` is what makes the padding recoverable.
+        `specs_sig` pins the tier geometry these tables were calibrated
+        for -- decoding with mismatched tables produces garbage, not an
+        error, so it is checked on load.
+        """
         np.savez_compressed(
             path,
             cdfs=np.array([np.pad(c, (0, max(self.lengths) - len(c)))

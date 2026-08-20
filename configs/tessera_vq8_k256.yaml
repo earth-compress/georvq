@@ -1,0 +1,84 @@
+# Small books, deep ladder: K=256 x 20 levels instead of
+# K=2048/8192/16384 x 8.
+#
+# Full depth is 43,680 bits/window (10.66 b/px) against the baseline's
+# 30,424 (7.43), so the ladder reaches 44% HIGHER at the top -- but it is
+# a superset, and 20-20-13 sits at 7.16 b/px for a like-for-like read
+# against the std-forced baseline. Codebook: 6.25 MiB vs 72 MiB at int8.
+#
+# Three independent measurements point here:
+#
+#  * R-D FRONTIER. On the single-pixel sweep, at fixed rate, smaller K with
+#    more levels wins: at 192 bits K=2^8 x 24 scored 0.9702 against
+#    K=2^10 x 19 at 0.9674; at 384 bits K=2^8 x 48 beat K=2^10 x 38. Every
+#    high-rate frontier point preferred shallow books and more of them.
+#  * SAMPLE BUDGET. K=16384 at 8 levels is unmaintainable online: the
+#    deepest levels get 18-32 vectors per codeword inside the EMA window,
+#    far below the ~450 crossover where a fit starts beating no fit, and
+#    they lose 90% of their codebook (perplexity 1,658 of 16,384 measured
+#    on the trained checkpoint). K=256 gets thousands per code at the same
+#    rate, so the pathology cannot arise rather than being repaired.
+#  * DOWNLOAD. 4.4 MiB, or ~2.2 MiB at int4.
+#
+# Equal depths across tiers are REQUIRED, not cosmetic:
+# sample_monotone_depths enforces L0 >= L1 >= L2, so a shallower coarse
+# tier would make the finer tiers' deep levels unreachable. An earlier
+# draft (11/13/14) had tier-2 levels 12-14 at P(active)=0.000.
+inherit: tessera_vq8.yaml
+
+data:
+  pool:
+    size: 19150          # 114 GiB
+
+model:
+  tiers: ["1:512:256:20", "4:512:256:20", "16:256:256:20"]
+  # Path sampling: every codebook trains equally often. Nested sampling
+  # gave tier-2 level 14 P(active)=0.006; path gives 0.197 (32x). The
+  # path starts at (4,0,0) -- 32 bits for a 64x64 patch of 128-d vectors
+  # is already an absurd operating point and 1-0-0 is not worth training.
+  depth_sampling: path
+  min_depths: [4, 0, 0]
+  full_frac: 0.15        # 15% of rows at full depth
+  vq:
+    commit_weight: 0.25
+    dead_threshold: 0.000625
+    # W* ~ sqrt(K), so 64x smaller K wants a ~8x shorter window. It also
+    # matters far less now: every level sits above the sample crossover,
+    # so the variance term the decay controls is small either way.
+    ema_decay: 0.98
+    bf16_scores: true
+    skip_masked: true
+    warmup_steps: 500    # VQ-free warmup, then the init below
+    kmeans_sample: 32768
+    # Belt and braces: the books here share nothing with the source
+    # checkpoint, so they must not be matured. (The scalar-shape bug above
+    # is fixed, but this makes the intent explicit.)
+    mature_warmstart: false
+    init_mode: tree      # 92.9% vs 40.0% of K at deep levels
+    init_per_code: 2000  # per-tier budget; K=256 makes this cheap
+    reset_mode: split    # LBG centroid split, not outlier placement
+    book_bits: 8
+    passthrough_frac: 0.15   # 15% unquantized: keeps the continuous path alive
+
+train:
+  steps: 60000
+  batch_windows: 1024
+  # encoder + decoder transfer; the rvqs are a different shape so
+  # load_partial skips them and they are tree-initialised fresh
+  init_from: checkpoints/tessera_vq8_split2/model_best.pt
+  optim: {lr: 5.0e-5, wd: 0.01, warmup: 2000, lr0_steps: 100}
+  save_interval: 2500
+
+eval:
+  # The inherited tuples (8-1-0 ... 8-8-8) are invalid at depth 20. These
+  # are chosen to sit at nearly the same bits/px as the old figure points,
+  # so the recon panels stay comparable, plus the new full-depth top:
+  #   20-1-0   0.070 b/px  (was 8-1-0  0.072)
+  #   20-13-0  0.445       (was 8-8-0  0.428)
+  #   20-20-3  2.164       (was 8-8-2  2.178)
+  #   20-20-13 7.164       (was 8-8-8  7.428)
+  #   20-20-20 10.664      (new)
+  recon_tuples: ["20-1-0", "20-13-0", "20-20-3", "20-20-13", "20-20-20"]
+
+log:
+  run_tag: tessera_vq8_k256

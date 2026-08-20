@@ -36,6 +36,10 @@ class AdaLNBlock(nn.Module):
         nn.init.zeros_(self.ada[-1].bias)   # → gates 0, scales 0 ⇒ block = identity at init
 
     def forward(self, x, c, mask=None):
+        """Six modulation params from `c`: (shift, scale, gate) for the
+        attention branch and again for the MLP branch. `mask` is the
+        optional hierarchical local-attention mask.
+        """
         s_msa, sc_msa, g_msa, s_mlp, sc_mlp, g_mlp = self.ada(c).chunk(6, dim=-1)
         h = modulate(self.norm1(x), s_msa, sc_msa)
         x = x + g_msa.unsqueeze(1) * self.attn(

@@ -8,7 +8,7 @@ import numpy as np
 import torch
 
 from georvq.config import TierSpec, parse_tier
-from georvq.metrics import centered_cos, masked_recon_stats
+from georvq.metrics import centered_cos
 from georvq.model.codec import tuple_bits
 
 
@@ -36,7 +36,8 @@ def canonical_tuples(specs, mins=None):
 
 
 @torch.no_grad()
-def validate(model, source, val_s, tuples, canon_names=(), val_loc=None):
+def validate(model, source, val_s, tuples, canon_names=(), val_loc=None,
+             quantized=True):
     """val_s: raw val tokens resident on the eval device (converted per
     chunk). val_loc: per-token location embeddings when the model carries a
     conditioner/selector. Returns (scalars dict, cos-by-tuple dict)."""
@@ -49,13 +50,41 @@ def validate(model, source, val_s, tuples, canon_names=(), val_loc=None):
     for i in range(0, val_s.shape[0], vchunk):
         x, v = source.prep(val_s[i:i + vchunk], val_s.device)
         chunks.append((x, v, val_loc[i:i + vchunk] if val_loc is not None else None))
+    if not quantized:
+        # VQ-free warmup: the codebooks hold whatever nn.Embedding was
+        # initialised with, so every quantized tuple would be measuring the
+        # model against random vectors -- 16 tuples x 4096 tokens of
+        # quantization per validation, producing numbers that look like
+        # results and are not. Only the unquantized ceiling means anything
+        # until the books are fitted.
+        ceil_sum = [0.0, 0, 0.0]
+        bm_sum, bm_n = 0.0, 0
+        for cx, cv, _ in chunks:
+            o = model.eval_ceiling(cx, valid=cv)
+            n = int(cv.sum())
+            ceil_sum[0] += float(source.recon_stats(o, cx, cv)[1]["cos"]) * n
+            ceil_sum[1] += n
+            ceil_sum[2] += float(centered_cos(o, cx, cv)) * n
+            vm = cv.unsqueeze(1).float()
+            mean = (cx * vm).sum((2, 3)) / vm.sum((2, 3)).clamp_min(1)
+            mean = torch.nn.functional.normalize(mean, dim=1)
+            bm_sum += float((mean[:, :, None, None].expand_as(cx)
+                             * cx).sum(1)[cv].sum()); bm_n += n
+        out["cos_ceiling"] = ceil_sum[0] / ceil_sum[1]
+        out["ccos_ceiling"] = ceil_sum[2] / ceil_sum[1]
+        out["cos_blockmean"] = bm_sum / bm_n
+        out["_ccos"] = {}
+        if was_training:
+            model.train()
+        return out, {}
+
     sums = {tname(t): [0.0, 0, 0.0] for t in tuples}
     ceil_sum = [0.0, 0, 0.0]
     track_cd = model.conditioner is not None
     cd_sum = [np.zeros(sp.depth + 1) for sp in specs] if track_cd else None
     cd_n = 0
     for cx, cv, cloc in chunks:
-        zs, cums = model.level_cumsums(cx, loc=cloc)
+        zs, cums = model.level_cumsums(cx, loc=cloc, valid=cv)
         if track_cd:       # per-tier cos-dist by cumulative level (0 = prior)
             for ti, sp in enumerate(specs):
                 z = zs[ti].float(); b = z.shape[0]
@@ -65,13 +94,13 @@ def validate(model, source, val_s, tuples, canon_names=(), val_loc=None):
             cd_n += zs[0].shape[0]
         n = int(cv.sum())
         for t in tuples:
-            o = model.eval_tuple(cums, t, cx)
-            _, c = masked_recon_stats(o, cx, cv)
+            o = model.eval_tuple(cums, t, cx, valid=cv)
+            c = source.recon_stats(o, cx, cv)[1]["cos"]
             s = sums[tname(t)]; s[0] += float(c) * n; s[1] += n
             if tname(t) in canon_names:
                 s[2] += float(centered_cos(o, cx, cv)) * n
-        o = model.eval_ceiling(cx)
-        _, c = masked_recon_stats(o, cx, cv)
+        o = model.eval_ceiling(cx, valid=cv)
+        c = source.recon_stats(o, cx, cv)[1]["cos"]
         ceil_sum[0] += float(c) * n; ceil_sum[1] += n
         ceil_sum[2] += float(centered_cos(o, cx, cv)) * n
     for t in tuples:

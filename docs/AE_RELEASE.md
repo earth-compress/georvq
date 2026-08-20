@@ -162,7 +162,7 @@ bucket is 302,466 tiles over 9 years.
   (fine tier ~95% entropy-saturated; deflate recovers the rest) while
   dominating decode time. The coarse tier's ~30% entropy gap is left on
   the table (a regional coarse-mosaic product is the fix if it matters).
-- **Lite decoders**: trained and parked below the quality bar
-  (docs/PARKED.md, which also holds the error-envelope predictor). The
-  deblocker graduated from that list and ships as the second decoder
-  (above).
+- **Lite decoders**: trained and parked below the quality bar (see
+  *Deferred with evidence* in docs/FINDINGS.md, which also holds the
+  error-envelope predictor). The deblocker graduated from that list and
+  ships as the second decoder (above).

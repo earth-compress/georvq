@@ -4,6 +4,13 @@ Everything dataset-specific lives in three pluggable pieces; the pyramid,
 RVQ, rate model, decoder trunk, training loop, evals and inference are
 shared. To onboard a new source you write:
 
+Before writing any of it, measure the source. `docs/SOURCE_ONBOARDING.md`
+turns a handful of cheap measurements — intrinsic dimensionality,
+autocorrelation range, lossless floor, magnitude spread — into the
+architecture parameters below, so that window size, tier grids, latent
+widths and codebook sizes are derived rather than inherited from
+whichever preset you copied.
+
 ## 1. A store builder → chip-store v1
 
 Convert your source once into the standard on-disk format
@@ -42,6 +49,10 @@ Subclass `georvq.sources.Source` and register it in
 - `normalizer(cfg)` — per-tile stats side channel, or `None` if your data
   is already normalized (unit-norm embedding fields). Stats are compressed
   with `georvq.inference.stats_codec.StatsPacker` (~11 bytes/tile).
+  A separate option, `model.stats_cond`, *transmits* the per-window mean
+  and codes only the remainder; it pays when the mean is a large share of
+  window energy and the field is not unit-norm. Charge it — an uncharged
+  stats channel once reached 34% of a bitstream unnoticed.
 - `recon_stats(out, x, valid) -> (loss, metrics)` — the training loss and
   quality metrics in model space.
 
@@ -61,12 +72,24 @@ georvq-train -c configs/my_source.yaml --gpu 0
 
 Training-side, the three pieces above are everything. If the codec is to
 be *shipped*, deployment policy — container format, rate/quality
-controls, sidecars, executables — is deliberately per-source, built on
-the generic `georvq.inference` machinery. `georvq/ae/` +
-`docs/AE_RELEASE.md` are the worked example; its choices (COG assets
-mirroring the source's block quantum, a coarse-residual sidecar, an
-encode-time quality ladder) were *measured responses to that source*,
-not defaults to inherit.
+controls, side channels, refinements, executables — is deliberately
+per-source, built on the generic `georvq.inference` machinery.
+
+There are two worked examples, and reading them side by side is the
+fastest way to see which decisions are policy rather than architecture:
+
+| | AlphaEarth (`georvq/ae/`) | Tessera (`georvq/tessera/`) |
+|---|---|---|
+| container | COG assets mirroring the source's 1024 px block quantum | packets; no container yet, none required |
+| stats channel | none — the field is exactly unit-norm | the patch mean, 768 bits/window, charged |
+| refinement | coarse tier, 2-bit uniform, **always on** (+1.5% rate) | fine tier, 1-bit rotated Lloyd, **opt-in** (+150% rate) |
+| quality control | encode-time measured error ladder | not built — nobody has asked |
+
+Every one of those differences is a measured response to the data, and
+the refinement row is the cautionary one: the coarse-tier sidecar that
+recovers ~98% of AlphaEarth's quantizer gap recovers **0.0%** on Tessera.
+Locate your model's slack (compare full-depth reconstruction against the
+un-quantized ceiling, per tier) before copying either.
 
 ## Current integration status
 
