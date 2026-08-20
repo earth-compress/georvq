@@ -29,14 +29,29 @@ other worked example, and the two differ in instructive places.
 Weights are not in git.
 
 - *On the group server*: `/data/georvq-releases/tessera-beta-v1/bundle`.
-- *Elsewhere*: copy `tessera-beta-v1.tar.gz` (425 MB) and verify it
-  before use — `model.pt` is a torch pickle.
+- *Elsewhere*: copy `tessera-beta-v1.tar.gz` (425 MB) and **verify it
+  before loading**.
 
 ```bash
 sha256sum -c <<< "5a85461327402951d1b2bec8ae47db2fddd2971e7bad0094bf71aa2666c03f82  tessera-beta-v1.tar.gz"
 tar xzf tessera-beta-v1.tar.gz
-pip install -e ".[eval]"          # decoding needs no extras at all
+pip install -e .                  # decoding needs no extras at all
 ```
+
+The tarball is **data, not an executable**: four files, no code. The
+decoder is the `georvq` package, which is what lets a better decoder
+ship later against the same `bitstream_id` without re-encoding
+anything.
+
+    bundle/model.pt            weights + the embedded resolved config
+    bundle/mean_channel.npz    the mean channel's per-band constants
+    bundle/refine_table.npz    the fine-tier Lloyd table
+    bundle/bundle.json         bitstream_id, decoder_id, tiers, refinement spec
+
+The checksum is not ceremony. `model.pt` is a torch pickle and the
+config rides inside it, so it is loaded with `weights_only=False` --
+which means **loading it executes code**. Treat an unverified bundle
+the way you would treat an unverified script.
 
 ## Quickstart
 
