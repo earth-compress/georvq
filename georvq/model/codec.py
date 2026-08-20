@@ -143,8 +143,9 @@ class PyramidCodec(nn.Module):
         self.window = cfg.window
         self.bands = cfg.bands
         self.specs = list(cfg.tiers)
+        self.norm_latents = cfg.norm_latents
         self.continuous = cfg.vq is None
-        self.normalize_latents = cfg.normalize_latents
+        self.norm_latents = cfg.norm_latents
 
         self.stem = source.build_stem(cfg)
         if cfg.local_attn and cfg.local_attn[-1] is not None:
@@ -177,6 +178,9 @@ class PyramidCodec(nn.Module):
             self._skip_masked = v.skip_masked
             self._base_dead = v.dead_threshold
             self._part_ema = {}      # (tier, level) -> EMA of active fraction
+            for i, rvq in enumerate(self.rvqs):
+                for j, lev in enumerate(rvq.levels):
+                    lev._tag = f"tier{i}/L{j}"   # for reset telemetry
 
         self.rate = None
         if cfg.rate is not None:
@@ -221,7 +225,7 @@ class PyramidCodec(nn.Module):
     def encode_levels(self, x, stats=None, valid=None):
         """x: (B, C, W, W) -> list of per-tier latents [(B, cells, dim)].
 
-        With `normalize_latents`, tiers come out in the SAME normalized
+        With `norm_latents`, tiers come out in the SAME normalized
         geometry `encode_stage1` produces, so a stage-2 run quantizes and
         decodes exactly what stage-1 trained on. Without it, a decoder
         warm-started from stage-1 is handed raw latents whose norms are a
@@ -239,7 +243,7 @@ class PyramidCodec(nn.Module):
             x = center(x, stats, valid)
         bias = None if self.stats_enc is None else self.stats_enc(stats)
         zs = self.tokenizer(self.stem(x), stats_bias=bias)
-        if self.normalize_latents:
+        if self.norm_latents:
             zs = [F.normalize(z, dim=-1, eps=1e-6) * (z.shape[-1] ** 0.5)
                   for z in zs]
         return zs
@@ -452,6 +456,14 @@ class PyramidCodec(nn.Module):
                     -(p[p > 0] * p[p > 0].log2()).sum())
                 out[f"pyr{i}_perplexity_L{j+1}"] = float(
                     2 ** out[f"pyr{i}_entropy_L{j+1}"])
+                # EMA-based (training-traffic) counterparts: not limited
+                # to one val batch, and what the dead-reset logic sees
+                lev = self.rvqs[i].levels[j]
+                q = lev.ema_count / lev.ema_count.sum().clamp_min(1e-12)
+                out[f"pyr{i}_ema_alive_L{j+1}"] = float(
+                    (lev.ema_count > lev.dead_threshold).float().mean())
+                He = float(-(q[q > 0] * q[q > 0].log2()).sum())
+                out[f"pyr{i}_ema_perplexity_L{j+1}"] = float(2 ** He)
 
         if self.selector is not None:
             scores = self.selector(loc)

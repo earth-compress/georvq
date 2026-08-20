@@ -181,9 +181,12 @@ def test_spectral_angle_is_zero_for_a_pure_gain_change():
     """SAM reads band RATIOS: scaling every band of a pixel must not move
     it, which is exactly why S2 uses it over a per-band MSE."""
     from georvq.metrics import spectral_angle
+    torch.manual_seed(0)
     x = torch.rand(2, 5, 4, 4) + 0.1
     valid = torch.ones(2, 4, 4, dtype=torch.bool)
-    assert float(spectral_angle(x * 2.5, x, valid)) == pytest.approx(0, abs=1e-4)
+    # arccos is ill-conditioned at 0: cos = 1 - eps maps to angle ~ sqrt(2 eps),
+    # so fp32 rounding alone puts a noise floor near 4e-4 radians here.
+    assert float(spectral_angle(x * 2.5, x, valid)) == pytest.approx(0, abs=1e-3)
 
 
 def test_masked_metrics_ignore_invalid_pixels():

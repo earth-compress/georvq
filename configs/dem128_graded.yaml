@@ -1,0 +1,107 @@
+# COPDEM at 128px with codebooks sized from the sample budget rather than
+# copied from the AlphaEarth ladder.
+#
+# WHY THIS EXISTS. dem128 inherits pyr64's 2048/8192/16384 books, which on
+# this geometry starves the coarse tiers. At batch 512 and ema_decay 0.99
+# the EMA window holds batch x cells x 100 vectors, so
+#
+#     tier 0 (1 cell)     K=2048   ->    25 vectors/codeword   (need ~450)
+#     tier 1 (16 cells)   K=8192   ->   100 vectors/codeword
+#     tier 2 (256 cells)  K=16384  ->   800 vectors/codeword    healthy
+#
+# 25 per codeword is the regime where fitting is worse than not fitting
+# (docs/FINDINGS.md): the book loses most of its codes and the tier
+# collapses quietly, while full-depth metrics stay respectable because the
+# fine tier carries everything. So the books are graded DOWN where starved
+# and left alone where healthy -- at matched rate a bigger book beats more
+# levels on a well-sampled tier, so shrinking tier 2 would cost R-D for
+# nothing.
+#
+#     tier 0   K=256  (8 bits)   1,000 vectors/codeword
+#     tier 1   K=512   (9 bits)   8,000
+#     tier 2   K=1024 (10 bits)  64,000
+#
+# K stays small on every tier, not just the starved ones. The case for a
+# big fine book -- that it beats more levels at matched rate -- was
+# measured at 8-14 levels, BEFORE the residual whitens. analysis/
+# turboquant.py shows that after enough levels the residual is isotropic
+# noise (random and PCA rotations land within 1%: rel MSE 0.1425 vs
+# 0.1436), and there is no structure left for a large book to exploit.
+# Past that point bits are bits, and small books are strictly better:
+# 2.9 MiB of int8 codebooks here against 10.1 MiB for a 64/1024/16384
+# ladder, at a LOWER rate.
+#
+# K x dim is 65,536 on all three tiers, so the download is flat across
+# the pyramid rather than concentrated in the fine book.
+#
+# ema_decay is 0.998, not the inherited 0.99. Tier 0 has ONE cell, so it
+# sees 256x fewer vectors per batch than tier 2; at decay 0.99 its EMA
+# window holds only 200 vectors per codeword, under the ~450 crossover
+# below which fitting is worse than not fitting. Widening the window to
+# 500 fixes that without touching K -- and a slower EMA is the safer
+# choice anyway (docs/FINDINGS.md: decay 0.99 degraded a converged fit,
+# 0.9995 was flat).
+#
+# DEPTH GOES WHERE CELLS ARE FEW. One level costs cells x log2(K) bits, so
+# here a tier-2 level is 597x a tier-0 level and 22x a tier-1 level:
+#
+#     tier 0      8 bits/level   0.00049 b/px
+#     tier 1    144 bits/level   0.00879 b/px
+#     tier 2  2,560 bits/level   0.15625 b/px
+#
+# and analysis/pyramid_sizing.py puts 79.1% of the post-mean residual at
+# tier 1 against 18.2% at tier 2. The finest tier costing the most rate
+# for the least energy is not a flaw to design around -- it is what a
+# decaying power spectrum looks like, and it holds for most sources. So depth 20 on the two cheap tiers is
+# nearly free and buys the scale that holds the energy, while tier 2 stays
+# at 6. Going 6 -> 20 on tiers 0 and 1 costs 0.17 b/px in total.
+#
+# NO STATS CONDITIONING. DEMSource already transmits per-window (mean, std)
+# through its normalizer, so the absolute-elevation term the pyramid would
+# otherwise waste tier 0 on is gone before the encoder sees the window.
+# `model.stats_cond` would be a second, redundant mean channel.
+#
+# THE RATE TO AIM AT. analysis/data_probe.py measures a lossless floor of
+# 2.47 b/px on this store (integer metre, avg-of-neighbours predictor,
+# 58.4% saving over raw). Full depth here is 1.12 b/px, 2.2x under that
+# floor, and the rungs worth quoting are lower still: 0.19 b/px is 13x
+# under, 0.34 b/px is 7x. The eval tuples below span that range.
+inherit: dem128.yaml
+
+model:
+  # dims 256/128/64: halving per tier, so K x dim is constant. Note this
+  # is a symmetry choice, not a measured one -- pyramid_sizing reports
+  # d95=1 per tier, but that is a rank across BANDS and DEM has one, so
+  # it is trivially 1 and says nothing about latent width.
+  tiers: ["1:256:256:20", "4:128:512:20", "16:64:1024:6"]
+  min_depths: [4, 0, 0]
+  # spread depth tuples along the monotone path so every codebook gets an
+  # equal share of the training signal; nested sampling leaves the deep
+  # levels of the long tiers almost untrained
+  depth_sampling: path
+  full_frac: 0.15
+  vq:
+    ema_decay: 0.998       # see the header: tier 0 is the binding tier
+    warmup_steps: 2000     # VQ-free, then residual k-means init
+    init_mode: tree        # balanced PCA tree: cannot emit an empty leaf
+    init_per_code: 2000    # per-tier init budget, so tier 0 is not starved
+                           # by a batch-count-sized sample
+    reset_mode: split      # revive dead codes by LBG centroid splitting
+    book_bits: 8           # int8 codebooks: same R-D, 4x smaller download
+    bf16_scores: true
+    skip_masked: true
+
+train:
+  steps: 60000
+
+eval:
+  # spanning the ladder, with b/px at 128px:
+  #   20-0-0    0.010   coarse tier alone          (253x under lossless)
+  #   20-20-0   0.186   both cheap tiers saturated  (13x)
+  #   20-20-1   0.342   first fine level            (7.2x)
+  #   20-20-3   0.654                               (3.8x)
+  #   20-20-6   1.123   full depth                  (2.2x)
+  recon_tuples: ["20-0-0", "20-20-0", "20-20-1", "20-20-3", "20-20-6"]
+
+log:
+  run_tag: dem128_graded

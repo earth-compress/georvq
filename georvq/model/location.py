@@ -68,11 +68,23 @@ def get_spherical_harmonics(degree=40):
                                    harmonics_calculation="analytic").double()
 
 
+def get_location_encoder(encoder="satclip", device="cpu", degree=40):
+    """Location-encoder factory: "satclip" (pretrained 256-d context) or
+    "sphharm" (raw analytic SH features, degree^2 dims — the band-limited
+    positional basis for a learn-your-own location prior)."""
+    if encoder == "sphharm":
+        return get_spherical_harmonics(degree).to(device)
+    return get_satclip(device)
+
+
 def build_location_table(rows, device, encoder=None, standardize=True):
     """Per-row standardized location embeddings (len(rows), D) from each
     chip's lon/lat."""
     enc = encoder or get_satclip(device)
-    enc_device = next(enc.parameters()).device
+    p = next(enc.parameters(), None)
+    if p is None:   # analytic SH is parameterless; evaluate on `device`
+        p = next(enc.buffers(), None)
+    enc_device = p.device if p is not None else torch.device(device)
     ll = torch.tensor(np.stack([rows.lon.values, rows.lat.values], 1),
                       dtype=torch.float64, device=enc_device)
     with torch.no_grad():
@@ -87,8 +99,9 @@ def build_location_tables(cfg, store, train_rows, val_rows, device):
     Val tokens are rebuilt WITH per-token side-info so each token carries its
     chip's embedding."""
     from georvq.data.pool import fixed_val_tokens
-    enc = get_satclip(device)
-    standardize = cfg.model.conditioning.location.standardize
+    loc_cfg = cfg.model.conditioning.location
+    enc = get_location_encoder(loc_cfg.encoder, device, loc_cfg.degree)
+    standardize = loc_cfg.standardize
     train_t = build_location_table(train_rows, device, enc, standardize)
     val_t_chip = build_location_table(val_rows, device, enc, standardize)
     val_s, val_loc = fixed_val_tokens(store, val_rows,

@@ -67,7 +67,9 @@ def get_source(name: str, model_cfg) -> Source:
     """
     from georvq.sources.ae import AESource
     from georvq.sources.tessera import TesseraSource
-    SOURCES = {"ae": AESource, "tessera": TesseraSource}
+    from georvq.sources.dem import DEMSource
+    SOURCES = {"ae": AESource, "tessera": TesseraSource,
+               "dem": DEMSource}
     try:
         from georvq.sources.s2 import S2Source
         SOURCES["s2"] = S2Source

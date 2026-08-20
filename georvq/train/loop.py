@@ -20,7 +20,7 @@ import torch
 
 from georvq.config import Config, VQConfig
 from georvq.data.pool import ChipPool, fixed_val_tokens
-from georvq.data.store import ChipStore
+from georvq.data.store import open_store
 from georvq.factory import build_model
 from georvq.model.codec import (monotone_tuples, path_tuples,
                                 sample_monotone_depths,
@@ -30,8 +30,8 @@ from georvq.model.vqinit import residual_init_rvq
 from georvq.repro import (run_metadata, save_checkpoint, seed_all,
                           write_resolved_config)
 from georvq.train.figures import (codebook_figure, cosdist_figure,
-                                   rd_figure, recon_figure,
-                                   reset_figure)
+                                   error_hist_figure, rd_figure,
+                                   recon_figure, reset_figure)
 from georvq.sources.report import resolve_report
 from georvq.train.validate import canonical_tuples, load_rd_ref, tname, validate
 from georvq.train import dist as D
@@ -67,11 +67,19 @@ def setup_data(cfg: Config, source, device):
     rank still draws from ALL training chips and refreshes from disk at
     the configured rate, so this costs no corpus coverage -- it only
     halves how much each rank holds in RAM at any moment. Seeds are
-    offset by rank so ranks hold and sample different chips."""
-    store = ChipStore(cfg.data.store_dir)
+    offset by rank so ranks hold and sample different chips.
+
+    val_frac=0 is closed-distribution mode (compress a fixed corpus):
+    train on every chip and let "val" measure training-set fit."""
+    store = open_store(cfg.data.store_dir)
     train_rows, val_rows = store.split(cfg.data.val_frac,
                                        seed=cfg.data.split_seed)
-    if D.is_main():
+    if cfg.data.val_frac == 0:
+        val_rows = train_rows
+        if D.is_main():
+            print(f"data: {len(store.index)} chips, closed distribution "
+                  "(val tokens drawn from train chips)", flush=True)
+    elif D.is_main():
         print(f"data: {len(store.index)} chips -> {len(train_rows)} train / "
               f"{len(val_rows)} val", flush=True)
     if cfg.data.limit_chips:
@@ -485,9 +493,9 @@ def train(cfg: Config, gpu=0):
             D.average_grads(base_p + rate_p)
         # clip AFTER the all-reduce, so the norm is the one actually applied
         gnorm = None
-        if cfg.train.optim.grad_clip > 0:
+        if v.clip_norm:
             gnorm = float(torch.nn.utils.clip_grad_norm_(
-                base_p + rate_p, cfg.train.optim.grad_clip))
+                base_p + rate_p, v.clip_norm))
             if not math.isfinite(gnorm):
                 # a non-finite gradient would write NaN/inf into Adam's
                 # moments and poison every later step, so drop it entirely
@@ -553,7 +561,7 @@ def train(cfg: Config, gpu=0):
                 # step-1900 blow-up coming
                 log["train/grad_norm"] = gnorm
                 log["train/grad_clipped"] = float(
-                    gnorm > cfg.train.optim.grad_clip)
+                    gnorm > v.clip_norm)
                 log["train/nonfinite_steps"] = nonfinite_steps
             log.update({f"train/{k}": float(val) for k, val in m.items()})
             if pool.cycle:
@@ -692,6 +700,17 @@ def train(cfg: Config, gpu=0):
                                           preview=report.preview)
                         wandb.log({"figs/recon": wandb.Image(f3)}, step=step)
                         plt.close(f3)
+                    if report.has_figure("error_hist") and (
+                            step % cfg.train.fig_interval == 0
+                            or step == cfg.train.steps):
+                        # signed error, in model space and -- where the
+                        # source normalizes -- in its own physical unit
+                        f5 = error_hist_figure(model, source, val_s, step,
+                                               mins=mins, val_loc=val_loc,
+                                               unit=report.units)
+                        wandb.log({"figs/error_hist": wandb.Image(f5)},
+                                  step=step)
+                        plt.close(f5)
 
             # Track the ceiling during warmup: cos_full would be the
             # model scored against unfitted books, so model_best.pt would
