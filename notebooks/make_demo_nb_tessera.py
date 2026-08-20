@@ -33,6 +33,36 @@ a 1.12 b/px reconstruction come from the same bytes.
 **Decoding needs no GPU and no extras** — this notebook runs on CPU in
 about a minute. Full contract: `docs/TESSERA_RELEASE.md`.""")
 
+md("""## Running this
+
+```bash
+git clone <georvq> && cd georvq
+pip install -e ".[tessera,baseline]"
+
+# the weights, verified before loading (model.pt is a torch pickle)
+sha256sum -c <<< "ca776bbe0d679640d20193ded63863e9db7aa385cd5473fa61c2acc3ce38edb9  tessera-beta-v1.tar.gz"
+tar xzf tessera-beta-v1.tar.gz
+export GEORVQ_TESSERA_BUNDLE=$PWD/tessera-beta-v1/bundle
+
+cd notebooks && jupyter lab demo_tessera_codec.ipynb
+```
+
+Point `GEORVQ_TESSERA_BUNDLE` at the extracted `bundle/`, or just edit
+`BUNDLE` in the next cell. Nothing else needs configuring.
+
+What the extras are for, since the answer is "less than you'd think":
+
+| | needed for |
+|---|---|
+| *(nothing)* | decoding, and everything in sections 3-6 and 8 |
+| `[tessera]` | `geotessera`, to fetch the tile in section 1 |
+| `[baseline]` | `tessera-vq`, for the comparison in section 7 |
+
+**Decoding itself has no dependencies beyond torch and numpy, and no
+GPU.** The codec's own metrics are computed inline rather than imported
+from `tessera-vq`, so section 7 is the only part that needs it -- and it
+checks the two definitions agree rather than assuming they do.""")
+
 code("""import os, sys, time
 import numpy as np
 import matplotlib.pyplot as plt
@@ -130,20 +160,25 @@ code("""LADDER = [(20, 0, 0), (20, 20, 0), (20, 20, 1), (20, 20, 3), (20, 20, 6)
           (20, 20, 20)]
 LOSSLESS = 672.0        # b/px, measured by analysis/data_probe.py
 
-# Scored by tessera-vq's OWN metric function, so both codecs go through
-# identical code: median relative L2 and R^2 with per-dimension centring
-# (tessera_vq.metrics.reconstruction_metrics), both scale-free. Getting
-# this wrong is easy and flattering -- centring R^2 on a single scalar
-# mean instead of per-dimension inflates the denominator, and the score.
-from tessera_vq.metrics import reconstruction_metrics
-
+# Median relative L2 and R^2, defined exactly as the tessera-vq paper
+# does (its Table 2) so the two codecs are comparable. Written out here
+# rather than imported, so the codec demo does not depend on the
+# comparison library -- section 7 checks these against tessera-vq's own
+# function when it is installed.
+#
+# The centring is the part that is easy to get wrong and flattering:
+# R^2 must centre PER DIMENSION. Centring on one scalar mean counts the
+# between-band offsets as variance to be explained, inflating the
+# denominator and the score.
 def metrics(out, ref, vmask):
     o, r = requantize(out), requantize(ref)          # -> source units
     cc = float(centered_cos(out, ref, vmask))
-    ov = o[0].permute(1, 2, 0)[vmask[0]].numpy()
-    rv = r[0].permute(1, 2, 0)[vmask[0]].numpy()
-    m = reconstruction_metrics(rv, ov)
-    return cc, m["rel_l2_p50"], m["r2"]
+    ov = o[0].permute(1, 2, 0)[vmask[0]].double()
+    rv = r[0].permute(1, 2, 0)[vmask[0]].double()
+    rel = ((ov - rv).norm(dim=1) / rv.norm(dim=1).clamp_min(1e-12))
+    ss_res = (ov - rv).pow(2).sum()
+    ss_tot = (rv - rv.mean(0)).pow(2).sum()          # per-dimension centring
+    return cc, float(rel.median()), float(1 - ss_res / ss_tot)
 
 recons, rows = {}, []
 for d in LADDER:
@@ -264,6 +299,7 @@ is close to a matched-rate comparison rather than two curves fitted at
 different budgets.""")
 
 code("""import gzip
+from tessera_vq.metrics import reconstruction_metrics
 from tessera_vq.rvq_large import rvq_reconstruct_large
 
 # their space: dequantized embeddings, magnitude kept (L2 k-means)
@@ -273,7 +309,7 @@ flat = tile.reshape(-1, 128)
 def tvq(k1, k2, p=CROP):
     r = rvq_reconstruct_large(tile, k1, k2, seed=0)
     rec = np.asarray(r.recon).reshape(-1, 128)
-    m = reconstruction_metrics(flat, rec)            # the same function
+    m = reconstruction_metrics(flat, rec)            # their own function
     rel, r2 = m["rel_l2_p50"], m["r2"]
     idx1 = np.asarray(r.indices1).astype(np.uint8).tobytes()
     bpp = (len(gzip.compress(idx1, 9)) / p ** 2      # stage-1, gzip (their 5.1)
@@ -283,6 +319,19 @@ def tvq(k1, k2, p=CROP):
 
 tv = [(f"k1={k1} k2={k2}", *tvq(k1, k2)) for k1, k2 in
       [(20, 256), (32, 256), (128, 256)]]
+
+# our inline metrics vs tessera-vq's function, on OUR reconstruction:
+# the definitions must agree or the comparison above is meaningless
+_o = requantize(recons[(20, 20, 20)])[0].permute(1, 2, 0
+                                                 )[valid[0, :CROP, :CROP]].numpy()
+_r = requantize(x)[0].permute(1, 2, 0)[valid[0, :CROP, :CROP]].numpy()
+_m = reconstruction_metrics(_r, _o)
+_ours = [r for r in rows if r[0] == (20, 20, 20)][0]
+print(f"definition check   inline relL2 {_ours[3]:.5f} vs theirs "
+      f"{_m['rel_l2_p50']:.5f}   inline R^2 {_ours[4]:.5f} vs theirs "
+      f"{_m['r2']:.5f}")
+assert abs(_ours[3] - _m["rel_l2_p50"]) < 1e-4
+assert abs(_ours[4] - _m["r2"]) < 1e-4
 
 print(f"{'tessera-vq':>14} {'b/px':>8} {'rel L2':>8} {'R^2':>8}")
 for n, b, rel, r2 in tv:
