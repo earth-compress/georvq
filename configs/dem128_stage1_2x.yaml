@@ -1,0 +1,12 @@
+# dem128_stage1 with ~2x trunk parameters (dim^2 * depth scaling on both
+# tokenizer and decoder; tier latent dims unchanged so the quantization
+# interface is identical). Probes whether the sigma=0 ceiling is limited
+# by encoder expressivity/nonlinearity at the standard size.
+inherit: dem128_stage1.yaml
+
+model:
+  tokenizer: {dim: 320, depth: 12}
+  decoder: {dim: 480, depth: 16, heads: 8, head_feat: 64, cls_bridge: true}
+
+log:
+  run_tag: dem128_stage1_2x
