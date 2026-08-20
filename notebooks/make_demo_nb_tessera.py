@@ -124,7 +124,7 @@ serves every row below; nothing is re-encoded.
 mean is transmitted, so plain cosine is inflated by a channel that is
 already paid for.
 
-The numbers below are for **this one tile**, not the release figures: `docs/TESSERA_RELEASE.md` reports the ladder over a held-out set, where full depth is ccos 0.807 rather than the ~0.93 an easy tile gives.""")
+The numbers below are for **this one tile**, not the release figures: `docs/TESSERA_RELEASE.md` reports the ladder over a held-out set, where full depth is ccos 0.809 rather than the ~0.93 an easy tile gives.""")
 
 code("""LADDER = [(20, 0, 0), (20, 20, 0), (20, 20, 1), (20, 20, 3), (20, 20, 6),
           (20, 20, 20)]

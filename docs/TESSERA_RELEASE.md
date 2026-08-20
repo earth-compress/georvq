@@ -15,14 +15,17 @@ other worked example, and the two differ in instructive places.
 
 ## The release
 
-- Model: `tessera_vq8_k256_statscond`, step 32,500 (cumulative 51,500),
+- Model: `tessera_vq8_k256_statscond`, step 52,000 (cumulative 71,000 --
+  the run completed),
   window 64, tiers `1:512:256:20 / 4:512:256:20 / 16:256:256:20`.
 - Bundle: `/data/georvq-releases/tessera-beta-v1/bundle/` — `model.pt`,
   `mean_channel.npz`, `refine_table.npz`, `bundle.json` (carries
   `bitstream_id` and `decoder_id`).
-- Status: **beta.** The source run was still improving slowly when this
-  was cut; a replacement checkpoint can be dropped in without changing
-  any of the policy below, and will change `bitstream_id`.
+- Status: **beta.** Cut from the completed run. The last 20,000 steps
+  bought +0.0002 cosine and +0.0018 centred cosine over the mid-run
+  checkpoint, so this is where the recipe lands rather than where it was
+  going. A replacement checkpoint can still be dropped in without
+  changing any of the policy below, and will change `bitstream_id`.
 
 ## Getting it
 
@@ -33,7 +36,7 @@ Weights are not in git.
   before loading**.
 
 ```bash
-sha256sum -c <<< "5a85461327402951d1b2bec8ae47db2fddd2971e7bad0094bf71aa2666c03f82  tessera-beta-v1.tar.gz"
+sha256sum -c <<< "090b9d628c0d9b5520810d8f5eb62718a5caf310373e70def43241d73b523dc6  tessera-beta-v1.tar.gz"
 tar xzf tessera-beta-v1.tar.gz
 pip install -e .                  # decoding needs no extras at all
 ```
@@ -117,14 +120,14 @@ Measured on 512 held-out windows, decoded through the reloaded bundle:
 
 | tuple | b/px | cos | ccos |
 |---|---:|---:|---:|
-| 20-0-0 | 0.227 | 0.93802 | 0.39956 |
-| 20-20-0 | 0.852 | 0.96032 | 0.63525 |
-| 20-20-1 | 1.352 | 0.96339 | 0.66350 |
-| 20-20-5 | 3.352 | 0.97169 | 0.73746 |
-| 20-20-13 | 7.352 | 0.97727 | 0.78728 |
-| 20-20-20 | 10.852 | 0.97949 | 0.80689 |
-| 20-20-20 + refinement | 26.852 | 0.98271 | 0.83599 |
-| *un-quantized ceiling* | — | 0.98566 | 0.85857 |
+| 20-0-0 | 0.227 | 0.93844 | 0.40354 |
+| 20-20-0 | 0.852 | 0.96076 | 0.63904 |
+| 20-20-1 | 1.352 | 0.96388 | 0.66758 |
+| 20-20-5 | 3.352 | 0.97206 | 0.74050 |
+| 20-20-13 | 7.352 | 0.97754 | 0.78948 |
+| 20-20-20 | 10.852 | 0.97971 | 0.80870 |
+| 20-20-20 + refinement | 26.852 | 0.98293 | 0.83777 |
+| *un-quantized ceiling* | — | 0.98583 | 0.85980 |
 
 Track **`ccos`** (centred cosine), not plain `cos`: with the mean
 transmitted, plain cosine is inflated by a channel that is already paid
