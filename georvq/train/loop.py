@@ -475,9 +475,9 @@ def train(cfg: Config, gpu=0):
             D.average_grads(base_p + rate_p)
         # clip AFTER the all-reduce, so the norm is the one actually applied
         gnorm = None
-        if cfg.train.optim.grad_clip > 0:
+        if v.clip_norm:
             gnorm = float(torch.nn.utils.clip_grad_norm_(
-                base_p + rate_p, cfg.train.optim.grad_clip))
+                base_p + rate_p, v.clip_norm))
             if not math.isfinite(gnorm):
                 # a non-finite gradient would write NaN/inf into Adam's
                 # moments and poison every later step, so drop it entirely
@@ -540,7 +540,7 @@ def train(cfg: Config, gpu=0):
                 # step-1900 blow-up coming
                 log["train/grad_norm"] = gnorm
                 log["train/grad_clipped"] = float(
-                    gnorm > cfg.train.optim.grad_clip)
+                    gnorm > v.clip_norm)
                 log["train/nonfinite_steps"] = nonfinite_steps
             log.update({f"train/{k}": float(val) for k, val in m.items()})
             if pool.cycle:

@@ -110,6 +110,18 @@ class VQConfig(StrictModel):
     # output (the historical behaviour); "split" sends it into the live
     # cell with the largest distortion contribution, at that cell's
     # worst-fitting point (LBG splitting).
+    # Global grad-norm clip; None or 0 disables. ON by default because its
+    # absence is a live failure mode, not a tuning choice: with no clip a
+    # single bad batch blew up a run at step 1900 (loss 0.035 -> 0.148,
+    # centred ceiling cosine 0.807 -> 0.036, i.e. collapse to emitting only
+    # the transmitted mean) and Adam did not recover, because the enormous
+    # gradient inflates the second moment and suppresses every subsequent
+    # update. It sits with the quantizer rather than the optimizer because
+    # that is where the spikes come from: working dead-code resets
+    # diversify the coarse z_q mid-training, and the decoder shock plus a
+    # hot LR is what blows up. Small batches make it likelier, so it
+    # matters most exactly where we want to run.
+    clip_norm: Optional[float] = 1.0
     reset_mode: Literal["random", "split"] = "random"
     # Codebook seeding. "kmeans" draws K random data rows (historical);
     # "tree" builds a balanced PCA tree of median splits, which cannot
@@ -269,8 +281,9 @@ class ModelConfig(StrictModel):
     # this on any stage-2 run warm-started from a stage-1 checkpoint;
     # without it the decoder and the fitted codebooks are handed raw
     # latents from a different scale. Default off so existing checkpoints
-    # and the bitstream contract are unaffected.
-    normalize_latents: bool = False
+    # and the bitstream contract are unaffected. (Named `norm_latents`;
+    # `normalize_latents` in older checkpoints is migrated on load.)
+    norm_latents: bool = False
     sigma: Optional[SigmaConfig] = None
     stats_cond: Optional[StatsCondConfig] = None
     conditioning: Optional[Conditioning] = None
@@ -377,15 +390,6 @@ class OptimConfig(StrictModel):
     # get its final LR. "constant" holds `lr` after warmup, so the run can
     # be stopped at any point without leaving the schedule half-applied.
     schedule: Literal["cosine", "constant"] = "cosine"
-    # Global grad-norm clip; 0 disables. ON by default because its absence
-    # is a live failure mode, not a tuning choice: with no clip a single
-    # bad batch blew up a run at step 1900 (loss 0.035 -> 0.148, centred
-    # ceiling cosine 0.807 -> 0.036, i.e. collapse to emitting only the
-    # transmitted mean) and Adam did not recover, because the enormous
-    # gradient inflates the second moment and suppresses every subsequent
-    # update. Small batches make this more likely, so it matters most
-    # exactly where we want to run.
-    grad_clip: float = 1.0
 
 
 class BatchRamp(StrictModel):
@@ -457,6 +461,59 @@ RETIRED_FIELDS = (
     "model.vq.drift_interval", "model.vq.drift_windows",   # served its purpose
     "model.tokenizer.suffix_dim", "model.decoder.suffix_dim",
 )
+
+
+#: Fields that were RENAMED, as old -> new dotted paths. Unlike a retired
+#: field a renamed one still means something, so its value must be moved
+#: rather than dropped -- silently discarding it would change how an old
+#: checkpoint decodes. Both of these were named twice in the project
+#: because two branches solved the same problem independently.
+RENAMED_FIELDS = {
+    "train.optim.grad_clip": "model.vq.clip_norm",
+    "model.normalize_latents": "model.norm_latents",
+}
+
+
+def _pop_path(raw, path):
+    cur, keys = raw, path.split(".")
+    for k in keys[:-1]:
+        if not isinstance(cur, dict) or k not in cur:
+            return None, False
+        cur = cur[k]
+    if isinstance(cur, dict) and keys[-1] in cur:
+        return cur.pop(keys[-1]), True
+    return None, False
+
+
+def _set_path(raw, path, value):
+    cur, keys = raw, path.split(".")
+    for k in keys[:-1]:
+        cur = cur.setdefault(k, {})
+        if not isinstance(cur, dict):
+            return
+    cur.setdefault(keys[-1], value)
+
+
+def apply_renames(raw: dict) -> dict:
+    """Move renamed fields to their current paths, keeping their values.
+
+    `setdefault` on the destination, so a config that already carries the
+    new name wins over a stale copy of the old one.
+    """
+    import copy
+    if not any(_pop_path(copy.deepcopy(raw), old)[1] for old in RENAMED_FIELDS):
+        return raw
+    raw = copy.deepcopy(raw)
+    for old, new in RENAMED_FIELDS.items():
+        val, found = _pop_path(raw, old)
+        if found:
+            _set_path(raw, new, val)
+    return raw
+
+
+def migrate(raw: dict) -> dict:
+    """Bring a config dict from any past schema to the current one."""
+    return drop_retired(apply_renames(raw))
 
 
 def drop_retired(raw: dict) -> dict:

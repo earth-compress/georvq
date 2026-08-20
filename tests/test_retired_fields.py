@@ -47,3 +47,33 @@ def test_every_retired_path_is_actually_gone_from_the_schema():
         for k in keys[:-1]:
             cur = cur.get(k, {}) if isinstance(cur, dict) else {}
         assert keys[-1] not in (cur or {}), f"{path} is still a live field"
+
+
+def test_renamed_fields_move_their_value_rather_than_dropping_it():
+    """A rename is not a retirement. Dropping `grad_clip` from an old
+    checkpoint would silently turn clipping off at a different value than
+    the run used, so the value has to travel to the new path."""
+    from georvq.config import RENAMED_FIELDS, migrate
+    raw = _raw()
+    raw["train"]["optim"]["grad_clip"] = 0.5
+    raw["model"]["normalize_latents"] = True
+    raw["model"]["vq"].pop("clip_norm", None)
+    raw["model"].pop("norm_latents", None)
+    out = migrate(raw)
+    cfg = Config.model_validate(out)
+    assert cfg.model.vq.clip_norm == 0.5
+    assert cfg.model.norm_latents is True
+    assert "grad_clip" not in out["train"]["optim"]
+    assert "normalize_latents" not in out["model"]
+    for old, new in RENAMED_FIELDS.items():
+        assert old != new
+
+
+def test_a_current_config_wins_over_a_stale_old_name():
+    """Both present means the old one is a leftover; the current path is
+    what the run was actually validated with."""
+    from georvq.config import migrate
+    raw = _raw()
+    raw["train"]["optim"]["grad_clip"] = 0.5      # stale
+    raw["model"]["vq"]["clip_norm"] = 2.0         # current
+    assert Config.model_validate(migrate(raw)).model.vq.clip_norm == 2.0
