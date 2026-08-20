@@ -130,16 +130,20 @@ code("""LADDER = [(20, 0, 0), (20, 20, 0), (20, 20, 1), (20, 20, 3), (20, 20, 6)
           (20, 20, 20)]
 LOSSLESS = 672.0        # b/px, measured by analysis/data_probe.py
 
-# Reported in the units the tessera-vq paper uses, so the two codecs are
-# directly comparable: relative L2 (median, as in its Table 2) and R^2,
-# both scale-free, plus the centred cosine this project tracks.
+# Scored by tessera-vq's OWN metric function, so both codecs go through
+# identical code: median relative L2 and R^2 with per-dimension centring
+# (tessera_vq.metrics.reconstruction_metrics), both scale-free. Getting
+# this wrong is easy and flattering -- centring R^2 on a single scalar
+# mean instead of per-dimension inflates the denominator, and the score.
+from tessera_vq.metrics import reconstruction_metrics
+
 def metrics(out, ref, vmask):
     o, r = requantize(out), requantize(ref)          # -> source units
     cc = float(centered_cos(out, ref, vmask))
-    e = (o - r).pow(2).sum(1).sqrt()
-    rel = (e / r.pow(2).sum(1).sqrt().clamp_min(1e-9))[vmask]
-    r2 = 1 - float((o - r).pow(2).sum() / (r - r.mean()).pow(2).sum())
-    return cc, float(rel.median()), r2
+    ov = o[0].permute(1, 2, 0)[vmask[0]].numpy()
+    rv = r[0].permute(1, 2, 0)[vmask[0]].numpy()
+    m = reconstruction_metrics(rv, ov)
+    return cc, m["rel_l2_p50"], m["r2"]
 
 recons, rows = {}, []
 for d in LADDER:
@@ -269,9 +273,8 @@ flat = tile.reshape(-1, 128)
 def tvq(k1, k2, p=CROP):
     r = rvq_reconstruct_large(tile, k1, k2, seed=0)
     rec = np.asarray(r.recon).reshape(-1, 128)
-    err = np.linalg.norm(flat - rec, axis=1)
-    rel = float(np.median(err / np.maximum(np.linalg.norm(flat, axis=1), 1e-9)))
-    r2 = 1 - float(((flat - rec) ** 2).sum() / ((flat - flat.mean(0)) ** 2).sum())
+    m = reconstruction_metrics(flat, rec)            # the same function
+    rel, r2 = m["rel_l2_p50"], m["r2"]
     idx1 = np.asarray(r.indices1).astype(np.uint8).tobytes()
     bpp = (len(gzip.compress(idx1, 9)) / p ** 2      # stage-1, gzip (their 5.1)
            + 1.0                                     # stage-2, raw byte plane
@@ -299,25 +302,35 @@ point rather than the endpoints.""")
 code("""fig, ax = plt.subplots(1, 2, figsize=(13, 4.8))
 ob = [r[1] for r in rows]
 
-for a, i, lab, inv in ((ax[0], 4, "R-squared", False),
-                       (ax[1], 3, "median relative L2", True)):
+# Both axes plot the metric as it is, ascending. Inverting the relative
+# L2 axis to make "lower is better" read upward inverts the apparent
+# ordering of the two codecs with it, which is worse than the small
+# convenience it buys.
+for a, i, j, lab, better in ((ax[0], 4, 3, "R-squared", "higher is better"),
+                             (ax[1], 3, 2, "median relative L2",
+                              "lower is better")):
     a.plot(ob, [r[i] for r in rows], "o-", lw=2, color="#0f6e78",
            label="this codec")
-    a.plot([t[1] for t in tv], [t[3 if i == 4 else 2] for t in tv], "s--",
+    a.plot([t[1] for t in tv], [t[j] for t in tv], "s--",
            color="#93384a", label="tessera-vq")
-    a.scatter([tv[0][1]], [tv[0][3 if i == 4 else 2]], s=180, marker="*",
+    a.scatter([tv[0][1]], [tv[0][j]], s=180, marker="*",
               color="#8a5a12", zorder=5, label="their recommended point")
-    a.set(xscale="log", xlabel="rate (b/px)", ylabel=lab)
+    a.set(xscale="log", xlabel="rate (b/px)", ylabel=f"{lab}  ({better})")
     a.grid(alpha=0.3); a.legend(fontsize=9)
-    if inv:
-        a.invert_yaxis()
-ax[0].set_title("higher is better"); ax[1].set_title("lower is better")
+    a.set_title(lab)
 plt.tight_layout(); plt.show()""")
 
 md("""### At matched rate
 
 Their recommended 11.0 b/px against our 10.85 b/px full depth -- the two
-codecs at, for practical purposes, the same budget.""")
+codecs at, for practical purposes, the same budget.
+
+Reading the ladder the other way is the more useful comparison: this
+codec passes their recommended point's quality on **both** metrics
+somewhere between `20-20-1` and `20-20-3`, i.e. at roughly **2.4 b/px
+against their 11.1 -- about 4.7x less rate for the same reconstruction**.
+Below about 1.4 b/px it is behind them, which is worth saying plainly:
+the advantage is real but it is not uniform across the front.""")
 
 code("""rec_bpp, rec_rel, rec_r2 = tv[0][1], tv[0][2], tv[0][3]
 ours = rows[-1]                                   # 20-20-20, full depth
