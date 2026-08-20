@@ -27,16 +27,21 @@ data:
     # how often each is replaced. At 1024 a batch of 1024 windows was
     # hitting the same scenes repeatedly.
     size: 10240
-    workers: 24
+    workers: 8
     # Whole scenes: the rasters are LZW with 1024 px blocks over a 1068 px
     # image, so a partial read decompresses the band anyway -- taking half
     # the rows would double the read cost per resident pixel, not halve it.
     slot_rows: 1068
     # Reuse per scene is windows/s / refresh_per_s, INDEPENDENT of pool
-    # size: at ~630 win/s and 64 scenes/s each scene is drawn ~10 times
-    # before eviction. 774 MB/s of reads; a full sweep of the corpus is
-    # ~28 min.
-    refresh_per_s: 64.0
+    # size: at ~630 win/s and 32 scenes/s each scene is drawn ~20 times
+    # before eviction, and the corpus sweeps in ~55 min.
+    #
+    # workers/refresh are capped by the GIL, not by disk. 24 workers at 64
+    # scenes/s measured 243 win/s with GPU utilisation oscillating 29-99%
+    # (disk was 27% busy, so not the constraint): the reader threads
+    # contend with the training thread for the interpreter. 8 workers ran
+    # at 653 win/s. More readers is not more data.
+    refresh_per_s: 32.0
     device: cpu
     cycle: true            # sweep the corpus; never resample a resident subset
     align_crops: true
