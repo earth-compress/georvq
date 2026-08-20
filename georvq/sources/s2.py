@@ -181,15 +181,27 @@ class S2Source(Source):
         """Reflectance, not an embedding field, so nothing here is
         inherited: quality is the spectral angle (it reads the band RATIOS
         that indices and classifiers use, which a per-band MSE averages
-        away), RMSE accompanies it in standardized units, and the preview
-        is true colour off the 10m group rather than a PCA projection.
-        There is no block-mean floor because the per-tile mean is already
-        transmitted as a side channel -- scoring against it would be
-        scoring against part of the bitstream.
+        away), RMSE accompanies it, and the preview is true colour off the
+        10m group rather than a PCA projection. There is no block-mean
+        floor because the per-tile mean is already transmitted as a side
+        channel -- scoring against it would be scoring against part of the
+        bitstream.
+
+        CAVEAT ON THE ANGLE. `prep` standardizes each band per tile before
+        the model sees anything, so this measures the angle between
+        STANDARDIZED ANOMALY vectors, not between reflectance spectra. It
+        is still the right shape of metric -- scale-invariant, sensitive to
+        the relative pattern across bands rather than to overall
+        brightness -- but it is not the spectral angle a remote-sensing
+        reader will assume, and the two do not have the same numeric scale
+        (random anomaly vectors sit at pi/2; random reflectance spectra,
+        being all-positive, sit far below it). Reporting true-reflectance
+        SAM means denormalizing through `last_stats()` first; until that
+        exists, the label says what is actually computed.
         """
         from georvq.sources.report import (FIGURES, Metric, ReportSpec,
                                            band_rgb_preview)
-        sam = Metric("sam", "spectral angle (rad)", _s2_sam,
+        sam = Metric("sam", "spectral angle, standardized (rad)", _s2_sam,
                      higher_better=False, bounded=False)
         rmse = Metric("rmse", "RMSE (standardized)", _s2_rmse,
                       higher_better=False, bounded=False)

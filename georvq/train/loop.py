@@ -563,7 +563,11 @@ def train(cfg: Config, gpu=0):
                 log["train/grad_clipped"] = float(
                     gnorm > v.clip_norm)
                 log["train/nonfinite_steps"] = nonfinite_steps
-            log.update({f"train/{k}": float(val) for k, val in m.items()})
+            # detach: a source may return its loss term among the metrics
+            # (S2 returns "mse"), and float() on a grad tensor warns
+            log.update({f"train/{k}": float(val.detach())
+                        if torch.is_tensor(val) else float(val)
+                        for k, val in m.items()})
             if pool.cycle:
                 log["data/epochs"] = pool.epochs
                 log["data/tiles_streamed"] = pool.tiles_streamed
