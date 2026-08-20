@@ -36,6 +36,17 @@ class Source:
         needs no per-tile normalization)."""
         return None
 
+    def side_bits(self, cfg) -> float:
+        """Per-window bits this source must ship OUTSIDE the index stream.
+
+        A `normalizer` removes per-tile statistics before the encoder, and
+        the decode is meaningless without them, so they are part of the
+        rate whether or not anyone counts them. Declare the cost here and
+        `PyramidCodec.side_bits` folds it into every rate figure. Sources
+        that normalize nothing return 0.
+        """
+        return 0.0
+
     def recon_stats(self, out, x, valid):
         """Reconstruction loss term and quality metrics.
         Returns (loss, metrics: dict[str, float tensor])."""

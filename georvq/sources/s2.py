@@ -164,6 +164,20 @@ class S2Source(Source):
     def normalizer(self, model_cfg):
         return self._norm
 
+    def side_bits(self, cfg) -> float:
+        """The 26 per-band mean/std floats `prep` removes, as raw f16.
+
+        Conservative on purpose: `stats_codec.StatsPacker` compresses this
+        layout to roughly 11 bytes/tile, but no packer is fitted for S2
+        yet, so charging the uncompressed cost keeps the rate figures
+        honest rather than optimistic. This is not a rounding error --
+        on a 1/4/16 pyramid it can exceed the coarse-only operating point
+        outright, which is how a stats channel reaches a third of a
+        bitstream without anyone noticing.
+        """
+        return float(2 * len(BANDS_10M) + 2 * len(BANDS_20M)
+                     + 2 * len(BANDS_60M)) * 16.0
+
     def recon_stats(self, out: dict, x: dict, valid):
         losses = {}
         total = 0.0

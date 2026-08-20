@@ -237,3 +237,37 @@ def test_s2_round_trips_through_the_inference_codec():
     assert out["20m"].shape == (2, 6, 12, 12)
     assert out["60m"].shape == (2, 3, 4, 4)
     assert codec.packet_bits() > 0
+
+
+def test_the_normalizer_channel_is_charged_to_the_rate():
+    """Regression for a silently understated rate.
+
+    `side_bits` used to charge only `model.stats_cond`, so a source that
+    normalizes instead -- S2 strips 26 per-band mean/std floats per window
+    -- had that channel counted nowhere. On this pyramid the omission is
+    larger than the entire coarse-only operating point, which is how a
+    stats channel reaches a third of a bitstream unnoticed.
+    """
+    from georvq.model.codec import tuple_bits
+
+    cfg = _cfg()
+    model = build_model(cfg)
+    sb = model.side_bits()
+    assert sb == 26 * 16.0                     # 13 bands x (mean, std), f16
+    # and it actually reaches the rate figures
+    mins = [1, 0]
+    assert tuple_bits(cfg.model.tiers, mins, sb) == \
+        tuple_bits(cfg.model.tiers, mins) + sb
+    # the point of the regression: the channel is not a rounding error
+    # next to the cheapest operating point
+    assert sb > tuple_bits(cfg.model.tiers, mins)
+
+
+def test_sources_without_a_normalizer_charge_nothing():
+    """AE and Tessera must be untouched by the fix."""
+    from georvq.sources.ae import AESource
+    from georvq.sources.tessera import TesseraSource
+
+    cfg = _cfg()
+    assert AESource(cfg.model).side_bits(cfg.model) == 0.0
+    assert TesseraSource(cfg.model).side_bits(cfg.model) == 0.0
