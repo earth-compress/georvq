@@ -113,3 +113,78 @@ def test_clouds_are_not_filtered():
     assert os.path.exists(os.path.join(d, "cloud_mask.tif"))
     assert "cloud_mask" not in sum(GROUP_BANDS.values(), [])
     assert store.manifest["clouds"].startswith("kept")
+
+
+@have_corpus
+def test_every_figure_the_run_draws_renders_on_real_data():
+    """A figure that raises kills the run.
+
+    The trainer draws figures inside the validation branch with no
+    try/except, so a preview that cannot render its source aborts training
+    at the first fig_interval -- an hour or a day in, having produced
+    nothing. Every plot the S2 preset will draw is exercised here on real
+    scenes at the configured window.
+    """
+    import matplotlib.pyplot as plt
+
+    from georvq.config import load_config
+    from georvq.data.pool import fixed_val_tokens
+    from georvq.factory import build_model
+    from georvq.sources.report import resolve_report
+    from georvq.train.figures import codebook_figure, rd_figure, recon_figure
+    from georvq.train.validate import canonical_tuples, tname, validate
+
+    store = LiveS2Store(ROOT, index=_index(4))
+    cfg = load_config("configs/s2_pyr96.yaml")
+    torch.manual_seed(0)
+    model = build_model(cfg)
+    model.eval()
+    spec = resolve_report(model.source, cfg)
+
+    val_s = fixed_val_tokens(store, store.index, token=cfg.model.window,
+                             per_chip=4, max_chips=4, max_tokens=8,
+                             nodata=store.nodata)
+    assert val_s["10m"].shape[1:] == (4, cfg.model.window, cfg.model.window)
+
+    canon = canonical_tuples(model.specs, cfg.model.min_depths)
+    tuples = list(canon.values())
+    vs, cbt = validate(model, model.source, val_s, tuples,
+                       {tname(t) for t in tuples}, spec=spec)
+    assert "sam_ceiling" in vs and "rmse_ceiling" in vs
+
+    f = rd_figure(cbt, vs, model.specs, tuples, 2000, spec,
+                  px=cfg.model.window ** 2, side_bits=model.side_bits())
+    assert f.axes[0].get_ylabel().startswith("spectral angle")
+    plt.close(f)
+    # sam is unbounded, so 1 - m on a log axis is meaningless and dropped
+    assert not spec.has_figure("rd_log")
+
+    plt.close(codebook_figure(vs, model.specs, 2000))
+
+    f3 = recon_figure(model, model.source, val_s, 2000, n=2,
+                      mins=cfg.model.min_depths, preview=spec.preview)
+    plt.close(f3)
+
+
+@have_corpus
+def test_true_colour_preview_uses_the_visible_bands():
+    """R=B04, G=B03, B=B02 out of the 10m group. Getting the indices wrong
+    still renders -- it just renders a false-colour image nobody notices,
+    so pin the mapping rather than the fact that it drew something."""
+    from georvq.sources.report import band_rgb_preview
+    from georvq.sources.s2 import BANDS_10M
+
+    assert BANDS_10M.index("B04") == 2
+    assert BANDS_10M.index("B03") == 1
+    assert BANDS_10M.index("B02") == 0
+
+    store = LiveS2Store(ROOT, index=_index(1))
+    plane = torch.from_numpy(store.open_shard(0, "10m")[0]).float()[None]
+    x = {"10m": plane / 10000.0}
+    valid = torch.ones(1, plane.shape[-2], plane.shape[-1], dtype=torch.bool)
+    pv = band_rgb_preview(2, 1, 0, select=lambda t: t["10m"])
+    rgb = pv.render(x, pv.basis(x, valid))
+    assert rgb.shape == (1, plane.shape[-2], plane.shape[-1], 3)
+    assert 0.0 <= rgb.min() and rgb.max() <= 1.0
+    # a real scene is not a constant field
+    assert rgb.std() > 0.01
