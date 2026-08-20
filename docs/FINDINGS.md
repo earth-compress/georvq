@@ -292,31 +292,33 @@ bar, not for being wrong.
 
 ## Codebooks: sizing, fitting and health
 
-- **A per-window normalizer and a grid-1 coarse tier compete for the same
-  information.** A normalizer removes per-window statistics before the
-  encoder and ships them separately; a coarse tier's whole job is the
-  window-level summary. Whether that collision matters depends on HOW MUCH
-  the normalizer takes relative to what the window holds, and the two
-  shipped cases sit at opposite ends:
+- **A tier only learns to carry what training requires it to carry.**
+  With `min_depths` keeping a finer tier permanently switched on, the
+  coarse tier is never the sole source of a reconstruction, so nothing
+  pressures it to be informative and it can sit redundant at no cost to
+  the loss. Measured on S2, same data, same model, same normalizer, only
+  `min_depths` changed:
 
-  | | across-window latent var | coarse L1 perplexity/K |
-  |---|---:|---:|
-  | S2 (26 values removed: mean+std x 13 bands) | **0.0033** | **0.016** (~1 code of 64) |
-  | DEM (2 values removed: mean+std x 1 band) | **6.12** | **0.295** (~76 of 256) |
+  | | coarse tier alone, R² |
+  |---|---|
+  | `[6,1,0]` — tier 1 always >= 1, so P(tier 0 alone) = 0 | ~0 after 12,000 steps |
+  | `[4,0,0]` — P(tier 0 alone) = 0.203 | 0.00 -> 0.17 -> 0.25 by step 3,000 |
 
-  On S2 the normalizer takes the entire window-level spectral signature,
-  the coarse latent is left encoding a near-constant (0.003% of its own
-  energy is variance), and its first RVQ level collapses to a single code.
-  On DEM the same structure is healthy: two scalars leave the window's
-  relief SHAPE to encode, and every coarse level stays used. Measured at
-  step 8000 of each run.
+  Under `[6,1,0]` the symptoms looked like codebook collapse: the tier-0
+  latent varied by 0.0033 across windows against a norm squared of ~99,
+  and its first RVQ level used one code of 64. None of it was a codebook
+  problem. The encoder simply had no reason to put anything there.
 
-  The diagnosis is cheap and worth running early on any normalized source:
-  compare a tier's across-window latent variance against its norm, and
-  read the first level's perplexity. The fix is not to delete the coarse
-  tier — its rate is negligible, 48 bits of 25,776 on the S2 pyramid — but
-  to hand back what was taken (condition on the stats, as the ring-space
-  S2 release did), or to leave enough in the input for the tier to encode.
+  **A warning about diagnosing this.** The obvious suspect on a
+  normalized source is the normalizer — it removes per-window statistics
+  before the encoder, which is exactly what a grid-1 tier would otherwise
+  encode, and on S2 that is 26 values against DEM's 2. That hypothesis
+  was checked against DEM, whose coarse tier is healthy, and it fitted.
+  It was still wrong: DEM also runs `min_depths [4,0,0]`, so the two
+  configs differed in two ways at once and the wrong one got the credit.
+  The normalizer may still contribute; nothing yet requires it as an
+  explanation. Check `min_depths` and the depth-sampling mode before
+  reaching for a story about the data.
 
 - **Tier-redundancy collapse is real and silent.** In the 4-tier `uf`
   model (grids 1/4/16/32 over 64 px) the fine tier carries only **0.2%**
