@@ -21,14 +21,22 @@ data:
   val_frac: 0.02
   pool:
     # Measured on this corpus: 64 ms and 12.1 MB per scene (13 bands,
-    # 15.6 scenes/s/thread). 1024 resident scenes is ~12.4 GB of host RAM.
-    size: 1024
-    workers: 8
+    # 15.6 scenes/s/thread). 10,240 resident scenes is ~124 GB of host RAM
+    # (box has 503 GB). Pool size buys INSTANTANEOUS DIVERSITY -- how many
+    # distinct scenes one batch can draw from -- while refresh_per_s sets
+    # how often each is replaced. At 1024 a batch of 1024 windows was
+    # hitting the same scenes repeatedly.
+    size: 10240
+    workers: 24
     # Whole scenes: the rasters are LZW with 1024 px blocks over a 1068 px
     # image, so a partial read decompresses the band anyway -- taking half
     # the rows would double the read cost per resident pixel, not halve it.
     slot_rows: 1068
-    refresh_per_s: 24.0    # ~74 min to sweep all 106,639 scenes
+    # Reuse per scene is windows/s / refresh_per_s, INDEPENDENT of pool
+    # size: at ~630 win/s and 64 scenes/s each scene is drawn ~10 times
+    # before eviction. 774 MB/s of reads; a full sweep of the corpus is
+    # ~28 min.
+    refresh_per_s: 64.0
     device: cpu
     cycle: true            # sweep the corpus; never resample a resident subset
     align_crops: true
@@ -44,6 +52,12 @@ model:
   # dims 32/64/64 and K 64/512/4096 are the SOURCE_ONBOARDING table's row
   # for S2 (d95 of 3/3/3 says the latents are generously sized already).
   tiers: ["1:32:64:8", "4:64:512:8", "16:64:4096:8"]
+  # Fitted basis for the 26 per-band mean/std floats the normalizer
+  # removes: 9.73 B/window measured (77.8 bits, 0.0084 b/px) against 416
+  # bits raw. The method is ported from the ring-space beta releases,
+  # which measured ~11 B/tile on the same 26-value layout; the basis
+  # itself is refitted on OUR windows.
+  stats_pca: artifacts/s2_stats_pca.npz
   min_depths: [6, 1, 0]
   full_frac: 0.005
   ff_ratio: 2.0
@@ -60,16 +74,27 @@ model:
     kmeans_sample: 32768
 
 train:
-  steps: 200000
-  # 384, not 512, is what the sample-budget rule wants here: the coarse
-  # tier sees batch x 1 cell x ema_window / K = 384 x 1 x 100 / 64 = 600
-  # vectors per codeword, above the ~450 crossover. At 256 it would be
-  # 400 and the coarse book would fit worse than not fitting.
-  batch_windows: 384
+  # 80k at batch 1024 = the released Tessera recipe, which is the closest
+  # validated precedent for this architecture. Measured here: throughput
+  # SATURATES at ~630 windows/s from batch 768 up (384 -> 445, 768 -> 628,
+  # 1536 -> 634, 2048 -> 570), so above 768 a larger batch buys codebook
+  # sampling and gradient quality, not speed. 1024 peaks at 25.6 GiB of
+  # 80, and gives the coarse tier 1024 x 1 x 100 / 64 = 1600 vectors per
+  # codeword, well clear of the ~450 crossover.
+  steps: 80000
+  batch_windows: 1024
+  # Early training is easy: more parameter updates beat better gradients.
+  # Quarter batch for the first 5k steps. lr is NOT rescaled -- ~2x the
+  # gradient noise, benign this early.
+  batch_ramp: {until: 5000, divisor: 4}
   amp: true
   grad_ckpt: true
   tf32: true
-  optim: {lr: 5.0e-5, wd: 0.01, warmup: 5000}
+  # lr 1.5e-4 at batch 1024 is the released Tessera setting for this
+  # geometry. The ring-space S2 run used 5e-4 at batch 2048 (with a 1e-4
+  # polish for its last 2k steps), so this sits between the two under
+  # sqrt-scaling rather than being inherited from either.
+  optim: {lr: 1.5e-4, wd: 0.01, warmup: 1000}
   val_interval: 1000
   fig_interval: 2000
   save_interval: 2500

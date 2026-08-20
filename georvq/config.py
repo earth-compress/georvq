@@ -289,6 +289,13 @@ class ModelConfig(StrictModel):
     # and the bitstream contract are unaffected. (Named `norm_latents`;
     # `normalize_latents` in older checkpoints is migrated on load.)
     norm_latents: bool = False
+    # PCA basis for a source NORMALIZER's stats side channel, fitted by
+    # scripts/fit_stats_pca_s2.py. Distinct from `stats_cond`, which
+    # transmits a mean the model is also conditioned on; a normalizer's
+    # stats are removed before the encoder and merely shipped. It defines
+    # part of the bitstream (docs/BITSTREAM.md), hence model-level. None
+    # ships them raw as f16, which is ~5x larger.
+    stats_pca: Optional[Path] = None
     sigma: Optional[SigmaConfig] = None
     stats_cond: Optional[StatsCondConfig] = None
     conditioning: Optional[Conditioning] = None
