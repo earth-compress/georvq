@@ -143,6 +143,7 @@ class PyramidCodec(nn.Module):
         self.window = cfg.window
         self.bands = cfg.bands
         self.specs = list(cfg.tiers)
+        self.norm_latents = cfg.norm_latents
         self.continuous = cfg.vq is None
         self.normalize_latents = cfg.normalize_latents
 
@@ -167,16 +168,33 @@ class PyramidCodec(nn.Module):
             else:
                 rvq_cls = ResidualVQ
             self.rvqs = nn.ModuleList([
+<<<<<<< Updated upstream
                 rvq_cls(num_levels=sp.depth, num_codes=sp.codes,
                         dim=sp.dim, decay=v.ema_decay,
                         dead_threshold=v.dead_threshold,
                         grad_codebook=v.grad_codebook,
                         bf16_scores=v.bf16_scores,
                         reset_mode=v.reset_mode)
+=======
+                ResidualVQ(num_levels=sp.depth, num_codes=sp.codes,
+                           dim=sp.dim, decay=v.ema_decay,
+                           dead_threshold=v.dead_threshold,
+                           grad_codebook=v.grad_codebook,
+                           bf16_scores=v.bf16_scores,
+                           reset_mode=("split" if v.reset_split
+                                       else v.reset_mode),
+                           reset_frac=v.reset_frac,
+                           repulsion=v.repulsion,
+                           repulsion_margin=v.repulsion_margin,
+                           repulsion_interval=v.repulsion_interval)
+>>>>>>> Stashed changes
                 for sp in self.specs])
             self._skip_masked = v.skip_masked
             self._base_dead = v.dead_threshold
             self._part_ema = {}      # (tier, level) -> EMA of active fraction
+            for i, rvq in enumerate(self.rvqs):
+                for j, lev in enumerate(rvq.levels):
+                    lev._tag = f"tier{i}/L{j}"   # for reset telemetry
 
         self.rate = None
         if cfg.rate is not None:
@@ -218,8 +236,22 @@ class PyramidCodec(nn.Module):
 
     # ---- encode / decode ----
 
+<<<<<<< Updated upstream
     def encode_levels(self, x, stats=None, valid=None):
         """x: (B, C, W, W) -> list of per-tier latents [(B, cells, dim)].
+=======
+    def encode_levels(self, x):
+        """x: (B, C, W, W) -> list of per-tier latents [(B, cells, dim)].
+        With cfg.norm_latents, latents are L2-normalized per cell (x
+        sqrt(dim)) — the stage-1 statistical constraint — so a frozen
+        stage-1 encoder presents the SAME distribution to the VQ stage
+        that its decoder was trained on."""
+        zs = self.tokenizer(self.stem(x))
+        if self.norm_latents:
+            zs = [F.normalize(z, dim=-1, eps=1e-6) * (z.shape[-1] ** 0.5)
+                  for z in zs]
+        return zs
+>>>>>>> Stashed changes
 
         With `normalize_latents`, tiers come out in the SAME normalized
         geometry `encode_stage1` produces, so a stage-2 run quantizes and
@@ -452,6 +484,14 @@ class PyramidCodec(nn.Module):
                     -(p[p > 0] * p[p > 0].log2()).sum())
                 out[f"pyr{i}_perplexity_L{j+1}"] = float(
                     2 ** out[f"pyr{i}_entropy_L{j+1}"])
+                # EMA-based (training-traffic) counterparts: not limited
+                # to one val batch, and what the dead-reset logic sees
+                lev = self.rvqs[i].levels[j]
+                q = lev.ema_count / lev.ema_count.sum().clamp_min(1e-12)
+                out[f"pyr{i}_ema_alive_L{j+1}"] = float(
+                    (lev.ema_count > lev.dead_threshold).float().mean())
+                He = float(-(q[q > 0] * q[q > 0].log2()).sum())
+                out[f"pyr{i}_ema_perplexity_L{j+1}"] = float(2 ** He)
 
         if self.selector is not None:
             scores = self.selector(loc)

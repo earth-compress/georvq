@@ -1,0 +1,21 @@
+# Stage-1 continuous pretrain on COPDEM at 128px: unquantized
+# sigma-conditioned AE, run to full convergence (cosine LR to zero) — the
+# converged encoder is the freeze substrate for quantized retraining
+# (frozen-mature-encoder recipe, 2026-07-13). Latents are L2-normalized
+# per cell (std ~= 1), which is the encoder-side statistical constraint
+# the quantized stage needs. No VQ state -> lower memory than dem128.
+inherit: dem128.yaml
+
+model:
+  vq: null
+  sigma: {max: 4.0, freqs: 8}
+
+train:
+  steps: 150000
+  optim: {lr: 1.5e-4, wd: 0.01, warmup: 1000, lr0_steps: 100}
+  val_interval: 500
+  fig_interval: 2500
+  save_interval: 2500
+
+log:
+  run_tag: dem128_stage1

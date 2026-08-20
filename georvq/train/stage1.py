@@ -65,6 +65,7 @@ def validate_stage1(model, source, val_s, sigma_max, device, batch=256,
             sig = torch.full((x.shape[0], n_tiers), sigma_max * frac,
                              device=device)
             rec = model.forward_stage1(x, sig)
+<<<<<<< Updated upstream
             _, st = source.recon_stats(rec, x, valid)
             nb = int(valid.sum()); n += nb
             for k in ("cos", "vec_rel_l2"):
@@ -86,6 +87,12 @@ def validate_stage1(model, source, val_s, sigma_max, device, batch=256,
             _, st = source.recon_stats(rec, x, valid)
             nb = int(valid.sum()); cs += float(st["cos"]) * nb; n += nb
         out[f"keep{k}"] = {"cos": cs / n}
+=======
+            c = source.quality(rec, x, valid)   # R^2 for DEM, cos for AE
+            nb = int(valid.sum()); cs += float(c) * nb; n += nb
+            ccs += float(centered_cos(rec, x, valid)) * nb
+        out[frac] = (cs / n, ccs / n)
+>>>>>>> Stashed changes
     model.train()
     return out
 
@@ -161,7 +168,13 @@ def train(cfg: Config, gpu=0):
         with torch.autocast(device.type, torch.bfloat16, enabled=amp_on):
             rec = model.forward_stage1(x, sigmas, drop=drop)
         rec = rec.float()
+<<<<<<< Updated upstream
         loss, st = source.recon_stats(rec, x, valid)
+=======
+        mse, _ = masked_recon_stats(rec, x, valid)
+        cos = source.quality(rec, x, valid)     # R^2 for DEM, cos for AE
+        loss = mse
+>>>>>>> Stashed changes
         opt.zero_grad(set_to_none=True)
         loss.backward()
         gn = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)

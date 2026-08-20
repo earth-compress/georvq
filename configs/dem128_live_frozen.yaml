@@ -1,0 +1,33 @@
+# RVQ stage on the global live corpus from the frozen stage-1 encoder —
+# the frozen-mature-encoder recipe (validated on dem128_frozen_fps
+# 2026-07-13; independently corroborated by the stage-wise schedule in
+# arXiv 2606.11363). norm_latents reproduces the stage-1 statistical
+# constraint so the frozen encoder presents the distribution its decoder
+# was trained on; k-means (vq.warmup_steps) then fits a mature, frozen,
+# unit-std latent field. fps resets with partial-reset cap are insurance
+# only — the frozen run needed zero resets.
+inherit: dem128.yaml
+
+data:
+  store_dir: /data/georvq-stores/copdem_live
+  pool:
+    size: 470000
+    workers: 6
+    refresh_per_s: 100.0
+    cycle: true
+
+model:
+  norm_latents: true
+  vq:
+    warmup_steps: 2000
+    reset_mode: fps
+    reset_frac: 0.25
+
+train:
+  steps: 60000
+  init_from: checkpoints/dem128_stage1_live/model.pt
+  freeze_encoder_steps: 60000
+  optim: {lr: 2.5e-4, warmup: 500}
+
+log:
+  run_tag: dem128_live_frozen

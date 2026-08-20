@@ -41,6 +41,18 @@ def geographic_split(index: pd.DataFrame, val_frac=0.04, cell_deg=10.0,
         index[is_val].reset_index(drop=True)
 
 
+def open_store(store_dir):
+    """ChipStore, or a live store when the manifest says so (currently
+    kind="live_dem": chips read on demand from GLO-30 COGs, no shards)."""
+    mpath = os.path.join(str(store_dir), "manifest.json")
+    if os.path.exists(mpath):
+        with open(mpath) as f:
+            if json.load(f).get("kind") == "live_dem":
+                from georvq.data.live_dem import LiveDEMStore
+                return LiveDEMStore(store_dir)
+    return ChipStore(store_dir)
+
+
 class ChipStore:
     """Read access to a chip store; tolerant of stores that predate the
     versioned manifest (geometry is then inferred from the first shard)."""
