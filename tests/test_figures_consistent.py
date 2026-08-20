@@ -48,7 +48,30 @@ FIGURES = {
         "docs/FINDINGS.md",
         "docs/SOURCE_ONBOARDING.md",
     },
+    # PCA-packed S2 stats channel: mean bytes/window at tolerance 0.01
+    "9.73": {
+        "docs/FINDINGS.md",                 # canonical
+        "configs/s2_pyr96.yaml",            # the run that charges it
+    },
+    # how badly an uncharged normalizer channel understates the coarse rung
+    "3.31": {
+        "docs/FINDINGS.md",
+    },
+    # the batch/throughput knee on the S2 pyramid (windows/s)
+    "628": {
+        "docs/FINDINGS.md",
+        "configs/s2_pyr96.yaml",            # why that batch was chosen
+    },
+    "634": {
+        "docs/FINDINGS.md",
+        "configs/s2_pyr96.yaml",
+    },
 }
+
+# Deliberately NOT pinned: short decimals such as 4.7, 12.1 and 5.3, which
+# occur incidentally as unrelated constants elsewhere in the tree. This
+# test matches literal substrings, so a figure is only a usable key when
+# its digits are distinctive enough not to collide.
 
 
 def _files():
