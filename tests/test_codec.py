@@ -110,3 +110,60 @@ def test_thermometer():
     L = torch.tensor([0, 2, 3])
     t = thermometer(L, 3)
     assert t.tolist() == [[0, 0, 0], [1, 1, 0], [1, 1, 1]]
+
+
+def test_canonical_points_lie_on_the_trained_path():
+    """Named operating points must be tuples the run actually trains.
+
+    Under path sampling the truncation path fills each tier to its depth
+    before the next begins, so a balanced tuple like 4-4-4 is never
+    sampled -- and is strictly dominated in rate-distortion terms besides.
+    Reporting it as `half` measures the model at a point it never saw.
+    """
+    from georvq.config import TierSpec, parse_tier
+    from georvq.model.codec import path_tuples, tuple_bits
+    from georvq.train.validate import canonical_tuples
+
+    specs = [TierSpec(**parse_tier(t))
+             for t in ("1:32:64:8", "4:64:512:8", "16:64:4096:8")]
+    mins = [4, 0, 0]
+    path = [list(t) for t in path_tuples(specs, mins)]
+
+    canon = canonical_tuples(specs, mins, sampling="path")
+    for name, t in canon.items():
+        assert t in path, f"{name}={t} is not on the trained path"
+
+    assert canon["min"] == path[0] == [4, 0, 0]
+    assert canon["full"] == path[-1] == [8, 8, 8]
+    # coarse_only is the coarse tier carrying it alone, at full depth
+    assert canon["coarse_only"] == [8, 0, 0]
+    # half is chosen by RATE, not index: the path is front-loaded with
+    # cheap coarse steps, so the midpoint of the list is nowhere near the
+    # midpoint of the R-D span
+    hb = tuple_bits(specs, canon["half"])
+    assert 0.4 < hb / tuple_bits(specs, canon["full"]) < 0.6
+    assert canon["half"] != path[len(path) // 2]
+
+    # the historical nested behaviour is unchanged
+    nested = canonical_tuples(specs, mins, sampling="nested")
+    assert nested["half"] == [4, 4, 4]
+    assert nested["half"] not in path
+
+
+def test_the_path_saturates_each_tier_before_the_next():
+    """Every step adds exactly one codebook to one tier, and no finer tier
+    opens while a coarser one is unfilled."""
+    from georvq.config import TierSpec, parse_tier
+    from georvq.model.codec import path_tuples
+
+    specs = [TierSpec(**parse_tier(t))
+             for t in ("1:32:64:8", "4:64:512:8", "16:64:4096:8")]
+    path = [list(t) for t in path_tuples(specs, [4, 0, 0])]
+
+    for prev, cur in zip(path, path[1:]):
+        step = [c - p for c, p in zip(cur, prev)]
+        assert sum(step) == 1 and min(step) >= 0, f"{prev} -> {cur}"
+    for t in path:
+        for i in range(1, len(t)):
+            if t[i] > 0:                    # a tier only opens once every
+                assert t[i - 1] == specs[i - 1].depth   # coarser one is full

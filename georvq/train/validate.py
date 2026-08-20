@@ -15,10 +15,26 @@ def tname(ls):
     return "-".join(map(str, ls))
 
 
-def canonical_tuples(specs, mins=None):
+def canonical_tuples(specs, mins=None, sampling="nested"):
     """Named operating points for scalar logging: minimal / coarse-only /
-    half-ladder / full. With min-depths training, every point is clamped
-    into the TRAINED tuple space (untrained tuples mislead)."""
+    half-ladder / full.
+
+    Every point must be one the run actually TRAINS, or the scalar is a
+    measurement of a tuple the model never saw. Which points those are
+    depends on how depths are sampled:
+
+    - "path": the truncation path fills each tier to its depth before the
+      next begins -- (4,0,0)...(8,0,0),(8,1,0)...(8,8,0),(8,8,1)... A
+      balanced tuple like 4-4-4 is not on it and is never trained. It is
+      also strictly dominated in rate-distortion terms (`docs/FINDINGS.md`
+      on the efficient ladder), so it is not a point anyone would ship.
+    - "nested": any monotone tuple is trainable, and the historical
+      half-ladder point is meaningful.
+
+    `half` is chosen by RATE, not by index along the path, so it lands
+    near the middle of the R-D span rather than the middle of the list --
+    the path is front-loaded with cheap coarse steps.
+    """
     mins = mins or [1] + [0] * (len(specs) - 1)
 
     def cascade(start):
@@ -27,10 +43,24 @@ def canonical_tuples(specs, mins=None):
             L = min(prev, sp.depth); out.append(L); prev = L
         return out
     d0 = specs[0].depth
-    half = [max(L // 2, m) for L, m in zip(cascade(d0), mins)]
-    pts = {"min": list(mins),
-           "coarse_only": [d0] + list(mins[1:]),
-           "half": half, "full": cascade(d0)}
+    full = cascade(d0)
+
+    if sampling == "path":
+        from georvq.model.codec import path_tuples, tuple_bits
+        path = [list(t) for t in path_tuples(specs, mins)]
+        target = tuple_bits(specs, full) / 2.0
+        half = min(path, key=lambda t: abs(tuple_bits(specs, t) - target))
+        # the last point before any finer tier opens: the coarse tier
+        # carrying the reconstruction on its own
+        coarse = max((t for t in path if all(L == 0 for L in t[1:])),
+                     key=lambda t: t[0], default=path[0])
+        pts = {"min": path[0], "coarse_only": coarse,
+               "half": half, "full": path[-1]}
+    else:
+        half = [max(L // 2, m) for L, m in zip(full, mins)]
+        pts = {"min": list(mins),
+               "coarse_only": [d0] + list(mins[1:]),
+               "half": half, "full": full}
     return {k: v for k, v in pts.items()}
 
 

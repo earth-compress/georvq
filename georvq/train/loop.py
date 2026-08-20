@@ -118,9 +118,16 @@ def train(cfg: Config, gpu=0):
 
     specs = cfg.model.tiers
     mins = cfg.model.min_depths
-    tuples = [t for t in monotone_tuples(specs)
-              if all(L >= m for L, m in zip(t, mins))]
-    canon = canonical_tuples(specs, mins)
+    # The tuples validation scores must be ones the run trains. Under path
+    # sampling that is the truncation path itself -- scoring the whole
+    # monotone cone would fill the R-D scatter with balanced tuples like
+    # 4-4-4 that are never sampled and are dominated anyway.
+    if cfg.model.depth_sampling == "path":
+        tuples = [list(t) for t in path_tuples(specs, mins)]
+    else:
+        tuples = [t for t in monotone_tuples(specs)
+                  if all(L >= m for L, m in zip(t, mins))]
+    canon = canonical_tuples(specs, mins, cfg.model.depth_sampling)
     ref_fronts = [load_rd_ref(s) for s in cfg.eval.rd_refs]
     run_dir = os.path.join(cfg.log.out_dir, cfg.log.run_tag)
     os.makedirs(run_dir, exist_ok=True)
