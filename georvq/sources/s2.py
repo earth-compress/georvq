@@ -183,7 +183,12 @@ class S2Source(Source):
             out.append(("pca", _packed_bits(str(path))))
         n = 2 * (len(BANDS_10M) + len(BANDS_20M) + len(BANDS_60M))
         out.append(("f16", n * 16 + 8.0))
-        out.append(("f32", n * 32 + 8.0))
+        # No f32 tier. It was measured and buys nothing: at both 16-16-8
+        # and full depth, f16 stats reproduce the exact-stats per-band
+        # reflectance error to the digit (4.4e-3 and 4.3e-3), because
+        # f16's ~3e-4 resolution is already an order of magnitude below
+        # the model's own error. The extra 416 bits would be spent on
+        # precision nothing can see.
         return out
 
     def side_bits(self, cfg, depths=None) -> float:
@@ -196,8 +201,8 @@ class S2Source(Source):
         At the cheapest rungs 78 bits is already a large share of the
         bitstream and model error dwarfs the floor. At full depth the
         floor EQUALS the entire model error -- measured 4.3e-3 with exact
-        stats against 6.5e-3 with fixed-tolerance packing -- while f32 is
-        1.6% of the rate.
+        stats against 6.5e-3 with fixed-tolerance packing -- while f16 is
+        0.8% of the rate and closes it completely.
 
         So: the most precise encoding costing no more than `STATS_BUDGET`
         of the rung's index bits, falling back to the cheapest when even
@@ -218,10 +223,8 @@ class S2Source(Source):
         PCA can reach drives the packer's f16 escape."""
         enc = dict(self._stats_encodings(cfg))
         bits = self.side_bits(cfg, depths)
-        if "f32" in enc and bits >= enc["f32"]:
-            return 0.0
         if "f16" in enc and bits >= enc["f16"]:
-            return 1e-4
+            return 1e-4          # tighter than PCA can hit -> f16 escape
         return 0.01
 
     def recon_stats(self, out: dict, x: dict, valid):

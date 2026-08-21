@@ -359,8 +359,13 @@ def test_stats_precision_follows_the_rate():
     # depths=None means "a whole packet", i.e. full depth
     assert model.side_bits() == src.side_bits(mc, full)
     # at full depth the rate is large enough to send the vector verbatim
-    assert src.stats_tolerance(mc, full) == 0.0
-    assert src.stats_tolerance(mc, cheap) > 0.0
+    # (f16, which measurement shows reproduces exact stats), while the
+    # cheapest rung still packs
+    assert src.side_bits(mc, full) == 26 * 16 + 8
+    assert src.stats_tolerance(mc, full) < 1e-3
+    assert src.stats_tolerance(mc, cheap) == 0.01
+    # no f32 tier: measured to buy nothing over f16
+    assert all(b <= 26 * 16 + 8 for _, b in src._stats_encodings(mc))
 
 
 def test_raw_stats_escape_round_trips_exactly_at_f32():
