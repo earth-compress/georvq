@@ -59,12 +59,10 @@ FIGURES = {
     },
     # the batch/throughput knee on the S2 pyramid (windows/s)
     "628": {
-        "docs/FINDINGS.md",
-        "configs/s2_pyr96.yaml",            # why that batch was chosen
+        "docs/FINDINGS.md",                 # canonical; the preset cites it
     },
     "634": {
         "docs/FINDINGS.md",
-        "configs/s2_pyr96.yaml",
     },
 }
 
