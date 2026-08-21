@@ -36,7 +36,10 @@ strong priors, not laws.
   at 384 / 768 / 1024 / 1536 / 2048 — so a larger batch there costs
   proportional wall-clock per step and returns only better gradients and
   more vectors per codeword. Pick the batch from the sample-budget rule,
-  then the step count from the wall-clock you have.
+  then the step count from the wall-clock you have. Doubling RVQ depth and
+  widening the latents 1.5x moved neither the knee nor the plateau by more
+  than a few percent: with `skip_masked`, levels the sampled depth masks
+  off cost nothing, and the tokenizer/decoder trunks dominate regardless.
 
 ## Codebook sizing
 
