@@ -295,6 +295,28 @@ bar, not for being wrong.
 
 ## Codebooks: sizing, fitting and health
 
+- **A uniform loss in normalized space allocates error by dynamic range,
+  not by accuracy.** Where a source standardizes per window, equal MSE
+  across bands means equal error IN UNITS OF EACH BAND'S OWN SPREAD -- so
+  a high-contrast band ends up with proportionally worse physical error,
+  and nothing in the training signal notices. Measured on S2 at full
+  depth: standardized error is near-identical across the four 10 m bands
+  (0.205-0.246), yet relative reflectance error spans 0.90% to 2.29%,
+  entirely because B08's within-window spread is ~4x B02's.
+
+  The fix is per-band loss weights proportional to (band mean / band
+  within-window spread)^2, which equalises RELATIVE error. Note the
+  weights are counterintuitive -- they weight the high-contrast bands
+  DOWN -- because those bands are already getting equal standardized
+  treatment and it is the physical interpretation that is unequal.
+
+  Two traps when computing them. The relevant spread is the PER-WINDOW
+  one the normalizer removes, not the band's global std: on S2 most
+  variance is between windows, and using the global figure overstates the
+  scale about threefold. And equalising relative error is a choice about
+  what the codec is for; if particular bands drive the downstream task,
+  weight for that instead.
+
 - **A tier only learns to carry what training requires it to carry.**
   With `min_depths` keeping a finer tier permanently switched on, the
   coarse tier is never the sole source of a reconstruction, so nothing
