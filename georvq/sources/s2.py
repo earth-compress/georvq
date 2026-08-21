@@ -164,28 +164,65 @@ class S2Source(Source):
     def normalizer(self, model_cfg):
         return self._norm
 
-    def side_bits(self, cfg) -> float:
-        """The 26 per-band mean/std floats `prep` removes.
+    #: Share of a rung's index bits the stats channel may take before a
+    #: cheaper encoding is chosen.
+    STATS_BUDGET = 0.02
 
-        With `model.stats_pca` set, this is the MEASURED mean packed size
-        of the fitted basis (`scripts/fit_stats_pca_s2.py` stores it in the
-        npz, so the rate a run reports is reproducible from the artifact
-        rather than re-measured per run). The packer is tolerance-coded, so
-        the per-window size varies; the mean is what an expected-rate
-        figure wants, and the same file carries the p99 for anyone who
-        needs the tail.
+    def _stats_encodings(self, cfg):
+        """(name, bits) cheapest first.
 
-        Without a basis it falls back to raw f16, ~5x larger. That is the
-        conservative direction, but it is not free: on a 1/4/16 pyramid the
-        raw channel can exceed the coarse-only operating point outright,
-        which is how a stats channel reaches a third of a bitstream
-        without anyone noticing.
+        The PCA cost is the MEASURED mean packed size recorded by
+        `scripts/fit_stats_pca_s2.py`, so a run's reported rate is
+        reproducible from the artifact rather than from a constant that
+        can drift away from the basis. The raw escapes are exact: a
+        1-byte code plus 26 values.
         """
+        out = []
+        path = getattr(cfg, "stats_pca", None)
+        if path is not None:
+            out.append(("pca", _packed_bits(str(path))))
         n = 2 * (len(BANDS_10M) + len(BANDS_20M) + len(BANDS_60M))
-        path = getattr(cfg, "stats_pca", None) if cfg is not None else None
-        if path is None:
-            return float(n) * 16.0
-        return float(_packed_bits(str(path)))
+        out.append(("f16", n * 16 + 8.0))
+        out.append(("f32", n * 32 + 8.0))
+        return out
+
+    def side_bits(self, cfg, depths=None) -> float:
+        """Per-window bits for the 26 mean/std values `prep` removes.
+
+        The right encoding DEPENDS ON THE RATE, because the two costs move
+        in opposite directions. Tolerance-coded PCA is ~78 bits but leaves
+        a reconstruction floor of ~5e-3 reflectance RMSE; sending the
+        vector verbatim removes the floor at 424 bits (f16) or 840 (f32).
+        At the cheapest rungs 78 bits is already a large share of the
+        bitstream and model error dwarfs the floor. At full depth the
+        floor EQUALS the entire model error -- measured 4.3e-3 with exact
+        stats against 6.5e-3 with fixed-tolerance packing -- while f32 is
+        1.6% of the rate.
+
+        So: the most precise encoding costing no more than `STATS_BUDGET`
+        of the rung's index bits, falling back to the cheapest when even
+        that does not fit. `depths=None` means "a whole packet", i.e. full
+        depth.
+        """
+        enc = self._stats_encodings(cfg)
+        if depths is None:
+            depths = [sp.depth for sp in cfg.tiers]
+        from georvq.model.codec import tuple_bits
+        budget = tuple_bits(cfg.tiers, list(depths)) * self.STATS_BUDGET
+        affordable = [b for _, b in enc if b <= budget]
+        return max(affordable) if affordable else enc[0][1]
+
+    def stats_tolerance(self, cfg, depths=None) -> float:
+        """The `StatsPacker` tolerance matching `side_bits`' choice: <= 0
+        means send the vector verbatim at f32, and a tolerance below what
+        PCA can reach drives the packer's f16 escape."""
+        enc = dict(self._stats_encodings(cfg))
+        bits = self.side_bits(cfg, depths)
+        if "f32" in enc and bits >= enc["f32"]:
+            return 0.0
+        if "f16" in enc and bits >= enc["f16"]:
+            return 1e-4
+        return 0.01
 
     def recon_stats(self, out: dict, x: dict, valid):
         losses = {}

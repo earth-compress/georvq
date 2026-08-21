@@ -269,7 +269,7 @@ class PyramidCodec(nn.Module):
                 "mean must be passed (model.patch_mean(x, valid)). Omitting "
                 "it would silently produce a mean-removed field.")
 
-    def side_bits(self):
+    def side_bits(self, depths=None):
         """Fixed per-window bits outside the index stream.
 
         TWO channels can land here and they are different mechanisms, so
@@ -291,9 +291,11 @@ class PyramidCodec(nn.Module):
             from georvq.model.stats_cond import channel_bits
             bits += float(channel_bits(self.stats_cond, self.bands))
         src = getattr(self, "source", None)
-        if src is not None:
-            bits += float(src.side_bits(self.cfg)
-                          if hasattr(src, "side_bits") else 0.0)
+        if src is not None and hasattr(src, "side_bits"):
+            try:
+                bits += float(src.side_bits(self.cfg, depths))
+            except TypeError:            # sources predating the depth arg
+                bits += float(src.side_bits(self.cfg))
         return bits
 
     def _stats_of(self, x, valid=None):

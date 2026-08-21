@@ -253,7 +253,10 @@ def test_the_normalizer_channel_is_charged_to_the_rate():
     cfg = _cfg()
     model = build_model(cfg)
     sb = model.side_bits()
-    assert sb == 26 * 16.0                     # 13 bands x (mean, std), f16
+    # no basis configured, so the cheapest available encoding is raw f16
+    # (1-byte code + 26 values); the point of the regression is that it is
+    # charged at all, not which encoding wins
+    assert sb >= 26 * 16.0
     # and it actually reaches the rate figures
     mins = [1, 0]
     assert tuple_bits(cfg.model.tiers, mins, sb) == \
@@ -300,13 +303,15 @@ def test_stats_pca_basis_shrinks_the_charged_channel(tmp_path):
 
     raw_cfg = _cfg()
     model_raw = build_model(raw_cfg)
-    assert model_raw.side_bits() == 26 * 16.0        # no basis -> raw f16
 
     cfg = _cfg()
     cfg.model.stats_pca = path
     model = build_model(cfg)
-    assert model.side_bits() == pytest.approx(np.mean(sizes) * 8)
-    assert model.side_bits() < model_raw.side_bits()
+    # at a rung too cheap to afford a raw escape, the fitted basis is what
+    # gets charged -- and its cost comes from the artifact's measurement
+    cheap = [1, 0]
+    assert model.side_bits(cheap) == pytest.approx(np.mean(sizes) * 8)
+    assert model.side_bits(cheap) < model_raw.side_bits(cheap)
 
 
 def test_a_basis_without_a_measured_size_is_rejected(tmp_path):
@@ -325,3 +330,60 @@ def test_a_basis_without_a_measured_size_is_rejected(tmp_path):
     model = build_model(cfg)
     with pytest.raises(KeyError, match="mean_bytes"):
         model.side_bits()
+
+
+def test_stats_precision_follows_the_rate():
+    """The right stats encoding depends on the rung, because the two costs
+    move in opposite directions: tolerance-coded PCA is ~78 bits but
+    leaves a reflectance floor, while sending the vector verbatim removes
+    the floor and costs 424 (f16) or 840 (f32) bits. At the cheapest rungs
+    78 bits is already most of the bitstream; at full depth the floor
+    equals the entire model error while f32 is ~1.6% of the rate.
+    """
+    from georvq.model.codec import tuple_bits
+
+    from georvq.config import load_config
+
+    cfg = load_config("configs/s2_pyr96.yaml")
+    model = build_model(cfg)
+    src, mc = model.source, cfg.model
+
+    cheap, full = [4, 0, 0], [sp.depth for sp in mc.tiers]
+    assert src.side_bits(mc, cheap) < src.side_bits(mc, full)
+    # never more than the budget of a rung's index bits, once affordable
+    for ls in (cheap, full):
+        sb = src.side_bits(mc, ls)
+        idx = tuple_bits(mc.tiers, ls)
+        cheapest = src._stats_encodings(mc)[0][1]
+        assert sb <= max(idx * src.STATS_BUDGET, cheapest)
+    # depths=None means "a whole packet", i.e. full depth
+    assert model.side_bits() == src.side_bits(mc, full)
+    # at full depth the rate is large enough to send the vector verbatim
+    assert src.stats_tolerance(mc, full) == 0.0
+    assert src.stats_tolerance(mc, cheap) > 0.0
+
+
+def test_raw_stats_escape_round_trips_exactly_at_f32():
+    """f32 is the point of the escape: each entry is a mean or std over a
+    whole window, known far more precisely than any single uint16 DN, so
+    rounding it to the source quantum would add error the data lacks."""
+    import numpy as np
+
+    from georvq.inference.stats_codec import StatsPacker, fit_stats_pca
+
+    rng = np.random.default_rng(0)
+    stats = rng.normal(size=(64, 26)) * 0.05 + 0.2
+    packer = StatsPacker(data=fit_stats_pca(stats), tolerance=0.01)
+
+    s = stats[0].astype(np.float32)
+    exact = packer.pack(s, tolerance=0.0)
+    assert exact[0] == 254 and len(exact) == 1 + 4 * 26
+    assert np.array_equal(packer.unpack(exact), s)
+
+    # the f16 escape is lossy but far below the PCA tolerance
+    f16 = packer.pack_raw(s, np.float16)
+    assert f16[0] == 255 and len(f16) == 1 + 2 * 26
+    assert np.abs(packer.unpack(f16) - s).max() < 1e-3
+
+    # and the default tolerance path is still the cheap one
+    assert len(packer.pack(s)) < len(f16)
