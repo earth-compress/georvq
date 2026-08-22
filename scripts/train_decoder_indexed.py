@@ -275,15 +275,35 @@ def main():
             vs, cbt = validate(model, src, val_s, list(canon.values()),
                                {tname(t) for t in canon.values()}, spec=spec)
             q_key = spec.quality.key
+            ex = vs.get("_extra", {})
+            # Print the EXTRAS per tuple too, not just the headline. On a
+            # stats_cond model plain cosine is inflated by the transmitted
+            # mean -- measured here, a coarse-only decode reads cos 0.875
+            # against ccos 0.316 -- so a run reporting only cos can look
+            # flat or negative while spatial structure is improving.
             print(f"step {step} VAL[{q_key}]: "
                   + " ".join(f"{k}={cbt[tname(t)]:.4f}"
                              for k, t in canon.items())
                   + f" ceil={vs[f'{q_key}_ceiling']:.4f}", flush=True)
+            for m in spec.extra:
+                by_t = ex.get(m.key, {})
+                if by_t:
+                    print(f"           {m.key}: "
+                          + " ".join(f"{k}={by_t[tname(t)]:.4f}"
+                                     for k, t in canon.items()
+                                     if tname(t) in by_t), flush=True)
             if use_wandb:
-                wandb.log({f"val/{q_key}_{k}": cbt[tname(t)]
-                           for k, t in canon.items()}
-                          | {f"val/{q_key}_ceiling": vs[f"{q_key}_ceiling"]},
-                          step=step)
+                log = {f"val/{q_key}_{k}": cbt[tname(t)]
+                       for k, t in canon.items()}
+                log[f"val/{q_key}_ceiling"] = vs[f"{q_key}_ceiling"]
+                for m in spec.extra:
+                    for k, t in canon.items():
+                        v = ex.get(m.key, {}).get(tname(t))
+                        if v is not None:
+                            log[f"val/{m.key}_{k}"] = v
+                    if f"{m.key}_ceiling" in vs:
+                        log[f"val/{m.key}_ceiling"] = vs[f"{m.key}_ceiling"]
+                wandb.log(log, step=step)
             model.train()
         if step % args.save_interval == 0 or step == args.steps:
             save_checkpoint(os.path.join(run_dir, "model.pt"), model, cfg,
