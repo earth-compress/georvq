@@ -71,6 +71,17 @@ def main():
     ap.add_argument("--out-dir", default=None)
     ap.add_argument("--wandb", action="store_true", default=True)
     ap.add_argument("--no-wandb", dest="wandb", action="store_false")
+    ap.add_argument("--amp", action="store_true", default=True,
+                    help="bf16 autocast on the DECODER forward. FINDINGS: "
+                         "bf16 belongs on decoder forwards only -- it is "
+                         "the encoder whose latents must stay bit-stable, "
+                         "and here the encoder does not run at all.")
+    ap.add_argument("--no-amp", dest="amp", action="store_false")
+    ap.add_argument("--grad-ckpt", action="store_true", default=False,
+                    help="recompute activations in backward. Off by "
+                         "default here: decoder-only training has memory "
+                         "to spare, and checkpointing trades ~30% speed "
+                         "for memory we are not short of.")
     ap.add_argument("--bench-only", action="store_true",
                     help="measure step time at this batch and exit")
     args = ap.parse_args()
@@ -80,6 +91,8 @@ def main():
                        else "cpu")
     model = from_checkpoint(args.init, dev)
     cfg = model.full_config
+    model.decoder.grad_ckpt = args.grad_ckpt
+    model.tokenizer.grad_ckpt = args.grad_ckpt
     codec = Codec(model)
     spec = resolve_report(model.source, cfg)
     n_tr, n_fr = set_trainable(model)
@@ -139,15 +152,23 @@ def main():
         g = torch.Generator().manual_seed(seed)
         while not stop.is_set():
             ci = torch.randint(0, args.pool_chips, (args.batch,), generator=g)
-            wo = torch.randint(0, n_off, (args.batch,), generator=g).numpy()
+            wo = torch.randint(0, n_off, (args.batch,), generator=g)
+            r = (wo // side) * win
+            c = (wo % side) * win
+            # ONE gather kernel over the resident pool, exactly as
+            # ChipPool.sample_batch does. Slicing whole chips out first
+            # would move 34 MB per window (a 130x512x512 int8 chip) to
+            # extract 0.5 MB, which measured as a hard ~70 win/s ceiling
+            # independent of batch size.
+            tt = torch.arange(win)
+            bands = torch.arange(pool.bands)
             with pool.cuda_lock:
-                chips = pool.pool[ci].clone()
+                pix = pool.pool[ci[:, None, None, None],
+                                bands[None, :, None, None],
+                                (r[:, None] + tt)[:, None, :, None],
+                                (c[:, None] + tt)[:, None, None, :]]
                 ridx = pool.slot_row[ci].clone().numpy()
-            r0 = (wo // side) * win
-            c0 = (wo % side) * win
-            pix = torch.stack([chips[k, :, r0[k]:r0[k] + win,
-                                     c0[k]:c0[k] + win]
-                               for k in range(len(wo))])
+            wo = wo.numpy()
             wids = ridx * n_off + wo
             order = np.argsort(wids)          # memmap locality
             inv = np.empty_like(order); inv[order] = np.arange(len(order))
@@ -212,7 +233,10 @@ def main():
             zqs.append(cum)
         for g in opt.param_groups:
             g["lr"] = lr_at(step)
-        out = model.decode(zqs, Ls, mean, valid).float()
+        with torch.autocast(dev.type, torch.bfloat16,
+                            enabled=args.amp and dev.type == "cuda"):
+            out = model.decode(zqs, Ls, mean, valid)
+        out = out.float()
         loss, m = src.recon_stats(out, x, valid)
         opt.zero_grad(set_to_none=True)
         loss.backward()

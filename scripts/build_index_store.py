@@ -167,6 +167,13 @@ def main():
 
     idx = pd.DataFrame(meta, columns=["window_id", "chip_id", "shard", "slot",
                                       "r0", "c0", "lat", "lon"])
+    # Readers finish out of order, so `meta` is in ARRIVAL order while the
+    # memmaps are written at absolute window_id. Sort, so that row i of
+    # this table describes window i -- consumers index it positionally and
+    # a mismatch is silent: training would reconstruct the wrong window.
+    idx = idx.sort_values("window_id").reset_index(drop=True)
+    assert np.array_equal(idx.window_id.to_numpy(), np.arange(len(idx))), \
+        "window ids are not a complete 0..N-1 range"
     idx.to_parquet(os.path.join(args.out, "index.parquet"), index=False)
     el = time.time() - t0
     manifest = {
