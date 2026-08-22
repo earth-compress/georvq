@@ -101,11 +101,36 @@ class Codec:
         pass `mean` explicitly to encode against the QUANTIZED mean a
         release will actually transmit, so encoder and decoder agree.
         """
+        stacked, res, mean = self.encode_batch(
+            x, loc=loc, refine_tiers=refine_tiers, valid=valid, mean=mean,
+            coarse_residual=coarse_residual)
+        B = stacked[0].shape[0]
+        loc_np = (loc.cpu().numpy() if isinstance(loc, torch.Tensor)
+                  else loc) if loc is not None else None
+        mu_np = mean.cpu().numpy() if isinstance(mean, torch.Tensor) else mean
+        return [Packet(indices=[t[b] for t in stacked],
+                       loc=loc_np[b] if loc_np is not None else None,
+                       mean=mu_np[b] if mu_np is not None else None,
+                       refinements=({t: r[b] for t, r in res.items()}
+                                    if res else None))
+                for b in range(B)]
+
+    @torch.no_grad()
+    def encode_batch(self, x, loc=None, refine_tiers=(), valid=None,
+                     mean=None, coarse_residual=False):
+        """The batch form behind `encode`: `(stacked, refinements, mean)`.
+
+        `stacked` is one `(B, cells, depth)` index array per tier -- the
+        bitstream itself, before it is split into per-window `Packet`s.
+        Bulk callers (caching a whole corpus) want this: building millions
+        of Packet objects costs far more than the encode does, and going
+        through the same code path is what guarantees a cache holds the
+        indices the shipped encoder would actually emit.
+        """
         m = self.model
         if m.stats_cond is not None and mean is None:
             mean = m.patch_mean(x, valid)
         zs = m.encode_levels(x, stats=mean, valid=valid)
-        B = x.shape[0]
         want = set(refine_tiers) | ({0} if coarse_residual else set())
         if want and (m.selector is not None or m.conditioner is not None):
             raise NotImplementedError(
@@ -133,15 +158,7 @@ class Codec:
                     res[t] = residual.cpu().numpy()
         # idxs: per tier, list of depth (B, cells) tensors -> (B, cells, depth)
         stacked = [torch.stack(per, -1).cpu().numpy() for per in idxs]
-        loc_np = (loc.cpu().numpy() if isinstance(loc, torch.Tensor)
-                  else loc) if loc is not None else None
-        mu_np = mean.cpu().numpy() if isinstance(mean, torch.Tensor) else mean
-        return [Packet(indices=[t[b] for t in stacked],
-                       loc=loc_np[b] if loc_np is not None else None,
-                       mean=mu_np[b] if mu_np is not None else None,
-                       refinements=({t: r[b] for t, r in res.items()}
-                                    if res else None))
-                for b in range(B)]
+        return stacked, res, mean
 
     # ---- decode ----
 
