@@ -211,7 +211,10 @@ class PyramidCodec(nn.Module):
             self.specs, head=source.build_head(cfg, head_in),
             dim=cfg.decoder.dim, depth=cfg.decoder.depth,
             heads=cfg.decoder.heads, cls_bridge=cfg.decoder.cls_bridge,
-            ff_ratio=cfg.ff_ratio, sigma_cond=cfg.sigma is not None,
+            ff_ratio=(cfg.decoder.ff_ratio
+                      if cfg.decoder.ff_ratio is not None
+                      else cfg.ff_ratio),
+            sigma_cond=cfg.sigma is not None,
             sigma_freqs=cfg.sigma.freqs if cfg.sigma else 8,
             late_join=cfg.decoder.late_join)
         if cfg.local_attn is not None:
