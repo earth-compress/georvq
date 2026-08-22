@@ -264,7 +264,14 @@ def main():
                            **{f"train/{k}": float(v.detach())
                               for k, v in m.items()}}, step=step)
 
-        if step % args.val_interval == 0 or step == args.steps:
+        # Also validate exactly at the end of the lr=0 phase. That phase
+        # exists to ASSERT the surgery was function-preserving -- if the
+        # numbers there do not match the ancestor's, the fault is in the
+        # weights or the data pairing, not in training. A val_interval
+        # that does not divide lr0_steps silently skips the assertion,
+        # which is how this was missed on the first run.
+        if (step % args.val_interval == 0 or step == args.steps
+                or step == args.lr0_steps):
             vs, cbt = validate(model, src, val_s, list(canon.values()),
                                {tname(t) for t in canon.values()}, spec=spec)
             q_key = spec.quality.key
