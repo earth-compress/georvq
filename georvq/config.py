@@ -73,6 +73,13 @@ class DecoderConfig(StrictModel):
     head_feat: int = 64
     cls_bridge: bool = True
     late_join: int = 0             # same contract as tokenizer.late_join
+    # Decoder-only FFN width multiplier. None = share `model.ff_ratio`
+    # with the tokenizer, which is the historical behaviour. Set it to
+    # widen the DECODER's MLPs without touching the encoder -- required
+    # when the encoder is frozen (a decoder-capacity experiment, or
+    # training from cached latents), because a wider encoder FFN is a
+    # different encoder and its cached latents would no longer apply.
+    ff_ratio: Optional[float] = None
     head_dw: bool = False          # depthwise-separable head convs (8x fewer
                                    # MACs; smooths intra-window tile seams)
 
