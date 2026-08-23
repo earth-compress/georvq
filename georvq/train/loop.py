@@ -302,7 +302,11 @@ def train(cfg: Config, gpu=0):
         if s < lr0:                   # AdamW warms its moments at lr=0 first
             return 0.0
         s -= lr0
-        ramp = min(1.0, (s + 1) / warmup)
+        # max(warmup, 1): warmup=0 is the natural way to write
+        # "no warmup" and used to divide by zero here, killing
+        # the run at its first optimiser step -- after the pool
+        # had already spent minutes prefilling.
+        ramp = min(1.0, (s + 1) / max(warmup, 1))
         if const_lr:                  # stoppable at any step
             return ramp
         total = max(cfg.train.steps - lr0, 1)

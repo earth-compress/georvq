@@ -52,7 +52,7 @@ train:
   # a decaying schedule would confound that with the schedule's shape.
   # The lr0 phase is an assertion: the init is bit-identical to the
   # release, so validation there must reproduce the release's numbers.
-  optim: {lr: 5.0e-5, wd: 0.01, warmup: 0, lr0_steps: 500,
+  optim: {lr: 5.0e-5, wd: 0.01, warmup: 1, lr0_steps: 500,
           schedule: constant}
 
 log:
