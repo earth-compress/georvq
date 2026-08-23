@@ -38,6 +38,13 @@ model:
     # Maturing (resets off, EMA 0.9995) is right when warm-started books
     # should barely drift; here drifting with the encoder is the job.
     mature_warmstart: false
+    # NO VQ-free warmup. The base config carries warmup_steps: 20000,
+    # which is right when training from scratch and ruinous here: it
+    # trains an UNQUANTIZED autoencoder for the first 20k steps and then
+    # k-means-initialises the codebooks at step 20001, discarding exactly
+    # the released books this experiment is built on. Warm-started books
+    # need no init and must be live from step 1.
+    warmup_steps: 0
 
 train:
   steps: 40000
@@ -47,6 +54,11 @@ train:
   # steps, close to the 22.5M the decoder-only run saw, so the two
   # experiments are comparable on data rather than only on step count.
   batch_windows: 512
+  # No ramp. The base config quarters the batch for 5000 steps, which
+  # costs this run ~3.9M windows against the decoder-only run it is being
+  # compared with (18.6M vs 22.5M). A capacity comparison should differ
+  # in capacity, not in how much data each side saw.
+  batch_ramp: null
   init_from: checkpoints/tessera_grown_full/init.pt
   # Flat zero, then flat low. The experiment asks what capacity buys, so
   # a decaying schedule would confound that with the schedule's shape.

@@ -184,6 +184,22 @@ def train(cfg: Config, gpu=0):
               f"vq.ema_decay={v.ema_decay} and vq.reset_mode="
               f"{v.reset_mode!r}. Set vq.mature_warmstart=false to keep "
               f"them live.", flush=True)
+    if cfg.train.init_from and v.warmup_steps:
+        # A VQ-free warmup is for training from scratch: it trains the
+        # autoencoder unquantized, then k-means-initialises the books at
+        # warmup_steps + 1. Warm-started books need no init, and that
+        # k-means DISCARDS them -- so inheriting warmup_steps from a
+        # from-scratch preset silently converts a warm-start run into a
+        # from-scratch one, halfway in, with a healthy-looking loss.
+        # Observed: a grown-Tessera run inherited warmup_steps=20000 and
+        # would have thrown away the released codebooks at step 20001.
+        raise ValueError(
+            f"train.init_from is set and model.vq.warmup_steps is "
+            f"{v.warmup_steps}. The VQ-free warmup would k-means "
+            f"re-initialise the warm-started codebooks at step "
+            f"{v.warmup_steps + 1}, discarding them. Set "
+            f"model.vq.warmup_steps: 0 for a warm start, or drop "
+            f"train.init_from to train from scratch.")
     if cfg.train.init_from and not v.mature_warmstart:
         # undo load_partial's maturing: keep the books live at the
         # configured decay with resets (and therefore reset_mode) active
