@@ -39,6 +39,11 @@ def main():
     ap.add_argument("--add-blocks", type=int, default=8)
     ap.add_argument("--ff-ratio", type=float, default=3.0)
     ap.add_argument("--head-feat", type=int, default=192)
+    ap.add_argument("--enc-add-blocks", type=int, default=0,
+                    help="grow the ENCODER too. Changes the latents, so it "
+                         "invalidates any cached bitstream and only makes "
+                         "sense for a run that trains the encoder.")
+    ap.add_argument("--enc-ff-ratio", type=float, default=None)
     ap.add_argument("--out", default="checkpoints/tessera_grown/init.pt")
     ap.add_argument("--gpu", type=int, default=0)
     ap.add_argument("--windows", type=int, default=8)
@@ -59,6 +64,14 @@ def main():
     d.depth = scfg.model.decoder.depth + args.add_blocks
     d.head_feat = args.head_feat
     d.ff_ratio = args.ff_ratio          # DECODER only; encoder keeps its own
+    grow_enc = args.enc_add_blocks > 0 or args.enc_ff_ratio is not None
+    if grow_enc:
+        cfg.model.tokenizer.depth = (scfg.model.tokenizer.depth
+                                     + args.enc_add_blocks)
+        if args.enc_ff_ratio is not None:
+            cfg.model.ff_ratio = args.enc_ff_ratio
+        print(f"grown:   encoder depth={cfg.model.tokenizer.depth} "
+              f"ff_ratio={cfg.model.ff_ratio}")
     print(f"grown:   decoder dim={d.dim} depth={d.depth} "
           f"head_feat={d.head_feat} ff_ratio={d.ff_ratio}")
 
@@ -68,11 +81,13 @@ def main():
     print(f"decoder params {n_s/1e6:.1f}M -> {n_d/1e6:.1f}M "
           f"({n_d/n_s:.2f}x); total {sum(p.numel() for p in dst.parameters())/1e6:.1f}M")
 
-    grow_decoder(dst, src.state_dict())
+    grow_decoder(dst, src.state_dict(), grow_encoder=grow_enc)
 
     # --- the bitstream must not have moved -------------------------------
     from georvq.inference.release import bitstream_id
     bid_s, bid_d = bitstream_id(src), bitstream_id(dst)
+    # Growing the encoder does not move bitstream_id (that hashes tiers +
+    # codebooks) but it DOES move the latents, so cached indices are void.
     assert bid_s == bid_d, (
         f"bitstream_id changed {bid_s} -> {bid_d}: the surgery touched the "
         f"encoder or codebooks, so cached latents and existing packets "

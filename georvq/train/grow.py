@@ -41,9 +41,12 @@ from __future__ import annotations
 
 import torch
 
-# state-dict prefixes whose tensors must match exactly, or the grown model
-# is not the same codec any more
-FROZEN_PREFIXES = ("tokenizer.", "stem.", "rvqs.", "stats_enc.", "stats_dec.")
+# Tensors that must match exactly or the grown model is not the same codec.
+# Growing the encoder is allowed only when the caller says so explicitly:
+# it invalidates any cached bitstream, because the latents move.
+FROZEN_DECODER_ONLY = ("tokenizer.", "stem.", "rvqs.", "stats_enc.",
+                       "stats_dec.")
+FROZEN_FULL = ("rvqs.",)
 
 
 def _copy_into(dst: torch.Tensor, src: torch.Tensor) -> None:
@@ -51,11 +54,18 @@ def _copy_into(dst: torch.Tensor, src: torch.Tensor) -> None:
     dst[tuple(slice(0, s) for s in src.shape)].copy_(src)
 
 
-def grow_decoder(dst_model, src_state, verbose=True):
+def grow_decoder(dst_model, src_state, verbose=True, grow_encoder=False):
     """Load `src_state` into the larger `dst_model`, preserving its function.
+
+    `grow_encoder=True` also expands the ViT tokenizer -- more blocks and
+    a wider FFN. That changes the LATENTS, so any cached bitstream built
+    with the old encoder is invalidated and the codebooks no longer sit
+    where the encoder puts things. Only do it for a run that trains the
+    encoder.
 
     Returns a dict of what happened, for the caller to log.
     """
+    frozen = FROZEN_FULL if grow_encoder else FROZEN_DECODER_ONLY
     own = dst_model.state_dict()
     report = {"exact": 0, "expanded": [], "fresh": [], "missing": []}
 
@@ -69,7 +79,7 @@ def grow_decoder(dst_model, src_state, verbose=True):
                 dv.copy_(sv)
                 report["exact"] += 1
                 continue
-            if any(k.startswith(p) for p in FROZEN_PREFIXES):
+            if any(k.startswith(p) for p in frozen):
                 raise ValueError(
                     f"{k}: shape changed ({tuple(sv.shape)} -> "
                     f"{tuple(dv.shape)}) but this tensor belongs to the "
@@ -87,6 +97,8 @@ def grow_decoder(dst_model, src_state, verbose=True):
             if k0 in src_state and own[k2].shape[1] > src_state[k0].shape[0]:
                 own[k2][:, src_state[k0].shape[0]:].zero_()
         _zero_head_paths(dst_model, src_state, own)
+        if grow_encoder:
+            _grow_tokenizer(dst_model, src_state, own, verbose)
 
     if verbose:
         print(f"grow: {report['exact']} tensors copied exactly, "
@@ -146,3 +158,39 @@ def _full_decode(model, x, valid=None):
                       device=zs[0].device).expand(zs[0].shape[0], -1)
     zqs, _, _ = model.quantize(zs, Ls)
     return model.decode(zqs, Ls, st, valid)
+
+
+def _grow_tokenizer(model, src_state, sd, verbose=True):
+    """Make the widened and newly-added ViT encoder layers no-ops.
+
+    `nn.TransformerEncoderLayer` has no AdaLN gate, so a fresh block is
+    NOT identity the way the decoder's AdaLNBlock is -- its attention and
+    MLP start random and the residual adds them straight in. With
+    `norm_first=True` the block is x + attn(norm(x)) + mlp(norm(x)), so
+    zeroing both output projections makes it exactly the identity while
+    leaving the input-side weights random, which is what keeps a gradient
+    path into them.
+    """
+    layers = model.tokenizer.vit.layers
+    n_new = 0
+    for i, _ in enumerate(layers):
+        k1 = f"tokenizer.vit.layers.{i}.linear1.weight"
+        if k1 not in src_state:
+            # a block the ancestor did not have: zero its two output
+            # projections and it passes its input straight through
+            for name in ("self_attn.out_proj.weight", "self_attn.out_proj.bias",
+                         "linear2.weight", "linear2.bias"):
+                key = f"tokenizer.vit.layers.{i}.{name}"
+                if key in sd:
+                    sd[key].zero_()
+            n_new += 1
+            continue
+        # an inherited block whose FFN got wider: cut the new hidden units
+        # out of the output so the block still computes what it did
+        old_ff = src_state[k1].shape[0]
+        k2 = f"tokenizer.vit.layers.{i}.linear2.weight"
+        if k2 in sd and sd[k2].shape[1] > old_ff:
+            sd[k2][:, old_ff:].zero_()
+    if verbose:
+        print(f"grow: tokenizer {len(layers) - n_new} inherited blocks "
+              f"+ {n_new} new pass-through blocks")

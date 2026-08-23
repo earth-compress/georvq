@@ -68,6 +68,30 @@ def test_growth_is_not_a_no_op():
     assert rep["exact"] > 0
 
 
+def test_growing_the_encoder_preserves_the_function():
+    """Encoder growth is a different job from the decoder's: a plain
+    TransformerEncoderLayer has no AdaLN gate, so a fresh block is not
+    identity until both its output projections are zeroed."""
+    torch.manual_seed(0)
+    src = build_model(_cfg(depth=3, ff_ratio=2.0, head_feat=8))
+    wide = _cfg(depth=7, ff_ratio=3.0, head_feat=12)
+    wide.model.tokenizer.depth = 4          # ancestor has 2
+    wide.model.ff_ratio = 3.0               # widen the ENCODER ffn too
+    dst = build_model(wide)
+    src.eval(); dst.eval()
+
+    x, valid = _prepped(src)
+    with torch.no_grad():
+        src.encode_levels(x)
+    grow_decoder(dst, src.state_dict(), verbose=False, grow_encoder=True)
+
+    r = verify_growth(src, dst, x, valid=valid, atol=1e-4)
+    assert r["ok"], f"grown encoder+decoder diverged: {r}"
+    n_src = sum(p.numel() for p in src.tokenizer.parameters())
+    n_dst = sum(p.numel() for p in dst.tokenizer.parameters())
+    assert n_dst > 1.3 * n_src, "tokenizer did not actually grow"
+
+
 def test_growing_the_encoder_side_is_refused():
     """The bitstream must not move: this is a decoder-side experiment."""
     torch.manual_seed(0)
@@ -76,4 +100,4 @@ def test_growing_the_encoder_side_is_refused():
     wide.model.tokenizer.dim = 48            # encoder side
     dst = build_model(wide)
     with pytest.raises(ValueError, match="frozen encoder"):
-        grow_decoder(dst, src.state_dict(), verbose=False)
+        grow_decoder(dst, src.state_dict(), verbose=False)   # default: refuse
