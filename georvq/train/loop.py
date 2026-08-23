@@ -640,6 +640,20 @@ def train(cfg: Config, gpu=0):
                   + f" ceil={vs[f'{qm.key}_ceiling']:.4f}"
                   + extra_str + base_str,
                   flush=True)
+            # The extras PER TUPLE, not just at the ceiling. On a source
+            # with a transmitted mean the headline cosine is inflated --
+            # measured on Tessera, a coarse-only decode reads cos 0.875
+            # against ccos 0.316 -- so a log carrying only the headline
+            # can show a run flat or negative while the reconstruction is
+            # genuinely improving. They are computed either way; printing
+            # them costs nothing.
+            for m in report.extra:
+                by_t = ebt.get(m.key, {})
+                if by_t:
+                    print(f"    {m.key}: "
+                          + " ".join(f"{k}={by_t[tname(t)]:.4f}"
+                                     for k, t in canon.items()
+                                     if tname(t) in by_t), flush=True)
             if use_wandb:
                 scalars = {f"val/{qm.key}_{k}": cbt[tname(t)]
                            for k, t in canon.items() if tname(t) in cbt}
