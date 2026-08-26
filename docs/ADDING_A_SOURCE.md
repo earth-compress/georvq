@@ -83,7 +83,7 @@ Copy the closest `configs/*.yaml`, set `data.source`, `data.store_dir`,
 `model.window/bands/tiers`, and train:
 
 ```bash
-georvq-train -c configs/my_source.yaml --gpu 0
+georvq-train -c configs/<source>/my_preset.yaml --gpu 0
 ```
 
 ## 4. (When shipping) a release layer

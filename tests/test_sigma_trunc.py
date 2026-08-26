@@ -61,7 +61,7 @@ def test_dropped_tiers_are_zeroed_in_forward():
 def test_truncate_probs_length_asserted():
     from georvq.config import load_config
     import pytest
-    cfg = load_config("configs/stage1.yaml",
+    cfg = load_config("configs/ae/stage1.yaml",
                       ["model.sigma.truncate=[0.5,0.5]"])
     from georvq.train.stage1 import train
     with pytest.raises(AssertionError, match="one probability per tier"):

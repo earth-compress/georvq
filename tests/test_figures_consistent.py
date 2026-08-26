@@ -41,7 +41,7 @@ FIGURES = {
     "P(active)=0.006": {
         "docs/FINDINGS.md",                 # canonical
         "georvq/model/codec.py",            # `path_tuples`, the mechanism
-        "configs/tessera_vq8_k256.yaml",    # that run's own provenance
+        "configs/tessera/tessera_vq8_k256.yaml",    # that run's own provenance
     },
     # the sample-budget crossover
     "450 vectors per codeword": {
