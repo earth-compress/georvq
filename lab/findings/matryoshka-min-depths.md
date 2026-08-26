@@ -9,6 +9,6 @@ keywords: [matryoshka, depth, training, rate]
 imported: true
 ---
 
-Training with per-tier minimum depths (for example 6-1-0) concentrates
+Training with per-tier minimum depths (for example 6-0-0) concentrates
 model capacity on the operating points that get used. Depth tuples that were
 never sampled during training give misleading evaluation numbers.

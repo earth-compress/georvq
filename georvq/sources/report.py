@@ -236,7 +236,7 @@ def embedding_field_spec(preview=PCA_RGB) -> ReportSpec:
 
     Cosine is the headline because the field's information is in the
     DIRECTION of each pixel vector; `ccos` accompanies it because any model
-    with a transmitted mean inflates plain cosine (`docs/FINDINGS.md`), and
+    with a transmitted mean inflates plain cosine (`lab/findings/transmitted-mean-inflates-cosine.md`), and
     a coarse-only decode reading 0.9154 while contributing no spatial
     structure is exactly the failure it catches.
     """

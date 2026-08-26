@@ -247,7 +247,7 @@ can currently resolve.
   standard deviation to the source's was measured to *hurt*: the decoder is
   already smoother than the truth, so rescaling amplifies its error instead
   of restoring detail. The config validator refuses it; the numbers are in
-  docs/FINDINGS.md.
+  `lab/findings/stats-channel-is-per-field.md`.
 
 ## Rebuilding
 

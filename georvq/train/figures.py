@@ -71,7 +71,7 @@ def codebook_figure(vs, specs, step):
 
     Read this to spot a level that has COLLAPSED, not to judge quality:
     all three bars can sit near 1.0 on a codebook that explains almost
-    none of the variance (docs/FINDINGS.md).
+    none of the variance (lab/findings/perplexity-is-gameable.md).
     """
     fig, axes = plt.subplots(1, len(specs), figsize=(5 * len(specs), 3.3),
                              constrained_layout=True, squeeze=False)

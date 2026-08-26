@@ -133,7 +133,7 @@ python scripts/build_release_tessera.py --ckpt <ckpt> --out <bundle>
 
 - **Codec researcher** (new sources, better models): `georvq/{model,
   data, sources, train, eval}`, `configs/`, `scripts/`,
-  `docs/ADDING_A_SOURCE.md` + `docs/FINDINGS.md`. The parity-sacred
+  `docs/ADDING_A_SOURCE.md` + the findings ledger (`lab/`). The parity-sacred
   rules above are yours to uphold.
 - **Release engineer** (ship a trained codec): `georvq/inference/`
   (bundles, ids, refinements, ONNX export) plus a source-specific release
@@ -163,7 +163,7 @@ cycle, with its settings verified against the original runs' logged argv:
 - `hybrid_rate.yaml` — frozen stage-1 encoder + fresh smaller-deeper
   codebooks + entropy model (its small 256-slot pool is historical).
 - `cascade.yaml` — location prior + cross-tier predictors, encoder frozen
-  for the whole run (co-adaptation degrades the ceiling — `FINDINGS.md`).
+  for the whole run (co-adaptation degrades the ceiling — `lab/findings/coadaptation-degrades-ceiling.md`).
 - `tessera_pyr64.yaml` — the 3-tier pyramid on Tessera embeddings.
 - `tessera_vq8.yaml` — that geometry with int8 QAT codebooks.
 - `tessera_vq8_k256.yaml` — graded-down codebooks (K=256 x 20 levels),
@@ -220,5 +220,5 @@ reproduces a result.
 - **Shipping a new source** → a per-source release layer over
   `georvq/inference`; `georvq/ae/` + `docs/AE_RELEASE.md` are the worked
   example.
-- **Why the architecture is shaped this way** → `docs/FINDINGS.md`
+- **Why the architecture is shaped this way** → `docs/DESIGN.md`
   (empirical results, including the negative ones worth not repeating).

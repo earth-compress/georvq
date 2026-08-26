@@ -220,7 +220,7 @@ class LucasLandCover(Benchmark):
         assumed EPSG, since the reference grid is not in a common code.
         Note LCMAP's probe noise floor is wide (+/-0.023 balanced accuracy
         under repeated splits), so it cannot resolve small differences --
-        see docs/FINDINGS.md before reading its numbers.
+        see lab/findings/probe-noise-floors.md before reading its numbers.
         """
         import io
         import zipfile
@@ -264,7 +264,7 @@ class LcmapLandCover(Benchmark):
         EPSG, since the reference grid is not in a common code. LCMAP's
         probe noise floor is wide (+/-0.023 balanced accuracy under
         repeated splits), so it cannot resolve small differences -- see
-        docs/FINDINGS.md before reading its numbers."""
+        lab/findings/probe-noise-floors.md before reading its numbers."""
         import glob
         import zipfile
 
