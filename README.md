@@ -174,7 +174,6 @@ recon = R.decode(R.encode(x, valid=v), depths=[20, 20, 5], valid=v)
 ## Docs
 
 - `docs/OVERVIEW.md` — codebase map, invariants, personas, working knowledge
-- `docs/FURTHER_READING.md` — architecture explainer + file-by-file guide
 - `docs/AE_RELEASE.md` — the shipped AlphaEarth codec's complete contract
 - `docs/TESSERA_RELEASE.md` — the shipped Tessera codec's complete contract
 - `docs/ADDING_A_SOURCE.md` — the plug-point for new datasets
