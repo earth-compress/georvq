@@ -80,8 +80,15 @@ Commit:
 
 Do not commit:
 
-- one-off probe scripts: run them, record the finding, delete the
-  script;
+- one-off probe scripts, which do not go in `scripts/` or `analysis/`.
+  If a probe measured something about a source, a checkpoint or the
+  training process, file the script with its config and result under
+  `lab/`, marked as observed once; if it measured nothing, leave it in
+  an untracked scratch directory. The judgement of importance is not
+  yours to make, in either direction: promoting a result into `docs/`
+  and deleting a recorded finding or its script are both the
+  maintainer's calls, made during periodic clean-ups using the ledger's
+  dates, statuses and cross references.
 - figures, PDFs, archives and other outputs: they belong in run
   directories or untracked folders, never at the repository root;
 - checkpoints and datasets;
