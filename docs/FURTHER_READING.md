@@ -335,8 +335,8 @@ worked example.
 
 | file | what it is |
 |---|---|
-| `configs/pyr64.yaml` | The flagship AE recipe (argv-matched to the final training stage; the full warm-start history is in the research repo). |
-| `configs/stage1.yaml`, `hybrid_rate.yaml`, `cascade.yaml`, `satclip_select.yaml` | Historical recipes that ran and worked (provenance notes in OVERVIEW — one contains an explicitly unvalidated variant). |
+| `configs/ae/pyr64.yaml` | The flagship AE recipe (argv-matched to the final training stage; the full warm-start history is in the research repo). |
+| `configs/ae/stage1.yaml`, `hybrid_rate.yaml`, `cascade.yaml`, `satclip_select.yaml` | Historical recipes that ran and worked (provenance notes in OVERVIEW — one contains an explicitly unvalidated variant). |
 | `configs/smoke.yaml` | Synthetic CPU-friendly end-to-end smoke. |
 | `tests/` | Fast suite (~20 s): config/codec/VQ/conditioning/rate units, `test_vq_parity.py` (bit-exactness vs the research repo, self-skipping), `test_compat.py` (+ golden tokens), `test_inference.py`, `test_ae_codec.py` (containers, ONNX parity, CLIs end-to-end, sidecar, quality stats), `test_train_smoke.py` (GPU, marked slow). |
 | `docs/OVERVIEW.md` | Start here: pipeline, module map, invariants, personas. |

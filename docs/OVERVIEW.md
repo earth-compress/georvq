@@ -108,8 +108,8 @@ submodules exist. Everything is assembled from one validated `Config`
 ```bash
 pip install -e ".[loc,archive,eval,viz,dev]"
 
-georvq-train -c configs/pyr64.yaml --gpu 0 log.run_tag=my_run   # train
-georvq-train -c configs/pyr64.yaml train.steps=2000 ...          # any override
+georvq-train -c configs/ae/pyr64.yaml --gpu 0 log.run_tag=my_run   # train
+georvq-train -c configs/ae/pyr64.yaml train.steps=2000 ...          # any override
 
 pytest -m "not slow and not gpu"    # fast suite (~20 s) — run on every change
 pytest                              # + training smokes (GPU, minutes)

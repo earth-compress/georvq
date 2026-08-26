@@ -97,14 +97,14 @@ is only the notebooks' default); decode-only use needs no GPU — pass
 
 ```bash
 # standard 64px 3-tier pyramid on an AlphaEarth chip store
-georvq-train -c configs/pyr64.yaml --gpu 0 log.run_tag=my_run
+georvq-train -c configs/ae/pyr64.yaml --gpu 0 log.run_tag=my_run
 
 # override anything with dot paths
-georvq-train -c configs/pyr64.yaml model.rate='{weight: 0.005}' train.steps=60000
+georvq-train -c configs/ae/pyr64.yaml model.rate='{weight: 0.005}' train.steps=60000
 
 # stage-1 continuous pretrain, then a rate-model fine-tune on top
-georvq-train-stage1 -c configs/stage1.yaml --gpu 0
-georvq-train -c configs/hybrid_rate.yaml --gpu 0 train.init_from=checkpoints/stage1/model.pt
+georvq-train-stage1 -c configs/ae/stage1.yaml --gpu 0
+georvq-train -c configs/ae/hybrid_rate.yaml --gpu 0 train.init_from=checkpoints/stage1/model.pt
 ```
 
 Presets in `configs/`: `pyr64` (the standard recipe), `stage1`,
