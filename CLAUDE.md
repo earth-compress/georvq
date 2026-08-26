@@ -1,12 +1,69 @@
 # georvq
 
 georvq trains pyramidal residual vector quantization codecs for gridded
-geospatial data. It is the first prototype in a wider project on the
-compression of earth observation data, which will in time cover classical
-and neural methods, lossy and lossless. The main output of this
-repository is the method and what has been learned while developing it.
-Trained codecs are released with fixed versions and their contracts are
-kept, but the code around them keeps moving.
+geospatial data. The codebase uses different sources of earth data to 
+stress-test the developed methodology, and new techniques are explored
+to improve performance on those sources. When something works for one
+source, that doesn't mean it will transfer well to another. The longer
+term goal for this project is to understand and predict what kind of
+architecture would best suit a new source, based on its statistics and
+structure. As we go, we make release versions for different sources, 
+though these may end up getting amended or improved as new features are
+developed. Bear in mind during your work that you are likely one of many
+agents who have each been given a specific task or focus, and so the 
+results and findings of your work may not be that important in the grand
+scheme of things. Unless you are explicitly asked, you should not alter
+central parts of the repo which affect the whole project. Rather, if you
+believe you have found something that is of general importance, you should
+use the findings system, described later on, to log it. If you think
+this finding is of such importance that it fundamentally challenges or
+changes something about the project, that is to be discussed with the
+maintainer.
+
+## Style guide
+
+The maintainer of this repo is not a fan of many of the classic claude-isms
+which agents typically use a crutch in their prose, code comments, docs,
+and thinking. For example, some of the cliches the maintainer hates:
+
+ - Using irrelevant adverbs like "quietly" and "genuinely" to add an
+   unnecessary air of importance of emotion to a sentence.
+ - Breaking up thoughts into small sentences for dramatic effect.
+ - Sounding like a salesman or start-up founder pitching their big idea.
+ - Any phrase or word like "load-bearing".
+ - Pithy few-word simplifications for concepts that can be explained more 
+ clearly e.g. "The machinery remains for codecs where it pays" is better
+ phrased as "The machinery remains for codecs which benefit from using it"
+ - Though not banned, over-use of colons, semicolons and em-dashes is strongly
+ discouraged.
+ - Framing a statement as the negation of a claim nobody made, e.g. "It's
+ not X, it's Y" or "This isn't just X". Say what the thing is.
+ - Inflating the stakes with definite articles and superlatives, e.g. "the
+ key insight", "the fundamental tension", "the whole point". Most results
+ are not the anything, they are a result.
+ - Stock metaphors such as "plumbing", "wiring", "spine", "north star",
+ "landmine", "graveyard", "the story". Describe the situation directly.
+ - Quality adjectives that carry no information, e.g. "robust", "clean",
+ "elegant", "comprehensive", "principled", "seamless". If something is
+ good, say what it does well.
+ - Filler sentence openers, e.g. "Note that", "It's worth noting",
+ "Crucially", "Interestingly". If the point matters the sentence should
+ show it, and if it doesn't the sentence should go.
+ - Restating a point at the end of a paragraph with more conviction, e.g.
+ "In short, ..." or "The upshot is ...". Make the statement once.
+ - Forcing material into groups of three (three examples, three clauses,
+ three adjectives) whether or not there are naturally three of anything.
+ - Describing code as if it had feelings or intentions, e.g. "the decoder
+ wants", "this tier doesn't care". Occasionally useful in teaching,
+ constantly reached for by agents.
+ - Bolding phrases mid-sentence to tell the reader what to feel, and
+ splitting short documents into many headed sections.
+ - Closing a document with a sentence whose only job is to sound finished,
+ e.g. "This sets the stage for ..." or "The path forward is clear".
+ - In code comments: narrating the change rather than the code ("now
+ correctly handles the empty case"), advertising ("fast path"), or
+ prefixing with "Note:". A comment states a constraint the code cannot
+ show, in the same flat voice as the comments around it.
 
 ## Getting oriented
 
