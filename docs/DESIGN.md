@@ -19,8 +19,8 @@ georvq is a learned compressor for geospatial data. A classical codec
 like JPEG applies one fixed mathematical recipe to everything; georvq
 trains a neural network on the kind of data it will compress, so the
 network learns what that data tends to look like and can describe it
-in fewer bits. Each map tile is cut into small windows of W x W pixels
-with B bands per pixel. An encoder network reduces each window to a
+in fewer bits. Each map tile is cut into small windows; 64 x 64
+pixels with B bands per pixel in the example used throughout. An encoder network reduces each window to a
 handful of vectors; those vectors are snapped to entries in learned
 lookup tables (codebooks), so that only small integer IDs need to be
 stored; a decoder network turns the IDs back into pixels. The IDs are
@@ -30,11 +30,11 @@ of it for a near-exact reconstruction.
 
 ### The pipeline
 
-Three tiers are shown; the tier count, like every size in the diagram,
-is per-source.
+The example geometry here is three tiers on grids of 1, 4 and 16 over
+a 64-pixel window; the tier count and every size are per-source.
 
 ```
-              one W x W-pixel window (B bands per pixel)
+              one 64x64-pixel window (B bands per pixel)
                                |
                                v
                  +---------------------------+
@@ -53,7 +53,7 @@ is per-source.
             v                  v                  v
       +-----------+      +-----------+      +-----------+
       |  COARSE   |      |    MID    |      |   FINE    |
-      | g0 x g0   |      | g1 x g1   |      | g2 x g2   |  <- grid of cells
+      | 1x1 cell  |      | 4x4 cells |      |16x16 cells|  <- grid over the window
       |  d0 dims  |      |  d1 dims  |      |  d2 dims  |  <- numbers per cell
       +-----+-----+      +-----+-----+      +-----+-----+
             |  "the whole      |  "this           |  "this small
@@ -73,14 +73,14 @@ is per-source.
                                |
                                v
                  +---------------------------+
-                 |    attention decoder      |  every cell of every tier
-                 |   (PyramidAttnDecoder)    |  attends to every other; it
+                 |    attention decoder      |  all 1+16+256 cells attend
+                 |   (PyramidAttnDecoder)    |  to each other; the decoder
                  +-------------+-------------+  is also told how many
                                |                codebook levels of each
                                v                tier it actually received
                  +---------------------------+
-                 |        DenseHead          |  each fine cell -> its patch
-                 +-------------+-------------+  of pixels; a small conv
+                 |        DenseHead          |  each fine cell -> a 4x4-px
+                 +-------------+-------------+  patch; a small conv
                                |                smooths the seams
                                v
                  +---------------------------+
@@ -88,18 +88,19 @@ is per-source.
                  +-------------+-------------+  e.g. add the mean back
                                |
                                v
-              reconstructed W x W-pixel window
+              reconstructed 64x64-pixel window
 ```
 
-Window size W, the tier grids g, the latent widths d, the codebook
-sizes K and the depth N are all derived from measurements of the
-source (`docs/SOURCE_ONBOARDING.md`), not copied between sources.
+The window size, tier grids, latent widths d, codebook sizes K and
+depth N are all derived from measurements of the source
+(`docs/SOURCE_ONBOARDING.md`), not copied between sources.
 
 Two design choices do most of the work here.
 
 Several scales, because information in imagery is not spread evenly
 across scales. "This window is mostly farmland" is one fact shared by
-every pixel, and describing it once at the coarse tier is almost free.
+4,096 pixels, and describing it once at the coarse tier is almost
+free.
 Fine texture is the opposite: local, unpredictable and expensive.
 Giving each scale its own grid and its own codebooks lets the bit
 budget go to where the information is.
@@ -171,8 +172,9 @@ when codes are missing. At encode time everything is stored once at
 full depth; readers then decode whatever prefix suits them.
 
 The tiers have very different costs. A round is log2(K) bits per cell,
-and the fine grid has (g2/g0)^2 times as many cells as the coarse one,
-so a fine round can cost orders of magnitude more than a coarse round.
+and on the 1/4/16 example the fine tier has 256 cells to the coarse
+tier's one, so a fine round costs more than two orders of magnitude
+more than a coarse round.
 The efficient path up the quality ladder is therefore to saturate
 coarse first, then mid, then add fine rounds one at a time. That
 ordering is measured, not assumed: depth-tuple sweeps on validation
