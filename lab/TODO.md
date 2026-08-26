@@ -79,3 +79,39 @@ autocorrelation range and `analysis/pyramid_sizing.py` proposes
 candidate windows and grids, but the power-spectrum patch-size sweep
 that `docs/SOURCE_ONBOARDING.md` names as the principled route to W
 was never built; W is currently inherited by habit.
+
+## Models should be wide enough to make quantization the only bottleneck
+
+*2026-08-26, open.*
+
+Theoretically, non-linear layers can transform a small number of
+dimensions into a much larger representation. However, in practice,
+autoencoders reach much closer to the identity function when there is
+no representational bottleneck. For this reason, RVQ in a larger
+latent dimension has been better than FSQ in fewer dimensions (a
+recollection from the research cycle; not yet recorded as a finding,
+so treat as unverified here).
+
+Hypothesis: for each source there is a critical value of effective
+dimensions per pixel at the latent bottleneck. Below it, the
+pre-quantization ceiling suffers; above it, the ceiling is stable and
+performance is limited only by RVQ bitrate. Above the threshold is
+where we want to operate, and the threshold itself should be
+predictable from the source's intrinsic dimensionality. A per-pixel
+PCA count understates that quantity for spatially redundant sources
+(DEM has one band but near-total spatial predictability), so a
+window-level intrinsic dimension is probably the right predictor.
+
+Test: sweep latent width per tier on one source, read the ceiling from
+validation, and locate the knee; then check whether the knee lands
+where the source's measured intrinsic dimension predicts, across
+sources.
+
+Existing tools: the ceiling is already tracked in validation.
+`analysis/pixel_rd.py` sweeps bottleneck dimension against rate with
+the quantizer in the loop, `analysis/patch_intrinsic_dim.py` measures
+window-level intrinsic structure, and `analysis/data_probe.py` gives
+the per-tier PCA d95 used in `docs/SOURCE_ONBOARDING.md`, whose
+derivation chain this would upgrade from rule of thumb to measured
+threshold. Latent width is a config field, so the sweep is training
+runs plus existing tooling.
