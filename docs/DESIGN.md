@@ -49,14 +49,14 @@ for a rough preview, or all of it for a near-exact reconstruction.
       +-----------+      +-----------+      +-----------+
       |  COARSE   |      |    MID    |      |   FINE    |
       | 1x1 cell  |      | 4x4 cells |      |16x16 cells|  <- grid over the window
-      |   256-d   |      |   192-d   |      |   64-d    |  <- numbers per cell
+      |   256-d   |      |   192-d   |      |   64-d    |  <- numbers per cell (AE)
       +-----+-----+      +-----+-----+      +-----+-----+
             |  "the whole      |  "this           |  "this 4x4-px
             |   window is      |   quadrant-ish   |   patch has this
             |   farmland"      |   area is..."    |   texture"
             v                  v                  v
       residual VQ        residual VQ        residual VQ      8 codebooks
-      2,048 entries      8,192 entries      16,384 entries   per tier
+      2,048 entries      8,192 entries      16,384 entries   per tier (AE)
             |                  |                  |
             +------------------+------------------+
                                v
@@ -85,6 +85,12 @@ for a rough preview, or all of it for a near-exact reconstruction.
                                v
               reconstructed 64x64-pixel window
 ```
+
+The structure is shared; the sizes are not. Window size, tier grids,
+latent widths, codebook sizes and the number of codebooks are chosen
+per source, derived from measurements of the data
+(`docs/SOURCE_ONBOARDING.md`); the figures shown are the AlphaEarth
+release's.
 
 Two design choices do most of the work here.
 
