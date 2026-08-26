@@ -107,7 +107,7 @@ georvq-train-stage1 -c configs/ae/stage1.yaml --gpu 0
 georvq-train -c configs/ae/hybrid_rate.yaml --gpu 0 train.init_from=checkpoints/stage1/model.pt
 ```
 
-Presets in `configs/`: `pyr64` (the standard recipe), `stage1`,
+Presets in `configs/`, grouped by source: `pyr64` (the standard recipe), `stage1`,
 `hybrid_rate` (entropy model + gradient codebooks), `cascade` and
 `satclip_select` (location conditioning), `tessera_*` (the Tessera
 lineage, ending at the released `tessera_vq8_k256_statscond`), `smoke`
@@ -179,7 +179,9 @@ recon = R.decode(R.encode(x, valid=v), depths=[20, 20, 5], valid=v)
 - `docs/ADDING_A_SOURCE.md` — the plug-point for new datasets
 - `docs/SOURCE_ONBOARDING.md` — measuring a new source into an architecture
 - `docs/BITSTREAM.md` — what defines a bitstream; decoder-upgrade contract
-- `docs/DESIGN.md` — why the design is the way it is (evidence in `lab/findings/`)
+- `docs/DESIGN.md` — how the method works and why it is built that way
+- `docs/SOURCES.md` — where each data source currently stands
+- `lab/` — the findings ledger: empirical results with their provenance (`lab/query.py` filters them)
 
 ## Tests
 
