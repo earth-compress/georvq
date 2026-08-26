@@ -7,6 +7,7 @@ context: rANS archives of real AE tiles versus npz-deflated raw indices.
 status: observed-once
 keywords: [entropy-coding, rans, context-model, rate]
 imported: true
+experiment: lab/experiments/order0-entropy-coding-marginal
 ---
 
 Order-0 rANS gained ~0.6% over npz-deflated raw indices on real tiles
