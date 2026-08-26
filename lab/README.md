@@ -9,6 +9,9 @@ led nowhere.
 
 ## Layout
 
+- `TODO.md` holds the maintainer's queued hypotheses and experiments.
+  Read it before proposing new experimental directions; take an item
+  only when asked.
 - `findings/` holds one file per empirical result.
 - `experiments/` holds one directory per experiment worth keeping: the
   configs, the driver script, and anything else needed to re-run it. A
