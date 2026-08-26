@@ -22,3 +22,8 @@ err.log
 
 # geotessera downloads its tiles into the CWD; keep them out of git
 global_0.1_degree_representation/
+
+# one-off outputs stay untracked
+/*.png
+/*.pdf
+/*.tar.gz
