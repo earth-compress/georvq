@@ -55,7 +55,7 @@ and thinking. For example, some of the cliches the maintainer hates:
  three adjectives) whether or not there are naturally three of anything.
  - Describing code as if it had feelings or intentions, e.g. "the decoder
  wants", "this tier doesn't care". Occasionally useful in teaching,
- constantly reached for by agents.
+ but agents use it far too often.
  - Bolding phrases mid-sentence to tell the reader what to feel, and
  splitting short documents into many headed sections.
  - Closing a document with a sentence whose only job is to sound finished,
