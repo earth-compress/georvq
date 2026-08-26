@@ -2,7 +2,7 @@
 
 Shorter orientation available at: `docs/OVERVIEW.md`
 (invariants, personas). The shipped AlphaEarth codec's contract:
-`docs/AE_RELEASE.md`. Empirical design history: `docs/FINDINGS.md`.
+`docs/AE_RELEASE.md`. Design rationale: `docs/DESIGN.md`.
 Live demo: `notebooks/demo_ae_codec.ipynb`.
 
 ---
@@ -201,7 +201,7 @@ codes only the surprise; "cascade"), `CodebookSelector` (restricts
 codebook entries by geographic location), `PyramidRateModel` (a
 learned model of which codes are likely, for entropy coding). All
 exist and all were trained; none made the AlphaEarth release —
-`docs/FINDINGS.md` records what each one bought and why it was left
+`docs/DESIGN.md` and the findings ledger record what each one bought and why it was left
 out.
 
 ### 1.7 What actually lands on disk (AE release)
@@ -343,5 +343,5 @@ worked example.
 | `docs/AE_RELEASE.md` | The shipped codec's complete contract. |
 | `docs/BITSTREAM.md` | Why the bitstream excludes the decoder, and what changes an id. |
 | `docs/ADDING_A_SOURCE.md` | The recipe for onboarding a new dataset. |
-| `docs/FINDINGS.md` | Empirical results behind the design, including negative ones. |
+| `docs/DESIGN.md` | Why the design is the way it is; evidence in `lab/findings/`. |
 | `notebooks/demo_ae_codec.ipynb` | Executed demo: original → encode → codes → progressive decode → client/server with live byte counts (`make_demo_nb.py` regenerates it). |

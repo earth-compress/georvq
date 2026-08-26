@@ -180,7 +180,7 @@ recon = R.decode(R.encode(x, valid=v), depths=[20, 20, 5], valid=v)
 - `docs/ADDING_A_SOURCE.md` — the plug-point for new datasets
 - `docs/SOURCE_ONBOARDING.md` — measuring a new source into an architecture
 - `docs/BITSTREAM.md` — what defines a bitstream; decoder-upgrade contract
-- `docs/FINDINGS.md` — the empirical results behind the design choices
+- `docs/DESIGN.md` — why the design is the way it is (evidence in `lab/findings/`)
 
 ## Tests
 

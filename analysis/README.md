@@ -3,7 +3,7 @@
 The tools behind `docs/SOURCE_ONBOARDING.md`, which is the procedure;
 this is the inventory. Each answers one question about a data source or
 about where a trained codec is losing, and each is kept because its
-answer changed a design decision — findings are in `docs/FINDINGS.md`.
+answer changed a design decision — findings are in the ledger (`lab/findings/`).
 
 Run them against a chip store and a checkpoint:
 
@@ -71,5 +71,5 @@ re-asked as one-off queries every time.
 Diagnostics that only report whether a run is healthy — rather than what
 to build — were not kept, nor were the fitting experiments hardcoded to
 one historical latent store. Their conclusions are in
-`docs/FINDINGS.md`; the code is not worth carrying, because it was
+the ledger; the code is not worth carrying, because it was
 written against stores and checkpoints that no longer exist.
