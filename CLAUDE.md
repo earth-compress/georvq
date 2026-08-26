@@ -24,9 +24,11 @@ The documentation is split in two:
   findings records, each carrying its date, git commit, source, and the
   context of the experiment, with links to the experiment that produced
   it and to related findings. The format is described in `lab/README.md`.
-  State a finding no more generally than the experiment supports: a
-  result from one checkpoint on one source is a fact about that
-  checkpoint and that source.
+  Nothing enters the ledger without the maintainer's approval: prepare
+  the record, present it, and file it only once approved. State a
+  finding no more generally than the experiment supports: a result from
+  one checkpoint on one source is a fact about that checkpoint and that
+  source.
 
 ## Rules that protect released codecs
 
@@ -82,13 +84,12 @@ Do not commit:
 
 - one-off probe scripts, which do not go in `scripts/` or `analysis/`.
   If a probe measured something about a source, a checkpoint or the
-  training process, file the script with its config and result under
-  `lab/`, marked as observed once; if it measured nothing, leave it in
-  an untracked scratch directory. The judgement of importance is not
-  yours to make, in either direction: promoting a result into `docs/`
-  and deleting a recorded finding or its script are both the
-  maintainer's calls, made during periodic clean-ups using the ledger's
-  dates, statuses and cross references.
+  training process, prepare a findings record and present it to the
+  maintainer; only if it is approved do the record, the script and its
+  config get filed under `lab/`. Until then, and if the answer is no,
+  the probe stays in an untracked scratch directory. Promoting a result
+  into `docs/` and deleting a recorded finding or its script are
+  likewise the maintainer's calls.
 - figures, PDFs, archives and other outputs: they belong in run
   directories or untracked folders, never at the repository root;
 - checkpoints and datasets;
