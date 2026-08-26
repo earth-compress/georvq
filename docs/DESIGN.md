@@ -33,6 +33,12 @@ for a rough preview, or all of it for a near-exact reconstruction.
                                |
                                v
                  +---------------------------+
+                 | [optional] normalization  |  source-dependent, e.g.
+                 |       (stats_cond)        |  remove the per-window mean
+                 +-------------+-------------+  and send it as a side channel
+                               |
+                               v
+                 +---------------------------+
                  |        ViT encoder        |  a vision transformer that
                  |      (ViTTokenizer)       |  reads the whole window at
                  +-------------+-------------+  once (9 blocks, width 256)
@@ -70,9 +76,14 @@ for a rough preview, or all of it for a near-exact reconstruction.
                  +---------------------------+
                  |        DenseHead          |  each fine cell -> a 4x4-px
                  +-------------+-------------+  patch; a small conv smooths
-                               |                the seams; the source's own
-                               v                head can post-process (for
-              reconstructed 64x64-pixel window  AE: rescale to unit length)
+                               |                the seams
+                               v
+                 +---------------------------+
+                 | [optional] denormalization|  undo the source's scheme:
+                 +-------------+-------------+  add the mean back, rescale
+                               |                (AE: to unit length)
+                               v
+              reconstructed 64x64-pixel window
 ```
 
 Two design choices do most of the work here.
