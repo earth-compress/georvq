@@ -70,9 +70,9 @@ for a rough preview, or all of it for a near-exact reconstruction.
                  +---------------------------+
                  |        DenseHead          |  each fine cell -> a 4x4-px
                  +-------------+-------------+  patch; a small conv smooths
-                               |                the seams; pixels re-scaled
-                               v                to unit length
-              reconstructed 64x64-pixel window
+                               |                the seams; the source's own
+                               v                head can post-process (for
+              reconstructed 64x64-pixel window  AE: rescale to unit length)
 ```
 
 Two design choices do most of the work here.
