@@ -70,3 +70,12 @@ held in the fine-scale, high bitrate tiers.
 Given the difficulties in optimize larger and larger models, it is 
 likely that the best high bitrate models will be trained for relatively 
 small patches.
+
+Existing tools: no new tool is needed for the direct test. Window size
+is a config field, so this is two or more training runs at different W
+with `scripts/eval_rate_sweep.py` comparing the fronts at matched bits
+per pixel. On the predictive side, `analysis/data_probe.py` measures
+autocorrelation range and `analysis/pyramid_sizing.py` proposes
+candidate windows and grids, but the power-spectrum patch-size sweep
+that `docs/SOURCE_ONBOARDING.md` names as the principled route to W
+was never built; W is currently inherited by habit.
