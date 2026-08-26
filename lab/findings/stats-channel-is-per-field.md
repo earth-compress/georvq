@@ -7,6 +7,7 @@ context: Comparing per-tile normalization across multispectral imagery, AlphaEar
 status: observed-once
 keywords: [stats, mean, std, side-channel, normalization]
 imported: true
+experiment: lab/experiments/stats-channel-is-per-field
 ---
 
 Whether a stats side channel pays is a property of the field, not the

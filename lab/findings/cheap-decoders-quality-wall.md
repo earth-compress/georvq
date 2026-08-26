@@ -7,6 +7,7 @@ context: Tier-subset decoders with low-res heads and bilinear upsampling, 0.76M 
 status: observed-once
 keywords: [decoder, speed, distillation, release-bar]
 imported: true
+experiment: lab/experiments/cheap-decoders-quality-wall
 ---
 
 Cheap decoders run 17-28x faster but land 0.006-0.1 cosine below the 31M
