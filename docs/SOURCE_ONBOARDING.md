@@ -1,3 +1,6 @@
+<!-- DRAFT: restructured to cite the findings ledger; wording not yet
+reviewed by the maintainer. -->
+
 # Onboarding a new source: from measurements to an architecture
 
 The goal is to be able to finish this sentence from evidence rather than
@@ -25,10 +28,10 @@ source-specific or incomplete, **[missing]** not built.
 | Normalisation sensitivity: raw vs unit-norm vs per-band standardised | the LOSS (cosine vs MSE), and whether to transmit a gain | [partial] `data_probe` measures spread only |
 | Per-band variance / dynamic range | whether bands need per-band weighting | [partial] `data_probe` |
 
-**Rules established so far.** A learned bottleneck saturates at **~4 bits
-per latent dimension** — beyond that, extra rate on the same dim count
-buys nothing (`pixel_rd`, confirmed across dim 16/32/64/128). And
-magnitude spread decides the loss: AlphaEarth is exactly unit-norm
+**Rules established so far.** A learned bottleneck saturates at ~4 bits
+per latent dimension
+([`bits-per-dim-saturation`](../lab/findings/bits-per-dim-saturation.md)).
+And magnitude spread decides the loss: AlphaEarth is exactly unit-norm
 (p99/p1 = 1.00) so cosine is unarguable; Tessera spans 1.57x, so an
 absolute loss is measuring something real.
 
@@ -42,12 +45,12 @@ absolute loss is measuring something real.
 | Neighbour-predictive entropy (rANS-achievable) | the LOSSLESS FLOOR the codec must beat | [have] `data_probe` |
 | Patch-size sweep: between- vs within-window variance vs W | **W**, and whether a mean side-channel is worth it | **[missing]** |
 
-**Rules established so far.** Correlation falling below 0.5 at lag 4 px on
-Tessera is consistent with the deployed fine tier's 4 px cells (16x16 grid
-on a 64 px window) — the first case where a grid choice is retrospectively
-justified by a measurement. The pooled/local complexity ratio bounds what
-per-patch conditioning can ever buy: 0.92x (S2, nothing), 1.44x (AE),
-2.90x (Tessera).
+**Rules established so far.** Tessera's fine-cell size is the first grid
+choice retrospectively justified by a measurement
+([`tessera-fine-grid-matches-autocorr`](../lab/findings/tessera-fine-grid-matches-autocorr.md)).
+The pooled/local complexity ratio bounds what per-patch conditioning can
+ever buy, and differs sharply by source
+([`patch-conditioning-headroom`](../lab/findings/patch-conditioning-headroom.md)).
 
 ## 3. Information-theoretic — rate and quantization
 
@@ -58,23 +61,21 @@ per-patch conditioning can ever buy: 0.92x (S2, nothing), 1.44x (AE),
 | Value histograms; quantization sensitivity (int8/int6/int4) | **book_bits**, latent precision, whether int8 passthrough is lossless | [partial] `tier_rate_attrib` shows int8 is lossless for latents |
 | Sample-budget check: vectors per codeword | **K** and **N** | [have] as a rule, not a tool |
 
-**Rules established so far.** The **sample-budget crossover** is the
-sharpest rule we have: a codebook needs **~450 vectors per codeword**
-inside the EMA window or fitting is worse than not fitting. That makes K a
-derived quantity:
+**Rules established so far.** The sample-budget crossover is the sharpest
+rule we have: a codebook needs ~450 vectors per codeword inside the EMA
+window or fitting is worse than not fitting, which makes K a derived
+quantity:
 
 ```
 vectors_per_code = batch x cells_in_tier x ema_window / K   >=  ~450
 ```
 
-K=16384 at 8 levels gave 18–54 and lost 90% of its codebook; K=256 at 20
-levels gives thousands, and dead-code resets fell from 6,500–8,200 per
-event to 1–5, at 12x smaller download for equal R-D.
-
-**N** follows from per-level residual decay: levels keep earning while
-their contribution is a material fraction of level 1. Tessera tier 2 at
-L20 still contributes 17% of L1, i.e. **not saturated — 20 is too few**,
-and each further level costs 0.5 b/px.
+The evidence is in
+[`codebook-sample-budget`](../lab/findings/codebook-sample-budget.md).
+N follows from per-level residual decay: levels keep paying while their
+contribution is a material fraction of level 1's, and on Tessera the
+fine tier is not saturated at the shipped depth
+([`tessera-fine-tier-not-saturated`](../lab/findings/tessera-fine-tier-not-saturated.md)).
 
 ## 4. Use-case drivers — what the codec is *for*
 
@@ -89,52 +90,42 @@ rate tuple, read the reconstructed embedding at the label pixel; fit 1-NN,
 3-NN and linear probes; split train/test by source tile (~82 km blocks) so
 spatial autocorrelation cannot leak; report the delta against the same
 probe on the uncompressed embedding. Every rate point is re-probed under
-repeated split seeds, giving a noise floor of +/-0.017 on LUCAS and
-+/-0.023 on LCMAP — so LCMAP cannot resolve anything below ~0.05 and its
-"compression beats the original" readings are artefacts.
+repeated split seeds to establish the probe's noise floor first
+([`probe-noise-floors`](../lab/findings/probe-noise-floors.md)).
 
-**What it establishes, and it is the most consequential result we have:**
+What it establishes:
 
-1. **Cosine does not transfer across sources.** At matched or slightly
-   worse reconstruction cosine, the Tessera codec costs LESS downstream
-   accuracy than the AlphaEarth codec. LUCAS land cover: AE at cos 0.9532
-   loses 0.043 balanced accuracy; Tessera at cos 0.9475 loses 0.005.
-2. **Tessera is downstream-transparent above ~1 b/px, at cos ~0.93.**
-   AlphaEarth needs cos ~0.99 for the same verdict.
-3. **Below ~0.5 b/px Tessera degrades about twice as fast** (LUCAS
-   -0.108 vs -0.052), established on LUCAS only; LCMAP is noise-dominated.
-4. **The mechanism.** Tessera carries ~2.5x more independent variation per
-   pixel — per-tier PCA d95 of **51/91/71** against tier dims 512/512/256,
-   versus AlphaEarth's **19/34/28** — much of it fine-scale and weakly
-   correlated with land cover. Discarding it costs cosine but not task
-   accuracy. AlphaEarth's field is smoother and more nearly low-rank, so a
-   given cosine error eats the dimensions the probes actually read.
+1. Reconstruction cosine does not transfer across sources, so a quality
+   target must come from the task
+   ([`cosine-not-transferable`](../lab/findings/cosine-not-transferable.md)).
+2. Tessera is downstream-transparent above ~1 b/px on point-thematic
+   tasks, degrades faster than AlphaEarth below ~0.5 b/px, and the
+   fine-scale detail the high rungs buy is unmeasured by the current
+   suite
+   ([`tessera-transparency-point`](../lab/findings/tessera-transparency-point.md)).
 
-**Two consequences for how a source is specified.**
+Two consequences for how a source is specified.
 
 *The transparency point is a recommendation, not a ceiling.* These tasks
-stop improving at ~1 b/px, which is what a user coding for point-thematic
-work should be pointed at — around `20-20-1` on the released ladder. It
-does not make the rest of the ladder wrong: the codec ships a range
-(0.23–10.9 b/px) precisely because the right rung depends on the task,
-and the benchmarks that exist today do not exercise the fine-scale detail
-the high rungs buy. What it does rule out is transplanting a *cosine*
-target across sources: AlphaEarth's 0.998 is not a meaningful
-specification for Tessera, whose probes are already indifferent at
-0.93.
+stop improving around the transparency rate, which is where a user doing
+point-thematic work should be pointed. It does not make the rest of the
+ladder wrong: the right rung depends on the task, and the benchmarks
+that exist today do not exercise the fine-scale detail the high rungs
+buy. What it does rule out is transplanting a cosine target from one
+source to another.
 
-*L is measurably over-provisioned.* d95 of 51/91/71 in tiers of
-512/512/256 says the latent widths could be several times narrower before
-the probes would notice.
+*L is measurably over-provisioned.* The per-tier PCA d95 sits several
+times below the deployed latent widths
+([`cosine-not-transferable`](../lab/findings/cosine-not-transferable.md)
+has the numbers), so the widths could narrow before the probes would
+notice.
 
 **The gap that matters.** All five benchmarks are coarse thematic labels
-at a single point — the regime AlphaEarth was designed for. Tessera's
-per-pixel information may well pay on tasks with finer spatial or temporal
-structure, and **none are in the suite**. So "transparent above 1 b/px" is
-established for point-thematic use and simply unmeasured for anything
-else. That is an argument for adding a fine-spatial or temporal
-benchmark — the highest-value addition to this axis — not for assuming
-the high-rate end is wasted.
+at a single point, the regime AlphaEarth was designed for. Tessera's
+per-pixel information may well pay on tasks with finer spatial or
+temporal structure, and none are in the suite. Adding a fine-spatial or
+temporal benchmark is the highest-value addition to this axis; the
+use-case entry in `lab/TODO.md` depends on the same addition.
 
 ## The five-source measurement table
 
@@ -213,18 +204,12 @@ Ordered so each step consumes the previous ones.
 
 ---
 
-## What to build next, in priority order
+## What to build next
 
-1. **A fine-spatial or temporal downstream task (§4).** The existing
-   suite is five coarse thematic point labels, so it cannot see the
-   per-pixel detail that is Tessera's whole advantage. Everything else on
-   this list optimises against a target that may not be the real one.
-2. **Power spectrum + patch-size sweep (§2)** — the only principled route
-   to P, G and W, which are currently inherited by habit.
-3. **Band cross-correlation + global pixel PCA (§1)** — cheap, and gives
-   the L floor directly.
-4. **Quantization sensitivity sweep (§3)** — closes `book_bits`.
-
-Consolidating the remaining shell diagnostics (codebook health, latent
-health, training dynamics) is *lower* priority than any of these: they
-tell us whether a run is healthy, not what to build.
+Forward work is queued in `lab/TODO.md`. The gaps this document's
+status columns mark [missing] are, in the order they block the
+derivation chain: a fine-spatial or temporal downstream task, the power
+spectrum and patch-size sweep (the principled route to P, G and W,
+which are currently inherited by habit), band cross-correlation with
+global pixel PCA (the L floor), and a quantization sensitivity sweep
+(closes `book_bits`).
