@@ -52,7 +52,8 @@ and thinking. For example, some of the cliches the maintainer hates:
  - Restating a point at the end of a paragraph with more conviction, e.g.
  "In short, ..." or "The upshot is ...". Make the statement once.
  - Forcing material into groups of three (three examples, three clauses,
- three adjectives) whether or not there are naturally three of anything.
+ three adjectives (notice the irony here?)) whether or not there are 
+ naturally three of anything.
  - Describing code as if it had feelings or intentions, e.g. "the decoder
  wants", "this tier doesn't care". Occasionally useful in teaching,
  but agents use it far too often.
