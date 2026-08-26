@@ -36,3 +36,37 @@ available. Compare the per-tier conditional gaps with the AE numbers,
 and read the result against
 [`tier-redundancy-collapse`](findings/tier-redundancy-collapse.md),
 which is the extreme case of the same waste.
+
+
+## Use-case driven compression
+
+*2026-08-26, open.*
+
+Hypothesis: low-loss compression is generically useful across many
+use-cases. However, as compression rate increases, and information is
+lost, we should be able to engineer compressed representations that 
+maintain performance in some specific downstream task. This is most
+easily done by a new dedicated model, but feasibly, the same encoder 
+and decoder could be conditioned on what metric to optimize for. For
+example, the loss could be the divergence of results for a downstream
+model between the uncompressed and decoded versions. 
+
+This requires a library of downstream metrics/models that are used to
+empirically guide the model towards certain use-cases, against others.
+
+
+## Spatial window size versus performance
+
+*2026-08-26, open.*
+
+Hypothesis: comparing well-trained models of different patch sizes, 
+assuming the same bits per pixel, there will be a very small gain 
+at high bit rates when using a larger window. However, at extreme
+compression rates, the relative performance gain will be much higher,
+because the informational overlap between the coarse information 
+across a larger image is much greater than the overlap of the information
+held in the fine-scale, high bitrate tiers. 
+
+Given the difficulties in optimize larger and larger models, it is 
+likely that the best high bitrate models will be trained for relatively 
+small patches.
