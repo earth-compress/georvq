@@ -80,6 +80,9 @@ candidate windows and grids, but the power-spectrum patch-size sweep
 that `docs/SOURCE_ONBOARDING.md` names as the principled route to W
 was never built; W is currently inherited by habit.
 
+This entry and the latent-width one below are linked; see the note
+there on using small windows to run the width sweep cheaply.
+
 ## Models should be wide enough to make quantization the only bottleneck
 
 *2026-08-26, open.*
@@ -115,3 +118,12 @@ the per-tier PCA d95 used in `docs/SOURCE_ONBOARDING.md`, whose
 derivation chain this would upgrade from rule of thumb to measured
 threshold. Latent width is a config field, so the sweep is training
 runs plus existing tooling.
+
+Link to the window-size entry above: if window enlargement only
+recovers coarse-scale redundancy, then per-pixel intrinsic
+dimensionality is dominated by fine-scale content and barely depends
+on window size. The critical threshold can therefore be measured on
+very small windows, which train quickly, and should transfer to larger
+windows as a slight overestimate. That makes the width sweep cheap,
+and the size of the small-to-large discrepancy is itself a test of the
+window-size hypothesis.
