@@ -1,7 +1,8 @@
 # Codebase overview
 
-Orientation for humans and agents working on georvq. `README.md` explains
-the method; this explains how the code is organized, what must not break,
+Orientation for humans and agents working on georvq. `README.md` is the
+front door and `docs/DESIGN.md` explains the method and the reasoning
+behind it; this explains how the code is organized, what must not break,
 and the practical knowledge that isn't visible from signatures.
 
 ## One pass through the pipeline
@@ -60,6 +61,8 @@ submodules exist. Everything is assembled from one validated `Config`
 | `georvq/ae/` | **The AlphaEarth release codec** — AE-specific policy (pixel prep, 8* coarse sidecar, quality ladder, COG asset container, executables). See `docs/AE_RELEASE.md` |
 | `georvq/tessera/` | **The Tessera release codec** — Tessera-specific policy (transmitted mean, rate ladder, fine-tier refinement). See `docs/TESSERA_RELEASE.md` |
 | `scripts/` | Thin drivers over the above (train, store builders, eval, archive, GIFs) |
+| `analysis/` | Source-characterisation and codec-diagnostic probes (`analysis/README.md`) |
+| `lab/` | The findings ledger and kept experiments (`lab/README.md`); the maintainer's TODO queue |
 | `configs/` | Presets — each reproduces a specific historical run (see Provenance) |
 
 ## Invariants — do not break casually
