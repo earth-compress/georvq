@@ -47,19 +47,19 @@ FIGURES = {
     },
     # PCA-packed S2 stats channel: mean bytes/window at tolerance 0.01
     "9.73": {
-        "docs/FINDINGS.md",                 # canonical
-        "configs/s2/s2_pyr96.yaml",            # the run that charges it
+        "lab/findings/s2-stats-pca-packing.md",   # canonical
+        "configs/s2/s2_pyr96.yaml",               # the run that charges it
     },
-    # how badly an uncharged normalizer channel understates the coarse rung
+    # a fixed side channel's share of the coarse rung
     "3.31": {
-        "docs/FINDINGS.md",
+        "lab/findings/fixed-side-channels-dominate-coarse-rungs.md",
     },
     # the batch/throughput knee on the S2 pyramid (windows/s)
     "628": {
-        "docs/FINDINGS.md",                 # canonical; the preset cites it
+        "lab/findings/batch-past-the-knee-buys-codebook-health.md",
     },
     "634": {
-        "docs/FINDINGS.md",
+        "lab/findings/batch-past-the-knee-buys-codebook-health.md",
     },
 }
 
