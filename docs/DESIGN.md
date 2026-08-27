@@ -2,28 +2,30 @@
 
 # How georvq works, and why it is built that way
 
-The first half of this document explains the method; the second half
-gives the reasoning behind the design decisions, citing the findings
-ledger (`lab/findings/`, searchable with `lab/query.py`), which holds
-the numbers, the context they were measured in, and the results that
-did not make it into the design. The method is shared across sources;
-every concrete size in it is chosen per source, and the values for a
-shipped source are in its release contract (`docs/AE_RELEASE.md`,
+The first half of this document explains the method, including details
+about the model architecture and quantization approach. The second half
+gives the reasoning which drove some of those design decisions, citing the findings
+ledger (`lab/findings/`, searchable with `lab/query.py`), which gives more detail about specific 
+experiments and what was run. Whilst the specific configurations and parameters
+differ between data sources, the main method doesn't. For specific solutions that are
+now released, see the other docs (`docs/AE_RELEASE.md`,
 `docs/TESSERA_RELEASE.md`).
 
 ## Part 1 -- How it works
 
 ### The idea
 
-georvq is a learned compressor for geospatial data. A classical codec
-like JPEG applies one fixed mathematical recipe to everything; georvq
-trains a neural network on the kind of data it will compress, so the
+georvq is a learned compressor for geospatial data. Unlike a classical codec
+like JPEG, which applies one fixed mathematical recipe to everything, georvq
+trains a neural network on the kind of data it will compress. By doing so, the
 network learns what that data tends to look like and can describe it
 in fewer bits. Each map tile is cut into small windows; 64 x 64
 pixels with B bands per pixel in the example used throughout. An encoder network reduces each window to a
 handful of vectors; those vectors are snapped to entries in learned
-lookup tables (codebooks), so that only small integer IDs need to be
-stored; a decoder network turns the IDs back into pixels. The IDs are
+lookup tables (codebooks), where each successive codebook approximates the residual from the last, 
+getting us closer and closer to the real vector. Only small integer IDs need to be
+stored. At decode time, the IDs are turned back into reconstructions of the original latent vectors, then fed through
+a model to retrieve estimates of the input pixel values. The IDs are
 ordered most-important-first, so one stored file can be decoded at
 many quality levels: read a small prefix for a rough preview, or all
 of it for a near-exact reconstruction.
@@ -91,27 +93,37 @@ a 64-pixel window; the tier count and every size are per-source.
               reconstructed 64x64-pixel window
 ```
 
-The window size, tier grids, latent widths d, codebook sizes K and
-depth N are all derived from measurements of the source
-(`docs/SOURCE_ONBOARDING.md`), not copied between sources.
 
-Two design choices do most of the work here.
 
-Several scales, because information in imagery is not spread evenly
-across scales. "This window is mostly farmland" is one fact shared by
-4,096 pixels, and describing it once at the coarse tier is almost
-free.
-Fine texture is the opposite: local, unpredictable and expensive.
-Giving each scale its own grid and its own codebooks lets the bit
-budget go to where the information is.
+Behind this design are two key principles:
 
-A decoder that sees everything at once, because attention spanning all
+1) Encoding and decoding should occur in a single pass. We do not want
+stateful, sequential operations with multiple model passes, unless 
+those models are very cheap, vanishingly small parts of the larger DL
+model. This is to keep the method somewhat competitive with computationally
+cheaper methods like JPEG and zstd.
+
+2) Information in imagery is not spread evenly across scales. "This 
+window is mostly farmland" is one fact shared by 4,096 pixels, and 
+describing it once at the coarse tier is almost free. Meanwhile, fine texture is 
+the opposite: local, unpredictable and expensive. Giving each scale its own 
+grid and its own codebooks lets the bit budget go to where the information is.
+
+These two ideas lead to an obvious design decision, that the decoder should see 
+everything (all scales) at once, because attention spanning all
 tiers means the fine cells are always interpreted in context. A fine
 code does not have to spell out "dark green, vegetation-like" from
 scratch when the coarse tier has already established it, so the same
 fine codebook entry can mean different things in different
 surroundings. This sharing of context is a large part of why so few
 bits are enough.
+
+Regarding hyperparameters, the window size, tier grids, latent widths d, 
+codebook sizes K and depth N are all dependent on the source.
+`docs/SOURCE_ONBOARDING.md` is an attempt to help with some empirical analysis
+of the data to understand a sensible configuration. However, whilst informed by these
+arguments, the design is ultimately arrived at through trial-and-error 
+for each source.
 
 ### Codebooks, and quantizing by successive approximation
 
@@ -157,11 +169,11 @@ of `model/vq.py`, and its numerics must never drift, because the value
 of the repository rests on trained checkpoints decoding bit-identically
 forever.
 
-### One model, every compression level
+### Variable compression from a single model
 
-Most codecs require a quality setting at encode time. georvq is
-trained so the choice can wait until decode time, with qualities
-nested inside one bitstream the way matryoshka dolls nest.
+Many codecs require a quality setting at encode time. georvq is
+trained so the choice can wait until decode time, because the encoded
+data is structured in an ordered list of importance.
 
 The mechanism is in training. For every window the decoder is handed a
 randomly chosen number of quantization rounds per tier -- perhaps
@@ -184,12 +196,19 @@ data show balanced tuples losing to same-cost alternatives
 
 ### Residual sidecars
 
-After all N rounds a tier still has a leftover, and that leftover can
+Usually, an encoder-decoder's performance will still be significantly
+higher when using unquantized vectors, versus the full stream of codebooks.
+This is because in high dimensional space, after all N codebooks, a vector 
+will still have a significant residual, and that leftover can
 be shipped directly: scalar-quantized at a bit or two per number and
 added back at decode, without touching the codebooks or the index
-stream. Whether this pays, and on which tier, is a fact about the
+stream. This usually works because after many codebooks, the residual
+is white noise, and so optimal quantization is a relatively simple task
+and doesn't require more codebooks to get the best performance.
+Whether this pays, and on which tier, is a fact about the
 trained model rather than the architecture. The available gain is
-bounded by the tier's ceiling gap, which is measured first
+bounded by the tier's ceiling gap (the improvement in performance when a completely unquantized
+vector is used, against using all the codebooks) which is measured first
 ([`refinement-budget-is-the-ceiling-gap`](../lab/findings/refinement-budget-is-the-ceiling-gap.md)),
 and the slack sits on different tiers in different models
 ([`refinement-tier-differs-per-model`](../lab/findings/refinement-tier-differs-per-model.md)).
@@ -203,33 +222,37 @@ fine one has to be an opt-in
 
 ### Optional submodules
 
-Model variants are expressed as the presence of submodules, never as
-runtime flags: `TierPredictor` (predicts one tier from another and
+The stats normalization module is a key design choice that must be
+decided per source. Currently, three modes are supported and used in different
+sources. No normalization (AE), mean-only normalization (TESSERA) and 
+mean+std normalization (Sentinel-2). If normalization is used, then the input is
+first debiased by the per-band mean of the patch, and divided by the per-band standard deviation,
+making each band zero-centred and with a roughly equal spread of values. Whilst removed from the input,
+those vectors _are_ seen by the encoder and decoder, through conditioning channels. At the output of the
+decoder, the mean (and std) are then reapplied to the data, meaning they need to be sent as part of the 
+bitstream if used. The motivation of this approach is to prevent the model from spending lots of
+its budget encoding these basic statistics about the data, which can be trivially
+done for it, saving its expressive capacity for spatial features and variations within the image.
+However, especially for sources with a large number of channels, the number of bits used to encode the 
+mean and standard deviation is large compared to the coarse tier's tokens, and so this can significantly 
+lift the bitrate of the most extreme compression rates, whilst having very little impact on the bitrate 
+of the full bitstream. Therefore, quantization and compression of those statistics, and the effect of
+quality on the decoder, should always be an area of active research for sources.
+
+Other optional features exist: `TierPredictor` (predicts one tier from another and
 codes only the surprise; the cascade), `CodebookSelector` (restricts
 codebook entries by geographic location), `PyramidRateModel` (a
-learned model of which codes are likely, for entropy coding). All
-exist and all were trained; none is in a shipped release. Part 2 and
-the ledger record what each one bought and why it was left out.
+learned model of which codes are likely, for entropy coding). Most of
+these are still experimental and are not yet part of releases.
 
-### What lands on disk
 
-The bitstream is the indices plus what is needed to interpret them:
-the tiers, the codebooks, any conditioning priors and any side
-channels. It deliberately excludes the decoder, so decoders can be
-upgraded forever without re-encoding (`docs/BITSTREAM.md`). Two
-identity hashes guard correctness: `bitstream_id` names everything
-that defines the bitstream, so a mismatched model refuses to decode
-rather than decode wrongly, and `decoder_id` names the decoder
-weights, keying decoder-specific artifacts such as measured quality
-maps.
+### The bitstream
 
-How the bitstream is packaged is release-layer policy, chosen per
-source. The AlphaEarth release stores the indices as georeferenced
-rasters in which bands are quantization rounds, so standard geospatial
-tooling can read any region at any rate by band selection
-(`docs/AE_RELEASE.md`); the Tessera release uses a different container
-with a transmitted mean and an opt-in fine-tier sidecar
-(`docs/TESSERA_RELEASE.md`).
+The bitstream comprises the IDs of each successive codebook, for each
+tier. The codebooks and model are downloaded by the user before any
+data can be decoded, which is a real bottleneck in use-cases where the 
+amount of data needed is similar in size to the model (on the order of
+hundreds of MB for most sources); see `docs/BITSTREAM.md` for more information.
 
 ## Part 2 -- Why it is built that way
 
@@ -242,12 +265,6 @@ The encoder is a ViT tokenizer and the decoder an attention trunk
 because both beat convolutional alternatives on dense embedding fields
 ([`vit-beats-conv`](../lab/findings/vit-beats-conv.md)). Convolutional patch stems remain as the per-source
 plug point.
-
-The bitstream excludes the decoder because reconstruction quality was
-found to be limited by decoder capacity rather than by the stored
-latents. A stored file can therefore benefit from every future decoder
-improvement without re-encoding ([`decoder-is-the-bottleneck`](../lab/findings/decoder-is-the-bottleneck.md),
-docs/BITSTREAM.md).
 
 One checkpoint serves every rate because training samples monotone
 per-tier depth tuples and conditions the decoder on the tuple. Minimum
@@ -268,16 +285,17 @@ Codebook size is derived, not chosen. A codebook needs a minimum number
 of training vectors per codeword inside its EMA window, which ties K to
 batch size, cell count and reset cadence, and means K should grow with
 tier rather than being fixed globally ([`codebook-sample-budget`](../lab/findings/codebook-sample-budget.md)). Where a
-tier is well sampled, larger codebooks beat deeper stacks at matched
+tier is well sampled, larger codebooks seem to beat deeper stacks at matched
 rate ([`bigger-k-beats-more-levels`](../lab/findings/bigger-k-beats-more-levels.md)); the two records state the contexts
 in which each applies. Once fitted, codebooks are best frozen, because
-continued EMA training can degrade a good fit ([`ema-can-degrade-a-good-fit`](../lab/findings/ema-can-degrade-a-good-fit.md)). Codebook quality is judged on rate-distortion, never on usage or
+continued EMA training can degrade a good fit ([`ema-can-degrade-a-good-fit`](../lab/findings/ema-can-degrade-a-good-fit.md)). 
+Codebook quality is judged on rate-distortion, never on usage or
 perplexity, which can be gamed to perfection while explaining almost
 none of the energy ([`perplexity-is-gameable`](../lab/findings/perplexity-is-gameable.md)).
 
 ## Rate
 
-Cell count dominates rate on a pyramid, so the efficient ladder
+Cell count quadratically increases in the pyramid, so the efficient ladder
 saturates the coarse tier first and adds fine levels last
 ([`cells-dominate-rate`](../lab/findings/cells-dominate-rate.md), [`rate-ladder-asymmetry`](../lab/findings/rate-ladder-asymmetry.md)). Static entropy coding of
 the indices is not worth its decode cost on healthy codebooks; the
