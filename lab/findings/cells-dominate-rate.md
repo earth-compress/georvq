@@ -9,6 +9,7 @@ keywords: [rate, ladder, tiers, pareto]
 imported: true
 related:
   - supports: rate-ladder-asymmetry
+  - supports: fixed-side-channels-dominate-coarse-rungs
 ---
 
 One tier-2 level costs about 64x one tier-1 level on a 1/4/16 pyramid, so
