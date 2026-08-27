@@ -66,6 +66,15 @@ and thinking. For example, some of the cliches the maintainer hates:
  prefixing with "Note:". A comment states a constraint the code cannot
  show, in the same flat voice as the comments around it.
 
+Some of the worst offenders can be caught mechanically. These words and
+phrases are banned outright in docs and prose: sacred, load-bearing,
+spine, quietly, genuinely, north star, landmine, graveyard, plumbing,
+wiring, crown jewel, battle-tested, first-class citizen, "the story",
+"in short", "the upshot", "worth noting", "crucially", "interestingly".
+Sweep for them before presenting a draft:
+
+    grep -rniE 'sacred|load-bearing|spine|quietly|genuinely|north star|landmine|graveyard|plumbing|wiring|crown jewel|battle-tested|first-class citizen|the story|in short|the upshot|worth noting|crucially|interestingly' docs/ README.md
+
 ## Getting oriented
 
 Read `docs/OVERVIEW.md` before making changes. It has the module map,

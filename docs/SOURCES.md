@@ -1,5 +1,3 @@
-<!-- DRAFT: wording not yet reviewed by the maintainer. -->
-
 # Sources
 
 Where each data source currently stands. The repository does not rank
