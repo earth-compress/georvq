@@ -344,7 +344,7 @@ def test_stats_precision_follows_the_rate():
 
     from georvq.config import load_config
 
-    cfg = load_config("configs/s2_pyr96.yaml")
+    cfg = load_config("configs/s2/s2_pyr96.yaml")
     model = build_model(cfg)
     src, mc = model.source, cfg.model
 

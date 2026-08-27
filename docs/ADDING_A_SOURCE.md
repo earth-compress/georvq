@@ -66,7 +66,7 @@ Subclass `georvq.sources.Source` and register it in
 - `prep(raw, device) -> (x, valid)` — store dtype to model-space floats
   plus a validity mask (nodata handling lives here).
 - `build_stem(cfg)` — raw plane(s) → the `(B, C, W, W)` feature plane the
-  shared ViT tokenizer eats. This is where multi-resolution band groups
+  shared ViT tokenizer expects. This is where multi-resolution band groups
   get their native-GSD conv stems (see `S2NativeStem`). Dense single-plane
   sources use `nn.Identity()`.
 - `build_head(cfg, in_dim)` — decoder fine tokens → pixel output(s).
@@ -77,8 +77,8 @@ Subclass `georvq.sources.Source` and register it in
   with `georvq.inference.stats_codec.StatsPacker` (~11 bytes/tile).
   A separate option, `model.stats_cond`, *transmits* the per-window mean
   and codes only the remainder; it pays when the mean is a large share of
-  window energy and the field is not unit-norm. Charge it — an uncharged
-  stats channel once reached 34% of a bitstream unnoticed.
+  window energy and the field is not unit-norm. Charge it: an uncharged
+  stats channel once reached 34% of a bitstream before anyone noticed.
 - `recon_stats(out, x, valid) -> (loss, metrics)` — the training loss and
   quality metrics in model space.
 - `report(cfg) -> ReportSpec` — what a run on this source should measure,
@@ -109,7 +109,7 @@ Copy the closest `configs/*.yaml`, set `data.source`, `data.store_dir`,
 `model.window/bands/tiers`, and train:
 
 ```bash
-georvq-train -c configs/my_source.yaml --gpu 0
+georvq-train -c configs/<source>/my_preset.yaml --gpu 0
 ```
 
 ## 4. (When shipping) a release layer
@@ -126,12 +126,12 @@ fastest way to see which decisions are policy rather than architecture:
 |---|---|---|
 | container | COG assets mirroring the source's 1024 px block quantum | packets; no container yet, none required |
 | stats channel | none — the field is exactly unit-norm | the patch mean, 768 bits/window, charged |
-| refinement | coarse tier, 2-bit uniform, **always on** (+1.5% rate) | fine tier, 1-bit rotated Lloyd, **opt-in** (+150% rate) |
+| refinement | coarse tier, 2-bit uniform, always on (+1.5% rate) | fine tier, 1-bit rotated Lloyd, opt-in (+150% rate) |
 | quality control | encode-time measured error ladder | not built — nobody has asked |
 
 Every one of those differences is a measured response to the data, and
 the refinement row is the cautionary one: the coarse-tier sidecar that
-recovers ~98% of AlphaEarth's quantizer gap recovers **0.0%** on Tessera.
+recovers ~98% of AlphaEarth's quantizer gap recovers 0.0% on Tessera.
 Locate your model's slack (compare full-depth reconstruction against the
 un-quantized ceiling, per tier) before copying either.
 

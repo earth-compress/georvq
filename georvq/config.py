@@ -173,7 +173,7 @@ class StatsCondConfig(StrictModel):
     use_std is off and BLOCKED, not merely defaulted off: matching the
     std was measured to hurt full-depth cosine, unlike the S2 version this
     is ported from, whose bands have genuinely different physical scales.
-    The measurement is in docs/FINDINGS.md and the mechanism's reasoning
+    The measurement is in lab/findings/stats-channel-is-per-field.md and the mechanism's reasoning
     in georvq/model/stats_cond.py.
 
     bits_per_band is rate accounting only -- it does not quantize anything

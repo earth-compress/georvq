@@ -236,7 +236,7 @@ def embedding_field_spec(preview=PCA_RGB) -> ReportSpec:
 
     Cosine is the headline because the field's information is in the
     DIRECTION of each pixel vector; `ccos` accompanies it because any model
-    with a transmitted mean inflates plain cosine (`docs/FINDINGS.md`), and
+    with a transmitted mean inflates plain cosine (`lab/findings/transmitted-mean-inflates-cosine.md`), and
     a coarse-only decode reading 0.9154 while contributing no spatial
     structure is exactly the failure it catches.
     """
@@ -287,7 +287,7 @@ def _narrow(declared, wanted, kind):
             f"log.report.{kind}: {missing} not declared by this source "
             f"(declared: {sorted(have)}). Reporting is narrowed from what "
             f"the source offers, never widened — add it to the source's "
-            f"ReportSpec if it is genuinely meaningful for this field.")
+            f"ReportSpec if it is meaningful for this field.")
     return tuple(have[w] for w in wanted)
 
 

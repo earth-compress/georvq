@@ -1,10 +1,10 @@
 # The Tessera release codec
 
 The shippable codec for [Tessera](https://github.com/ucam-eo/geotessera)
-embedding tiles. Everything documented here is **release policy for this
-source** (`georvq/tessera/`), built on the source-agnostic machinery in
+embedding tiles. Everything documented here is release policy for this
+source (`georvq/tessera/`), built on the source-agnostic machinery in
 `georvq/inference/`. The AlphaEarth release (`docs/AE_RELEASE.md`) is the
-other worked example, and the two differ in instructive places.
+other worked example, and the two differ where the data differs.
 
 ## Who is this for
 
@@ -22,10 +22,9 @@ other worked example, and the two differ in instructive places.
   235 MiB) — `model.pt`,
   `mean_channel.npz`, `refine_table.npz`, `bundle.json` (carries
   `bitstream_id` and `decoder_id`).
-- Status: **beta.** Cut from the completed run. The last 20,000 steps
+- Status: beta, cut from the completed run. The last 20,000 steps
   bought +0.0002 cosine and +0.0018 centred cosine over the mid-run
-  checkpoint, so this is where the recipe lands rather than where it was
-  going. A replacement checkpoint can still be dropped in without
+  checkpoint, so further training was no longer changing the result. A replacement checkpoint can still be dropped in without
   changing any of the policy below, and will change `bitstream_id`.
 
 ## Getting it
@@ -33,8 +32,8 @@ other worked example, and the two differ in instructive places.
 Weights are not in git.
 
 - *On the group server*: `/data/georvq-releases/tessera-beta-v1/bundle`.
-- *Elsewhere*: copy `tessera-beta-v1.tar.gz` (216 MB) and **verify it
-  before loading**.
+- *Elsewhere*: copy `tessera-beta-v1.tar.gz` (216 MB) and verify it
+  before loading.
 
 ```bash
 sha256sum -c <<< "ca776bbe0d679640d20193ded63863e9db7aa385cd5473fa61c2acc3ce38edb9  tessera-beta-v1.tar.gz"
@@ -42,24 +41,24 @@ tar xzf tessera-beta-v1.tar.gz
 pip install -e .                  # decoding needs no extras at all
 ```
 
-The tarball is **data, not an executable**: four files, no code. The
-decoder is the `georvq` package, which is what lets a better decoder
-ship later against the same `bitstream_id` without re-encoding
-anything.
+The tarball only contains data, in four files; all the executable
+code is in the `georvq` package. Keeping the decoder out of the bundle
+is what lets a better decoder ship later against the same
+`bitstream_id` without re-encoding anything.
 
     bundle/model.pt            weights + the embedded resolved config
     bundle/mean_channel.npz    the mean channel's per-band constants
     bundle/refine_table.npz    the fine-tier Lloyd table
     bundle/bundle.json         bitstream_id, decoder_id, tiers, refinement spec
 
-The checksum is not ceremony. `model.pt` is a torch pickle and the
-config rides inside it, so it is loaded with `weights_only=False` --
-which means **loading it executes code**. Treat an unverified bundle
-the way you would treat an unverified script.
+Always verify the checksum. `model.pt` is a torch pickle and the
+config is stored inside it, so it is loaded with `weights_only=False`,
+and loading it executes code. Treat an unverified bundle the way you
+would treat an unverified script.
 
 ## Weight precision
 
-**What ships is the fp16 build**, `bitstream_id d5051eb0ac4f61a8`. The
+The fp16 build is what ships, `bitstream_id d5051eb0ac4f61a8`. The
 fp32 reference -- exactly what was trained and validated, id
 `3db03c9b246d9c94` -- stays on the group server at
 `tessera-beta-v1/bundle-fp32/` for anyone who wants to reproduce the
@@ -71,30 +70,27 @@ validation numbers.
 | **fp16, shipped** | **235 MiB** | **216 MB** |
 
 The builder defaults to fp32 (`--fp16` opts in), so the reference
-artifact is always what was validated and the smaller one is a
-deliberate act.
+artifact is always what was validated and the smaller build has to be
+requested explicitly.
 
-It costs nothing to decode. Rounding all 116M parameters to fp16 moved
-full-depth cosine by **-8.8e-07** and centred cosine by -8.0e-07 over
-1,024 held-out windows -- about 260x smaller than the difference between
-two consecutive release checkpoints.
+Decode quality is unaffected. Rounding all 116M parameters to fp16
+moved full-depth cosine by -8.8e-07 and centred cosine by -8.0e-07 over
+1,024 held-out windows, about 260x smaller than the difference between
+two consecutive release checkpoints. Only the stored precision changes,
+not the precision anything computes in: `load_state_dict` copies fp16
+tensors into the fp32 model and upcasts, so the arithmetic afterwards
+is bit-identical to an fp32 release, and index determinism across
+hardware is whatever it already was.
 
-The reason it is free is worth being precise about, because it is easy
-to claim more than is true. This changes the **stored** precision, not
-the precision anything computes in: `load_state_dict` copies fp16
-tensors into the fp32 model and upcasts, so the arithmetic afterwards is
-bit-identical to an fp32 release, and index determinism across hardware
-is whatever it already was.
+The two variants deliberately carry different `bitstream_id`s. The id
+hashes the weights that ship, so rehashing a bundle reproduces its
+stated id, and the tile backends recompute it from the weights they
+loaded and refuse a mismatch. An fp16 bundle's codebooks hold different
+values, so the same indices decode to a very slightly different field
+and it is treated as a different bitstream. Pick one variant per
+archive and stay on it.
 
-**The two variants carry different `bitstream_id`s, and should.** The id
-hashes the weights that actually ship, so rehashing a bundle reproduces
-its stated id -- which is the whole point, since the tile backends
-recompute it from the weights they loaded and refuse a mismatch. An
-fp16 bundle's codebooks really do hold different values, so it really is
-a different bitstream: the same indices decode to a very slightly
-different field. Pick one variant per archive and stay on it.
-
-Computing in fp16 would be a different proposal. A narrower accumulate
+Computing in fp16 would be a different change. A narrower accumulate
 makes near-tie RVQ assignments hardware-dependent, and the encoder's
 assignments *are* the bitstream -- rounding the encoder's weights to
 fp16 already moves 1.8% of indices relative to fp32 (at no cost to
@@ -129,8 +125,8 @@ rather than padded — pad upstream if you need the last partial window.
 
 Already-dequantized float embeddings work too: pass them without a
 `scale`. `georvq.tessera.prep` is the single-window form of the same
-door, and produces tensors bit-identical to the chip-store path (there
-is a test pinning that).
+interface, and produces tensors bit-identical to the chip-store path
+(there is a test pinning that).
 
 ## Format: what a packet carries
 
@@ -143,24 +139,25 @@ Per 64x64 window:
   shipped per-band constants (`georvq/inference/mean_codec.py`).
 - **an optional fine-tier refinement** — off by default, see below.
 
-**The mean is not optional and not free.** Tessera vectors are not
-unit-norm, and the model is trained on a *mean-removed* field with both
-encoder and decoder conditioned on the mean, so the mean is part of the
-reconstruction rather than a rescaling of it. It is charged at every
-rate point: 0.1875 b/px. That matters most at the bottom of the ladder,
-where it is most of the bitstream — the AlphaEarth precedent for *not*
-charging a stats channel had it silently reach 34% of the rate.
+The mean is always transmitted and always charged. Tessera vectors
+are not unit-norm, and the model is trained on a mean-removed field
+with both encoder and decoder conditioned on the mean, so the mean is
+part of the reconstruction rather than a rescaling of it. It costs
+0.1875 b/px at every rate point, which matters most at the bottom of
+the ladder, where it is most of the bitstream. In an earlier system
+that did not charge its stats channel, the channel reached 34% of the
+rate before anyone noticed.
 
 Encoding rounds the mean through the channel and conditions on the
-**rounded** vector, so both ends see the same thing. Measured cost of
-that rounding at 6 bits/band: **-0.00037 cosine** against the exact float
+rounded vector, so both ends see the same thing. Measured cost of
+that rounding at 6 bits/band: -0.00037 cosine against the exact float
 mean. Below 4 bits/band the channel is worse than not having it.
 
 ## Rate control
 
 The efficient ladder saturates coarse, then mid, then adds fine levels
-one at a time. Level costs are wildly asymmetric — 8 / 128 / 2,048 bits
-for one level of the coarse / mid / fine tier — so hand-picked
+one at a time. Level costs are very asymmetric (8 / 128 / 2,048 bits
+for one level of the coarse / mid / fine tier), so hand-picked
 "balanced" tuples are strictly dominated.
 
 Measured on 512 held-out windows, decoded through the reloaded bundle:
@@ -176,12 +173,12 @@ Measured on 512 held-out windows, decoded through the reloaded bundle:
 | 20-20-20 + refinement | 26.852 | 0.98293 | 0.83777 |
 | *un-quantized ceiling* | — | 0.98583 | 0.85980 |
 
-Track **`ccos`** (centred cosine), not plain `cos`: with the mean
+Track `ccos` (centred cosine) rather than plain `cos`: with the mean
 transmitted, plain cosine is inflated by a channel that is already paid
 for. A block-mean reconstruction scores 0.92 plain cosine while carrying
 no spatial structure at all.
 
-Pick a rate from the task, not from the cosine. On the five downstream
+Pick a rate from the task rather than from the cosine. On the five downstream
 benchmarks in `scripts/eval_rate_sweep.py` (ASTER GED, LUCAS LC/LU,
 LCMAP LC/LU) Tessera is transparent — indistinguishable from the
 uncompressed embedding — from about **1 b/px**, i.e. around `20-20-1`.
@@ -193,15 +190,15 @@ cannot see.
 
 After all 20 levels a tier still has a residual. Coding it with ~1 bit
 per dimension in a fixed random rotation and adding it back at decode
-recovers part of the gap to the un-quantized ceiling, with **no extra
-trained codebooks** — the whole "codebook" is a seed plus a Lloyd-Max
-table fitted once on held-out residuals.
+recovers part of the gap to the un-quantized ceiling with no extra
+trained codebooks: the refinement needs only a rotation seed and a
+Lloyd-Max table fitted once on held-out residuals.
 
 ```python
 packets = R.encode(x, valid=valid, refine=True)   # 26.85 b/px
 ```
 
-**Which tier is refined is a measurement, not a convention.** On this
+Which tier to refine is measured per model. On this
 model (768 held-out windows, share of the ceiling's `ccos` gap
 recovered):
 
@@ -213,7 +210,7 @@ recovered):
 | 2 (fine), 2 bits | +32 b/px | 81.2% |
 
 The AlphaEarth release refines tier **0** and recovers ~98% of its gap
-there; the identical policy applied here recovers **nothing**. AE's
+there; the identical policy applied here recovers nothing. AE's
 coarse book carries its error tail while its finer books sit at their
 ceiling; Tessera's coarse book is healthy and its fine tier is still
 rate-limited, with its residual measurably decaying at level 20. Slack
@@ -221,17 +218,17 @@ has to be located per model.
 
 That asymmetry is also why the default differs. A refinement costs
 `cells x dim x bits`, so on a 1/4/16 pyramid the same idea is +1.5% of
-rate on the coarse tier and **+150%** on the fine one. AE leaves its
+rate on the coarse tier and +150% on the fine one. AE leaves its
 sidecar on always; here it is off unless asked for, and it is a
-maximum-fidelity option rather than a free win — it more than doubles
-the bitstream to recover part of a gap that no benchmark in the suite
-can currently resolve.
+maximum-fidelity option rather than a default, because it more than
+doubles the bitstream to recover part of a gap that no benchmark in
+the suite can currently resolve.
 
 ## Deliberate non-features
 
 - **No COG asset container.** The AlphaEarth release stores packets as
-  georeferenced COGs because AEF ships as 1024-px-blocked COG tiles and
-  ranged reads fall out for free. Tessera is distributed as `geotessera`
+  georeferenced COGs because AEF ships as 1024-px-blocked COG tiles, so
+  ranged reads need no extra machinery. Tessera is distributed as `geotessera`
   tiles with a separate per-pixel scale sidecar; the equivalent container
   is worth building when there is a delivery requirement to shape it,
   and packets are container-agnostic until then.
@@ -243,11 +240,11 @@ can currently resolve.
   that gives AE its `--quality p90<=0.02` control is source-agnostic and
   could be turned on here; it has not been, because no consumer has
   asked for it.
-- **`use_std` is blocked, not merely unused.** Matching the reconstructed
-  standard deviation to the source's was measured to *hurt*: the decoder is
-  already smoother than the truth, so rescaling amplifies its error instead
-  of restoring detail. The config validator refuses it; the numbers are in
-  docs/FINDINGS.md.
+- **No `use_std`.** The config validator refuses it rather than leaving
+  it defaulted off, because matching the reconstructed standard deviation
+  to the source's was measured to hurt: the decoder is already smoother
+  than the truth, so rescaling amplifies its error instead of restoring
+  detail. The numbers are in `lab/findings/stats-channel-is-per-field.md`.
 
 ## Rebuilding
 

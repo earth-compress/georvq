@@ -177,8 +177,8 @@ def train(cfg: Config, gpu=0):
             v.ema_decay != VQConfig.model_fields["ema_decay"].default
             or v.reset_mode != "random"):
         # maturing silently wins over both of these, and a run that set
-        # them meant them -- say so rather than let the run quietly use
-        # decay 0.9995 with resets off
+        # them meant them, so say so rather than let the run use decay
+        # 0.9995 with resets off without reporting it
         print(f"note: mature_warmstart is on, so the warm-started books "
               f"run at decay 0.9995 with resets DISABLED -- overriding "
               f"vq.ema_decay={v.ema_decay} and vq.reset_mode="
@@ -661,8 +661,8 @@ def train(cfg: Config, gpu=0):
             # measured on Tessera, a coarse-only decode reads cos 0.875
             # against ccos 0.316 -- so a log carrying only the headline
             # can show a run flat or negative while the reconstruction is
-            # genuinely improving. They are computed either way; printing
-            # them costs nothing.
+            # improving. They are computed either way, so printing them
+            # costs nothing.
             for m in report.extra:
                 by_t = ebt.get(m.key, {})
                 if by_t:
