@@ -43,7 +43,7 @@ submodules exist. Everything is assembled from one validated `Config`
 | `georvq/metrics.py` | `masked_recon_stats`, `centered_cos` |
 | `georvq/repro.py` | Seeding, git/env metadata, `save_checkpoint` (embeds config + hash) |
 | `georvq/cli.py` | `georvq-train`, `georvq-train-stage1` entry points |
-| `georvq/model/vq.py` | `VectorQuantizer`, `ResidualVQ`, k-means init, dead-code revival (`reset_mode`) — **parity-sacred, see below** |
+| `georvq/model/vq.py` | `VectorQuantizer`, `ResidualVQ`, k-means init, dead-code revival (`reset_mode`) — numerics frozen, see the invariants below |
 | `georvq/model/vqinit.py` | Codebook seeding: balanced-PCA-tree init, per-tier init budgets (`init_per_code`) |
 | `georvq/model/vq_quant.py` | b-bit quantization-aware codebooks (`vq.book_bits`) — int8 books are ~4x smaller to download |
 | `georvq/model/stats_cond.py` | The transmitted-mean side channel: centre before the encoder, condition both ends, restore after the decoder |
@@ -67,14 +67,14 @@ submodules exist. Everything is assembled from one validated `Config`
 
 ## Invariants — do not break casually
 
-1. **VQ numerics are sacred.** The repo's value rests on trained
+1. **VQ numerics must not change.** The repo's value rests on trained
    checkpoints decoding bit-faithfully. `model/vq.py` (and the quantize
    paths in `codec.py`/`conditioning.py`) are guarded by the
    golden-checkpoint gate (`tests/test_compat.py`: the released weights
    must reproduce recorded reconstruction quality exactly, self-skipping
    where the release bundle is absent). Any change there must keep that
    test exact, not approximately equal.
-2. **State-dict names are load-bearing.** `compat.py` maps legacy
+2. **State-dict names are part of the checkpoint format.** `compat.py` maps legacy
    checkpoint keys onto today's module names by prefix. Renaming modules
    or parameters breaks every existing checkpoint; if you must, extend
    the rename table and prove a legacy checkpoint still loads strict.
@@ -101,7 +101,7 @@ submodules exist. Everything is assembled from one validated `Config`
    (`sources/report.py`) for its metric names, baselines, figures and
    preview, and no longer knows what a cosine is. Hardcoding a metric
    key in `train/` is the same violation as hardcoding a dequant.
-7. **Configs are the reproducibility spine.** Every training artifact
+7. **Configs carry reproducibility.** Every training artifact
    embeds its resolved config; anything that affects a run must live in
    the `Config` schema (validated, `extra="forbid"`), not in an env var
    or an edit-the-source knob.
@@ -136,8 +136,8 @@ python scripts/build_release_tessera.py --ckpt <ckpt> --out <bundle>
 
 - **Codec researcher** (new sources, better models): `georvq/{model,
   data, sources, train, eval}`, `configs/`, `scripts/`,
-  `docs/ADDING_A_SOURCE.md` + the findings ledger (`lab/`). The parity-sacred
-  rules above are yours to uphold.
+  `docs/ADDING_A_SOURCE.md` + the findings ledger (`lab/`). The
+  invariants above are yours to uphold.
 - **Release engineer** (ship a trained codec): `georvq/inference/`
   (bundles, ids, refinements, ONNX export) plus a source-specific release
   layer. `georvq/ae/` and `georvq/tessera/` are two worked examples of
