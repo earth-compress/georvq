@@ -127,3 +127,17 @@ very small windows, which train quickly, and should transfer to larger
 windows as a slight overestimate. That makes the width sweep cheap,
 and the size of the small-to-large discrepancy is itself a test of the
 window-size hypothesis.
+
+## Is there more information in the codebooks than we use?
+
+*2026-08-27, open.*
+
+The decoder currently gets the reconstructed latent vectors plus a depth thermometer
+conditioning. This means that the internals of each codebook are invisible to the
+decoder, only the final vector that comes out of N of them. What if the model also saw
+the stream of codebook entries that were used to build that vector? The motivation for this
+is that maybe the model can learn to understand more about the scene if it sees the path it
+took through latent space to get to the point its at. These sequences would be large compared
+to the current data at the bottleneck, is there a way to efficiently think about them in the
+decoder? This would basically be taking the equivalent information used by a sequential decoding operation,
+but doing it all-at-once in a transformer architecture.
