@@ -13,6 +13,16 @@ habit:
 Every measurement below exists to constrain one of those. Anything that
 does not is diagnostics, not design, and belongs in `analysis/README.md`.
 
+This is a work in progress, and the ambition should be read accordingly.
+Determining a good architecture from data statistics is a famously hard
+problem, and this document does not solve it. What the measurements do
+is narrow the search and suggest a sensible starting configuration; the
+designs that shipped were still reached by trial and error per source,
+with these numbers as the starting point (`docs/DESIGN.md` says the
+same). The "working rules" below are hypotheses that have each survived
+one or a few experiments, recorded with their evidence in the ledger --
+not laws.
+
 Status key: **[have]** committed and used, **[partial]** exists but
 source-specific or incomplete, **[missing]** not built.
 
@@ -30,7 +40,7 @@ source-specific or incomplete, **[missing]** not built.
 | Normalisation sensitivity: raw vs unit-norm vs per-band standardised | the LOSS (cosine vs MSE), and whether to transmit a gain | [partial] `data_probe` measures spread only |
 | Per-band variance / dynamic range | whether bands need per-band weighting | [partial] `data_probe` |
 
-**Rules established so far.** A learned bottleneck saturates at ~4 bits
+**Working rules so far.** A learned bottleneck saturates at ~4 bits
 per latent dimension
 ([`bits-per-dim-saturation`](../lab/findings/bits-per-dim-saturation.md)).
 And magnitude spread decides the loss: AlphaEarth is exactly unit-norm
@@ -48,7 +58,7 @@ absolute loss is measuring something real.
 | Per-tier energy decomposition: window mean, block means per grid, sub-grid floor | how the budget should split across tiers; whether a mean side-channel is worth it; the finest useful grid | [have] `pyramid_sizing` |
 | Patch-size sweep: between- vs within-window variance vs W | **W** | **[missing]** (single-W numbers exist via `pyramid_sizing`) |
 
-**Rules established so far.** Tessera's fine-cell size is the first grid
+**Working rules so far.** Tessera's fine-cell size is the first grid
 choice retrospectively justified by a measurement
 ([`tessera-fine-grid-matches-autocorr`](../lab/findings/tessera-fine-grid-matches-autocorr.md)).
 The pooled/local complexity ratio bounds what per-patch conditioning can
@@ -64,7 +74,7 @@ ever buy, and differs sharply by source
 | Value histograms; quantization sensitivity (int8/int6/int4) | **book_bits**, latent precision, whether int8 passthrough is lossless | [partial] `tier_rate_attrib` shows int8 is lossless for latents |
 | Sample-budget check: vectors per codeword | **K** and **N** | [have] as a rule, not a tool |
 
-**Rules established so far.** The sample-budget crossover is the sharpest
+**Working rules so far.** The sample-budget crossover is the sharpest
 rule we have: a codebook needs ~450 vectors per codeword inside the EMA
 window or fitting is worse than not fitting, which makes K a derived
 quantity:
@@ -183,7 +193,9 @@ the model has the least capacity to spare for.
 
 ## The derivation chain
 
-Ordered so each step consumes the previous ones.
+Ordered so each step consumes the previous ones. The chain is the
+ambition, not the current state: the evidence column records how much
+of each step is established, and several are still habit.
 
 | # | parameter | derived from | current evidence |
 |---|---|---|---|
