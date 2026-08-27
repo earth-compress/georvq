@@ -127,7 +127,8 @@ that exist today do not exercise the fine-scale detail the high rungs
 buy. What it does rule out is transplanting a cosine target from one
 source to another.
 
-*L is measurably over-provisioned.* The per-tier PCA d95 sits several
+*L is measurably over-provisioned.* The latent d95 (PCA of the trained
+model's latents, per tier) sits several
 times below the deployed latent widths
 ([`cosine-not-transferable`](../lab/findings/cosine-not-transferable.md)
 has the numbers), so the widths could narrow before the probes would
@@ -151,15 +152,20 @@ per-tier d95 and the sub-4px residual share come from
 floor and prediction savings from the neighbour-predictive entropy
 (section 2), magnitude spread from the normalisation sensitivity
 (section 1), and the autocorrelation range from section 2. The d95 row
-is data-side: PCA of what each tier would transmit (block means and
-residual block means), measured before any model exists.
+is the *data d95*: PCA of what each tier would transmit (block means
+and residual block means), measured before any model exists. It is a
+different quantity from the *latent d95* quoted in section 4 and the
+derivation chain, which is PCA of a trained model's latents; the data
+d95 is a design input, the latent d95 a diagnosis of a finished model,
+and the gap between them measures how efficiently the encoder used its
+width.
 
 | | DEM | S1 RTC | S2 L1C | AlphaEarth | Tessera |
 |---|---:|---:|---:|---:|---:|
 | bands | 1 | 2 | 13 | 64 | 128 |
 | valid | 100% | 100% | 99.5% | 81.5% | 95.9% |
 | tier-0 energy | 99.8% | 97.2% | 97.1% | 97.7% | 87.3% |
-| d95 tier 0/1/2 | 1/1/1 | 2/2/2 | 3/3/3 | 7/27/30 | 32/75/86 |
+| data d95 tier 0/1/2 | 1/1/1 | 2/2/2 | 3/3/3 | 7/27/30 | 32/75/86 |
 | residual <4 px | 1.7% | 45.5% | 11.6% | 16.6% | 46.0% |
 | lossless floor b/px | 2.47 | 11.2 | 72.3 | 131 | 672 |
 | prediction saves | 58.4% | 17.8% | 42.5% | 44.9% | 9.7% |
@@ -202,7 +208,7 @@ of each step is established, and several are still habit.
 | 0 | **objective** | use-case: task eval, band subsetting | point-thematic transparency at ~1 b/px, cos ~0.93; cosine is NOT transferable across sources; fine-scale use unmeasured |
 | 1 | **W** (window) | autocorrelation range; between/within variance vs W | 64 px, unjustified |
 | 2 | **P**, **G** (tiers, grids) | power spectrum; autocorrelation scale breaks | fine cell 4 px matches lag-0.5 point |
-| 3 | **L** (latent dims/tier) | global PCA d95; ~4 bits/dim saturation | measured d95 51/91/71 of 512/512/256 — over-provisioned several fold |
+| 3 | **L** (latent dims/tier) | data d95; ~4 bits/dim saturation | latent d95 51/91/71 of 512/512/256 on Tessera — over-provisioned several fold |
 | 4 | **K** | sample-budget: batch x cells x window / K >= 450 | K=256 verified healthy |
 | 5 | **N** (levels) | per-level residual decay to a target rate | tier 2 not saturated at 20 |
 | 6 | **X** (attention) | ceiling vs capacity; where the ceiling stops moving | unmeasured |
