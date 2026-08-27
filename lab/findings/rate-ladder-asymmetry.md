@@ -14,4 +14,5 @@ related:
 The rate ladder is extremely asymmetric (coarse 11 / mid 208 / fine 3,584
 bits per level). The measured Pareto front always saturates coarse, then
 mid, then adds fine levels. Hand-picked balanced, unsaturated tuples like 
-6-4-4 are strictly dominated by equivalent bitrates on saturated ones.
+6-4-4 are strictly dominated by equivalent bitrates on successively saturated 
+ones.
