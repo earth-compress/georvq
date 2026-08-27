@@ -220,7 +220,7 @@ the tier's cell count, a coarse sidecar can ship on by default while a
 fine one has to be an opt-in
 ([`refinement-cost-scales-with-cells`](../lab/findings/refinement-cost-scales-with-cells.md)).
 
-### Optional submodules
+### Stats normalization
 
 The stats normalization module is a key design choice that must be
 decided per source. Currently, three modes are supported and used in different
@@ -239,6 +239,8 @@ lift the bitrate of the most extreme compression rates, whilst having very littl
 of the full bitstream. Therefore, quantization and compression of those statistics, and the effect of
 quality on the decoder, should always be an area of active research for sources.
 
+### Experimental submodules
+
 Other optional features exist: `TierPredictor` (predicts one tier from another and
 codes only the surprise; the cascade), `CodebookSelector` (restricts
 codebook entries by geographic location), `PyramidRateModel` (a
@@ -252,7 +254,8 @@ The bitstream comprises the IDs of each successive codebook, for each
 tier. The codebooks and model are downloaded by the user before any
 data can be decoded, which is a real bottleneck in use-cases where the 
 amount of data needed is similar in size to the model (on the order of
-hundreds of MB for most sources); see `docs/BITSTREAM.md` for more information.
+hundreds of MB for most sources), therefore, no model weights or codebooks
+are part of any bitstream; see `docs/BITSTREAM.md` for more information.
 
 ## Part 2 -- Why it is built that way
 
