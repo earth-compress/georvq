@@ -1,7 +1,7 @@
 # The AlphaEarth release codec
 
 The frozen, shippable codec for the AlphaEarth Foundations embedding
-tiles. Everything documented here is **release policy for this source**
+tiles. Everything documented here is release policy for this source
 (`georvq/ae/`), built on the source-agnostic machinery in
 `georvq/inference/`. Other sources get their own release layer and their
 own version of this document.
@@ -17,7 +17,7 @@ own version of this document.
 ## The release
 
 - Model: `ae_pyr64_divfull` (window 64, tiers 1:256:2048:8 / 4:192:8192:8
-  / 16:64:16384:8), **bitstream_id `2f7c352718b87fe6`**. Blobs and models
+  / 16:64:16384:8), `bitstream_id 2f7c352718b87fe6`. Blobs and models
   cross-check ids; mismatches are refused (same-architecture codebooks
   decode each other's indices into plausible garbage).
 - Backends: PyTorch (CPU/CUDA) or ONNX (torch-free; `[onnx]` extra).
@@ -51,9 +51,9 @@ Bands are quantizer levels → rate control is band selection. Blocks
 mirror the source's 1024 px quantum at every level → windowed access is
 stock ranged-COG reads (rasterio/GDAL `/vsicurl`; no custom client).
 Assets are north-up in the source CRS with `BITSTREAM_ID` in the tags.
-**Values are code indices: never interpolate, never build averaged
-overviews** (the quality raster is the one asset that averages
-meaningfully).
+Values are code indices, so interpolating them or building averaged
+overviews corrupts them; the quality raster is the one asset that
+averages meaningfully.
 
 Measured access costs (local ranged-HTTP): whole-tile coarse ~180 KiB /
 4 requests; a 1024 px viewport at browse quality ~150-220 KiB; a point
@@ -73,15 +73,15 @@ against the same blobs:
   held-out val + a real tile: mean dcos −40% at full rate (−22/−16/−6%
   on val at full/half/low), window-seam adjacency factor 3.7 → 0.7.
 
-The deblock decoder is defined by a **canonical recipe**, not a knob:
+The deblock decoder is defined by a canonical recipe:
 512 px frames anchored at the tile origin, each deblocked from its
 frame plus a one-window (64 px) halo clipped at tile bounds, hard-crop
 back to the frame. The network's GroupNorm makes output depend on frame
-extents, so the tiling is part of the decoder identity — the recipe
+extents, so the tiling is part of the decoder identity, and the recipe
 constants are stamped in the bundle (`decoders/deblock.pt`,
-`bundle.json`) and folded into its `decoder_id`. Its locality contract:
-*a deblocked pixel depends on the code indices within 64 px of its
-frame, and nothing else* — so per-frame, slab, or ranged-viewport
+`bundle.json`) and folded into its `decoder_id`. Its locality contract
+is that a deblocked pixel depends on the code indices within 64 px of
+its frame and on nothing else, so per-frame, slab, or ranged-viewport
 decodes all produce the same result (deviation from whole-mosaic
 inference measured at ~1e-5 dcos), and window decodes may be shared
 between frames as a pure optimization. Costs: ~1.25 GB extra VRAM
@@ -160,9 +160,9 @@ bucket is 302,466 tiles over 9 years.
 
 - **No entropy coding**: order-0 rANS measured at ~0.6% on real tiles
   (fine tier ~95% entropy-saturated; deflate recovers the rest) while
-  dominating decode time. The coarse tier's ~30% entropy gap is left on
-  the table (a regional coarse-mosaic product is the fix if it matters).
+  dominating decode time. The coarse tier's ~30% entropy gap is not
+  exploited (a regional coarse-mosaic product is the fix if it matters).
 - **Lite decoders**: trained and parked below the quality bar (see
   lab/findings/cheap-decoders-quality-wall.md; that ledger also holds the
-  error-envelope predictor). The deblocker graduated from that list and
-  ships as the second decoder (above).
+  error-envelope predictor). The deblocker is the one decoder-side
+  addition that met the bar, and ships as the second decoder (above).
