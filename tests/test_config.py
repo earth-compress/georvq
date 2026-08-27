@@ -9,7 +9,7 @@ from georvq.config import (Config, apply_overrides, config_diff, config_hash,
 
 
 def test_presets_validate():
-    presets = glob.glob("configs/*.yaml")
+    presets = glob.glob("configs/**/*.yaml", recursive=True)
     assert presets, "no config presets found"
     for p in presets:
         cfg = load_config(p)

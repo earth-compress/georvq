@@ -71,7 +71,7 @@ def codebook_figure(vs, specs, step):
 
     Read this to spot a level that has COLLAPSED, not to judge quality:
     all three bars can sit near 1.0 on a codebook that explains almost
-    none of the variance (docs/FINDINGS.md).
+    none of the variance (lab/findings/perplexity-is-gameable.md).
     """
     fig, axes = plt.subplots(1, len(specs), figsize=(5 * len(specs), 3.3),
                              constrained_layout=True, squeeze=False)
@@ -172,7 +172,8 @@ _pca_rgb = PCA_RGB.render
 def recon_figure(model, source, val_s, step, n=8, mins=None, tuples=None,
                  val_loc=None, preview=PCA_RGB):
     """Original vs reconstructions at named depth tuples, PCA-RGB rendered."""
-    # eval() is load-bearing, not hygiene: VectorQuantizer.forward runs its
+    # eval() here changes behaviour, it is not tidiness:
+    # VectorQuantizer.forward runs its
     # lazy `_data_init` under `self.training`, so drawing this figure in
     # train mode INITIALISES the codebooks -- from 8 val windows, by random
     # sampling rather than the configured init_mode, and at whatever step

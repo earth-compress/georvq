@@ -11,15 +11,15 @@ fully determined by:
 4. the CDF tables, when an entropy-coded archive is used (none shipped;
    see below).
 
-The **decoder weights are deliberately excluded**. Releases carry
+The decoder weights are deliberately excluded. Releases carry
 `bitstream_id` = hash(1–4): any future decoder trained against the same
 id (bigger trunk, seam deblocker, task-specialised head) decodes
-existing packets and archives with zero re-encoding. Decode-side quality
-upgrades are free. Decoder-*specific* artifacts (e.g. the AE release's
+existing packets and archives with no re-encoding, so decode-side
+quality upgrades cost nothing. Decoder-*specific* artifacts (e.g. the AE release's
 per-window quality rasters) are keyed by a second hash, `decoder_id`
 (the decoder weights), so variant decoders publish alongside each other.
 
-**Optional additive refinements** extend a packet without changing the
+Optional additive refinements extend a packet without changing the
 indices: the AE release's 8* sidecar carries the coarse tier's
 post-quantization residual (2-bit scalar-quantized, per-window scale)
 and is added to the coarse tokens whenever that tier decodes at full
@@ -52,14 +52,14 @@ mismatched models are refused.
 Measured on the AlphaEarth release, order-0 rANS recovers only ~0.6%
 over deflated raw indices (the fine tier runs at ~95% of codebook
 entropy), so the shipped format stores uncoded indices. The machinery
-remains for sources/coders where it pays:
+remains for sources and coders which benefit from using it:
 
 `georvq.inference.archive` writes real files: rANS (compressai backend)
 over the flattened symbols (tier-major, level-major, cells within level)
 with one calibrated, Laplace-smoothed CDF per (tier, level) at 16-bit
 precision. Every bitstream is round-trip verified during writing;
-`metadata.json` records realized bytes vs the naive bits — realized sizes,
-not model estimates.
+`metadata.json` records the realized bytes against the naive bits, so
+reported sizes are measured rather than estimated.
 
 Models trained with the context entropy model additionally report their
 *achievable* rate (`model.entropy_level_bits`, hard-index -log2 q). The gap

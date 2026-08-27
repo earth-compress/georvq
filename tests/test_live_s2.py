@@ -135,7 +135,7 @@ def test_every_figure_the_run_draws_renders_on_real_data():
     from georvq.train.validate import canonical_tuples, tname, validate
 
     store = LiveS2Store(ROOT, index=_index(4))
-    cfg = load_config("configs/s2_pyr96.yaml")
+    cfg = load_config("configs/s2/s2_pyr96.yaml")
     torch.manual_seed(0)
     model = build_model(cfg)
     model.eval()

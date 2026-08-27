@@ -1,57 +1,54 @@
 """Measured figures live in one place, so they cannot drift apart.
 
-A result quoted in nine files is a result that will eventually disagree
-with itself: someone refines the measurement, updates the file in front
-of them, and the other eight quietly go stale. The convention is:
+A result quoted in nine files will eventually disagree with itself:
+someone refines the measurement, updates the file in front of them, and
+the other eight go stale. The convention is that a measured figure
+appears in its findings record (`lab/findings/`, canonical), plus at
+most one mechanism home, the module or table whose subject it is.
+Everywhere else states the claim and links the record, the way
+docs/DESIGN.md does.
 
-    a measured figure appears in docs/FINDINGS.md (canonical), plus at
-    most ONE mechanism home -- the module or table whose subject it is --
-    and everywhere else states the qualitative claim and cites.
-
-This test pins that convention by location rather than by parsing prose:
+This test pins the convention by location rather than by parsing prose:
 each figure lists the files allowed to contain its digits. A new
 quotation fails here, which is the moment to ask whether the reader
-really needs the number or just the claim and a pointer.
-
-Excluded from the search: docs/MERGE_TRIAGE.md, a transient triage of
-this branch that is deleted at merge, and this file.
+needs the number or just the claim and a link.
 """
 from pathlib import Path
 
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
-SEARCH = ["georvq", "docs", "configs", "scripts", "README.md", "CLAUDE.md"]
-EXCLUDE = {"MERGE_TRIAGE.md", Path(__file__).name}
+SEARCH = ["georvq", "docs", "lab", "configs", "scripts", "README.md", "CLAUDE.md"]
+EXCLUDE = {Path(__file__).name}
 
-#: literal figure -> the files permitted to state it, and why each is a home
+#: literal figure -> the files permitted to state it
 FIGURES = {
     # forcing the std hurts: 0.9700 -> 0.9678
     "0.9678": {
-        "docs/FINDINGS.md",                 # canonical
+        "lab/findings/stats-channel-is-per-field.md",   # canonical
         "docs/SOURCE_ONBOARDING.md",        # the five-source measurement table
         "georvq/model/stats_cond.py",       # the mechanism's own rationale
     },
     # what the transmitted mean buys
     "0.0069": {
-        "docs/FINDINGS.md",
+        "lab/findings/stats-channel-is-per-field.md",
         "docs/SOURCE_ONBOARDING.md",
     },
     # the deepest fine levels train on a fraction of a percent of rows
     "P(active)=0.006": {
-        "docs/FINDINGS.md",                 # canonical
+        "lab/findings/depth-sampling-along-path.md",    # canonical
         "georvq/model/codec.py",            # `path_tuples`, the mechanism
-        "configs/tessera_vq8_k256.yaml",    # that run's own provenance
+        "configs/tessera/tessera_vq8_k256.yaml",  # that run's own provenance
     },
     # the sample-budget crossover
     "450 vectors per codeword": {
-        "docs/FINDINGS.md",
+        "lab/findings/codebook-sample-budget.md",
         "docs/SOURCE_ONBOARDING.md",
     },
     # PCA-packed S2 stats channel: mean bytes/window at tolerance 0.01
     "9.73": {
         "docs/FINDINGS.md",                 # canonical
-        "configs/s2_pyr96.yaml",            # the run that charges it
+        "configs/s2/s2_pyr96.yaml",            # the run that charges it
     },
     # how badly an uncharged normalizer channel understates the coarse rung
     "3.31": {
@@ -99,12 +96,6 @@ def test_figure_stays_in_its_home(figure):
     missing = sorted(homes - found)
     assert not strays, (
         f"{figure!r} is quoted outside its home(s) {sorted(homes)}:\n  "
-        + "\n  ".join(strays) +
-        "\n\nState the claim and cite docs/FINDINGS.md instead, or add the "
-        "file to this figure's homes if it genuinely needs the number."
-    )
+        + "\n  ".join(strays))
     assert not missing, (
-        f"{figure!r} has vanished from {missing}. If the measurement was "
-        "superseded, update every home and this registry together; if it "
-        "merely moved, update the registry."
-    )
+        f"{figure!r} has vanished from {missing}; update FIGURES if that is deliberate")

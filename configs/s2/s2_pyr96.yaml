@@ -4,7 +4,7 @@
 # resharding its 1.2 TB would gain nothing. The only thing cached is a
 # scene catalogue (paths + grid position) under ~/.cache/georvq.
 #
-#   georvq-train -c configs/s2_pyr96.yaml --gpu 0
+#   georvq-train -c configs/s2/s2_pyr96.yaml --gpu 0
 #
 # CLOUDS ARE KEPT. cloud_mask.tif sits beside the bands and is deliberately
 # not applied: cloud is part of the distribution the codec has to carry.

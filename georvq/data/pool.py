@@ -228,7 +228,7 @@ class ChipPool:
         or 60m strip part-way into its own pixel. Single-plane stores keep
         the unsnapped draw they have always used -- aligning them too
         would change which pixels every existing preset trains on, which
-        is not this change's business to do quietly.
+        is not this change's business to do without saying so.
         """
         if self.slot_rows >= self.chip_px:
             return 0
