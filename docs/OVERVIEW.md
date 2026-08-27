@@ -1,7 +1,8 @@
 # Codebase overview
 
-Orientation for humans and agents working on georvq. `README.md` explains
-the method; this explains how the code is organized, what must not break,
+Orientation for humans and agents working on georvq. `README.md` is the
+front door and `docs/DESIGN.md` explains the method and the reasoning
+behind it; this explains how the code is organized, what must not break,
 and the practical knowledge that isn't visible from signatures.
 
 ## One pass through the pipeline
@@ -42,7 +43,7 @@ submodules exist. Everything is assembled from one validated `Config`
 | `georvq/metrics.py` | `masked_recon_stats`, `centered_cos` |
 | `georvq/repro.py` | Seeding, git/env metadata, `save_checkpoint` (embeds config + hash) |
 | `georvq/cli.py` | `georvq-train`, `georvq-train-stage1` entry points |
-| `georvq/model/vq.py` | `VectorQuantizer`, `ResidualVQ`, k-means init, dead-code revival (`reset_mode`) — **parity-sacred, see below** |
+| `georvq/model/vq.py` | `VectorQuantizer`, `ResidualVQ`, k-means init, dead-code revival (`reset_mode`) — numerics frozen, see the invariants below |
 | `georvq/model/vqinit.py` | Codebook seeding: balanced-PCA-tree init, per-tier init budgets (`init_per_code`) |
 | `georvq/model/vq_quant.py` | b-bit quantization-aware codebooks (`vq.book_bits`) — int8 books are ~4x smaller to download |
 | `georvq/model/stats_cond.py` | The transmitted-mean side channel: centre before the encoder, condition both ends, restore after the decoder |
@@ -60,18 +61,20 @@ submodules exist. Everything is assembled from one validated `Config`
 | `georvq/ae/` | **The AlphaEarth release codec** — AE-specific policy (pixel prep, 8* coarse sidecar, quality ladder, COG asset container, executables). See `docs/AE_RELEASE.md` |
 | `georvq/tessera/` | **The Tessera release codec** — Tessera-specific policy (transmitted mean, rate ladder, fine-tier refinement). See `docs/TESSERA_RELEASE.md` |
 | `scripts/` | Thin drivers over the above (train, store builders, eval, archive, GIFs) |
+| `analysis/` | Source-characterisation and codec-diagnostic probes (`analysis/README.md`) |
+| `lab/` | The findings ledger and kept experiments (`lab/README.md`); the maintainer's TODO queue |
 | `configs/` | Presets — each reproduces a specific historical run (see Provenance) |
 
 ## Invariants — do not break casually
 
-1. **VQ numerics are sacred.** The repo's value rests on trained
+1. **VQ numerics must not change.** The repo's value rests on trained
    checkpoints decoding bit-faithfully. `model/vq.py` (and the quantize
    paths in `codec.py`/`conditioning.py`) are guarded by the
    golden-checkpoint gate (`tests/test_compat.py`: the released weights
    must reproduce recorded reconstruction quality exactly, self-skipping
    where the release bundle is absent). Any change there must keep that
    test exact, not approximately equal.
-2. **State-dict names are load-bearing.** `compat.py` maps legacy
+2. **State-dict names are part of the checkpoint format.** `compat.py` maps legacy
    checkpoint keys onto today's module names by prefix. Renaming modules
    or parameters breaks every existing checkpoint; if you must, extend
    the rename table and prove a legacy checkpoint still loads strict.
@@ -98,7 +101,7 @@ submodules exist. Everything is assembled from one validated `Config`
    (`sources/report.py`) for its metric names, baselines, figures and
    preview, and no longer knows what a cosine is. Hardcoding a metric
    key in `train/` is the same violation as hardcoding a dequant.
-7. **Configs are the reproducibility spine.** Every training artifact
+7. **Configs carry reproducibility.** Every training artifact
    embeds its resolved config; anything that affects a run must live in
    the `Config` schema (validated, `extra="forbid"`), not in an env var
    or an edit-the-source knob.
@@ -108,8 +111,8 @@ submodules exist. Everything is assembled from one validated `Config`
 ```bash
 pip install -e ".[loc,archive,eval,viz,dev]"
 
-georvq-train -c configs/pyr64.yaml --gpu 0 log.run_tag=my_run   # train
-georvq-train -c configs/pyr64.yaml train.steps=2000 ...          # any override
+georvq-train -c configs/ae/pyr64.yaml --gpu 0 log.run_tag=my_run   # train
+georvq-train -c configs/ae/pyr64.yaml train.steps=2000 ...          # any override
 
 pytest -m "not slow and not gpu"    # fast suite (~20 s) — run on every change
 pytest                              # + training smokes (GPU, minutes)
@@ -133,8 +136,8 @@ python scripts/build_release_tessera.py --ckpt <ckpt> --out <bundle>
 
 - **Codec researcher** (new sources, better models): `georvq/{model,
   data, sources, train, eval}`, `configs/`, `scripts/`,
-  `docs/ADDING_A_SOURCE.md` + `docs/FINDINGS.md`. The parity-sacred
-  rules above are yours to uphold.
+  `docs/ADDING_A_SOURCE.md` + the findings ledger (`lab/`). The
+  invariants above are yours to uphold.
 - **Release engineer** (ship a trained codec): `georvq/inference/`
   (bundles, ids, refinements, ONNX export) plus a source-specific release
   layer. `georvq/ae/` and `georvq/tessera/` are two worked examples of
@@ -163,7 +166,7 @@ cycle, with its settings verified against the original runs' logged argv:
 - `hybrid_rate.yaml` — frozen stage-1 encoder + fresh smaller-deeper
   codebooks + entropy model (its small 256-slot pool is historical).
 - `cascade.yaml` — location prior + cross-tier predictors, encoder frozen
-  for the whole run (co-adaptation degrades the ceiling — `FINDINGS.md`).
+  for the whole run (co-adaptation degrades the ceiling — `lab/findings/coadaptation-degrades-ceiling.md`).
 - `tessera_pyr64.yaml` — the 3-tier pyramid on Tessera embeddings.
 - `tessera_vq8.yaml` — that geometry with int8 QAT codebooks.
 - `tessera_vq8_k256.yaml` — graded-down codebooks (K=256 x 20 levels),
@@ -220,5 +223,5 @@ reproduces a result.
 - **Shipping a new source** → a per-source release layer over
   `georvq/inference`; `georvq/ae/` + `docs/AE_RELEASE.md` are the worked
   example.
-- **Why the architecture is shaped this way** → `docs/FINDINGS.md`
+- **Why the architecture is shaped this way** → `docs/DESIGN.md`
   (empirical results, including the negative ones worth not repeating).
