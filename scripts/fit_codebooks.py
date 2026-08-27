@@ -88,7 +88,7 @@ def lloyd(v, K, iters, dev, seed=0):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--config", default="configs/dem128_live_frozen.yaml")
+    ap.add_argument("--config", default="configs/dem/dem128_live_frozen.yaml")
     ap.add_argument("--lat-store", default="/data/georvq-stores/copdem_lat128")
     ap.add_argument("--out", default="checkpoints/dem128_books_corpus/model.pt")
     ap.add_argument("--gpu", type=int, default=0)

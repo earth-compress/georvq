@@ -1,7 +1,7 @@
 # Copernicus DEM GLO-30: the pyr64 recipe on 1-band elevation (30m GSD,
 # 64px window = 1.92km). Windows are standardized per-tile in DEMSource.prep
 # (masked mean/std, S2-style stats side-channel), so the codec learns relief.
-inherit: pyr64.yaml
+inherit: ../ae/pyr64.yaml
 
 data:
   source: dem

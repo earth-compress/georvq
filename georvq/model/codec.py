@@ -444,7 +444,7 @@ class PyramidCodec(nn.Module):
 
             Usage and perplexity are health hints only, never quality measures:
             a codebook can reach near-full utilization while explaining almost
-            none of the variance (see docs/FINDINGS.md). Judge books by
+            none of the variance (see lab/findings/perplexity-is-gameable.md). Judge books by
             rate-distortion; read these to spot a level that has collapsed.
             """
             for j in range(sp.depth):
