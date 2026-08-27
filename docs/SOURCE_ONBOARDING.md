@@ -22,7 +22,9 @@ source-specific or incomplete, **[missing]** not built.
 
 | measurement | decides | status |
 |---|---|---|
+| Validity: nodata fraction and convention | masking in the adapter; without it every later statistic is poisoned by fill values | [have] `data_probe` |
 | Global PCA of pixel vectors: eigenspectrum, participation ratio, d90/d95/d99 | **L** floor; whether a linear front-end suffices | [partial] `patch_intrinsic_dim` does this pooled |
+| Per-tier PCA of what each tier would transmit (block means, residual block means) | **L** per tier, from the data rather than a model | [have] `pyramid_sizing` |
 | Band cross-correlation matrix | band redundancy; whether to decorrelate before coding; band grouping | **[missing]** |
 | Single-pixel autoencoder R-D: dim x bits | **L** and bits-per-dim saturation, context-free | [have] `pixel_rd.py` |
 | Normalisation sensitivity: raw vs unit-norm vs per-band standardised | the LOSS (cosine vs MSE), and whether to transmit a gain | [partial] `data_probe` measures spread only |
@@ -42,8 +44,9 @@ absolute loss is measuring something real.
 | 2D power spectrum (radially averaged) | **P** and the grids **G**: where the energy actually sits in frequency | **[missing]** |
 | Autocorrelation vs lag | finest useful cell size; window **W** | [have] `data_probe`, `residual_struct` |
 | Within-patch vs global PCA / clustering | whether per-patch conditioning can pay at all | [have] `patch_intrinsic_dim` |
-| Neighbour-predictive entropy (rANS-achievable) | the LOSSLESS FLOOR the codec must beat | [have] `data_probe` |
-| Patch-size sweep: between- vs within-window variance vs W | **W**, and whether a mean side-channel is worth it | **[missing]** |
+| Neighbour-predictive entropy (rANS-achievable) | the LOSSLESS FLOOR the codec must beat, and how much simple prediction saves | [have] `data_probe` |
+| Per-tier energy decomposition: window mean, block means per grid, sub-grid floor | how the budget should split across tiers; whether a mean side-channel is worth it; the finest useful grid | [have] `pyramid_sizing` |
+| Patch-size sweep: between- vs within-window variance vs W | **W** | **[missing]** (single-W numbers exist via `pyramid_sizing`) |
 
 **Rules established so far.** Tessera's fine-cell size is the first grid
 choice retrospectively justified by a measurement
@@ -130,7 +133,16 @@ use-case entry in `lab/TODO.md` depends on the same addition.
 ## The five-source measurement table
 
 `analysis/data_probe.py` and `analysis/pyramid_sizing.py`, W=64, grids
-1/4/16. This is the output the rest of the document consumes.
+1/4/16. This is the output the rest of the document consumes. Every row
+comes from a measurement listed in sections 1-3: bands and valid are
+basic properties from `data_probe` (section 1), tier-0 energy, the
+per-tier d95 and the sub-4px residual share come from
+`pyramid_sizing`'s energy decomposition (sections 1-2), the lossless
+floor and prediction savings from the neighbour-predictive entropy
+(section 2), magnitude spread from the normalisation sensitivity
+(section 1), and the autocorrelation range from section 2. The d95 row
+is data-side: PCA of what each tier would transmit (block means and
+residual block means), measured before any model exists.
 
 | | DEM | S1 RTC | S2 L1C | AlphaEarth | Tessera |
 |---|---:|---:|---:|---:|---:|
