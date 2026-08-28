@@ -27,9 +27,28 @@ class Source:
         """Raw input plane(s) -> the (B, C, W, W) plane the tokenizer eats."""
         return nn.Identity()
 
-    def build_head(self, model_cfg, in_dim) -> nn.Module:
-        """Decoder fine tokens (B, cells, in_dim) -> pixel output(s)."""
+    def build_head(self, model_cfg, in_dim, n_tiers=None,
+                   out_px=None) -> nn.Module:
+        """Decoder fine tokens (B, cells, in_dim) -> pixel output(s).
+
+        `n_tiers` and `out_px` are set when the head belongs to a member
+        of a decoder bank, which decodes a PREFIX of the tiers to a
+        smaller output than the window. Both None means the whole pyramid
+        at full resolution, which is what every single-decoder model does.
+        """
         raise NotImplementedError
+
+    @staticmethod
+    def head_geom(model_cfg, n_tiers=None, out_px=None):
+        """(grid, patch edge) for a head over the first `n_tiers` tiers.
+
+        The finest tier a head sees owns the token grid, and each token
+        expands to a patch of `out_px // grid` pixels. For the full
+        decoder this is the window and the last tier, unchanged.
+        """
+        fine = model_cfg.tiers[(n_tiers or len(model_cfg.tiers)) - 1]
+        px = out_px or model_cfg.window
+        return fine.grid, px // fine.grid
 
     def normalizer(self, model_cfg):
         """Optional per-tile stats side-channel codec (None if the data
