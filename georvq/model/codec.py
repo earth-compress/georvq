@@ -153,7 +153,8 @@ class PyramidCodec(nn.Module):
         self.tokenizer = ViTTokenizer(
             self.specs, cfg.window, cfg.bands, dim=cfg.tokenizer.dim,
             depth=cfg.tokenizer.depth, ff_ratio=cfg.ff_ratio,
-            late_join=cfg.tokenizer.late_join)
+            late_join=cfg.tokenizer.late_join,
+            stem_pyramid=cfg.tokenizer.stem_pyramid)
         if cfg.local_attn is not None:
             m = build_local_mask(self.specs, cfg.window, cfg.local_attn)
             # computed once; non-persistent so checkpoints stay unchanged
@@ -205,18 +206,36 @@ class PyramidCodec(nn.Module):
         else:
             self.stats_enc = self.stats_dec = None
 
-        head_in = PyramidAttnDecoder.head_in_dim(
-            self.specs, cfg.decoder.dim, cfg.decoder.cls_bridge)
-        self.decoder = PyramidAttnDecoder(
-            self.specs, head=source.build_head(cfg, head_in),
-            dim=cfg.decoder.dim, depth=cfg.decoder.depth,
-            heads=cfg.decoder.heads, cls_bridge=cfg.decoder.cls_bridge,
-            ff_ratio=(cfg.decoder.ff_ratio
-                      if cfg.decoder.ff_ratio is not None
-                      else cfg.ff_ratio),
-            sigma_cond=cfg.sigma is not None,
-            sigma_freqs=cfg.sigma.freqs if cfg.sigma else 8,
-            late_join=cfg.decoder.late_join)
+        if cfg.decoder_bank is not None:
+            from georvq.model.decoder import DecoderBank
+            members = []
+            for st in cfg.decoder_bank:
+                sub = self.specs[:st.tiers]
+                hin = PyramidAttnDecoder.head_in_dim(
+                    sub, st.dim, st.cls_bridge)
+                members.append(PyramidAttnDecoder(
+                    sub, head=source.build_head(cfg, hin, n_tiers=st.tiers,
+                                                out_px=st.out_px),
+                    dim=st.dim, depth=st.depth, heads=st.heads,
+                    cls_bridge=st.cls_bridge,
+                    ff_ratio=(st.ff_ratio if st.ff_ratio is not None
+                              else cfg.ff_ratio),
+                    sigma_cond=cfg.sigma is not None,
+                    sigma_freqs=cfg.sigma.freqs if cfg.sigma else 8))
+            self.decoder = DecoderBank(members, cfg.window)
+        else:
+            head_in = PyramidAttnDecoder.head_in_dim(
+                self.specs, cfg.decoder.dim, cfg.decoder.cls_bridge)
+            self.decoder = PyramidAttnDecoder(
+                self.specs, head=source.build_head(cfg, head_in),
+                dim=cfg.decoder.dim, depth=cfg.decoder.depth,
+                heads=cfg.decoder.heads, cls_bridge=cfg.decoder.cls_bridge,
+                ff_ratio=(cfg.decoder.ff_ratio
+                          if cfg.decoder.ff_ratio is not None
+                          else cfg.ff_ratio),
+                sigma_cond=cfg.sigma is not None,
+                sigma_freqs=cfg.sigma.freqs if cfg.sigma else 8,
+                late_join=cfg.decoder.late_join)
         if cfg.local_attn is not None:
             self.decoder.register_buffer(
                 "attn_mask", build_local_mask(self.specs, cfg.window,

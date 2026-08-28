@@ -68,7 +68,18 @@ model:
   # Full depth now costs 5.60 b/px against 2.81. Whether levels 9-16 earn
   # that is the question this run asks; at depth 8, 8-8-4 -> 8-8-8 bought
   # +0.017 R2 for double the rate, so the honest prior is "not much".
-  tiers: ["1:48:64:16", "4:96:512:16", "16:96:4096:16"]
+  # K raised 64/512/4096 -> 256/1024/4096: 2 more bits on the coarse
+  # tier and 1 on the mid, the fine tier unchanged. Full depth costs
+  # 5.73 b/px against 5.60, and the codebooks grow 7.13M -> 8.13M.
+  #
+  # The coarse tier sees `batch` vectors per step (one cell per
+  # window), so K=256 puts it at 400 vectors per codeword against the
+  # ~450 in lab/findings/codebook-sample-budget.md, down from 1600.
+  # Marginal rather than broken, and the deepest tier-0 levels see
+  # fewer rows still under path sampling. Watch the tier-0 reset
+  # counts: a jump there is the symptom of underfitting a codebook
+  # that is too large for the data reaching it.
+  tiers: ["1:48:256:16", "4:96:1024:16", "16:96:4096:16"]
   # Fitted basis for the 26 per-band mean/std floats the normalizer
   # removes: 9.73 B/window measured (77.8 bits, 0.0084 b/px) against 416
   # bits raw. The method is ported from the ring-space beta releases,
@@ -92,8 +103,26 @@ model:
   depth_sampling: path
   full_frac: 0.15
   ff_ratio: 2.0
-  tokenizer: {dim: 256, depth: 9}
+  # One conv pyramid feeds every tier, replacing the per-tier patch
+  # embeds and the CLS parameter. The coarse tier was the only tier
+  # with no convolutional read of the image, and three separate
+  # probes put its limit at what it represents rather than how it is
+  # coded: a tier-0 refinement at unbounded precision buys 4.4%, and
+  # low-passing the coarse decode shows it carries about an 8x8
+  # image.
+  tokenizer: {dim: 256, depth: 9, stem_pyramid: true}
   decoder: {dim: 384, depth: 12, heads: 8, head_feat: 64, cls_bridge: true}
+  # Resolution-matched decoders, one per tier prefix. Decoding a
+  # coarse-only rung through 273 tokens to 96 px costs the same as
+  # the full pyramid today; these cost ~0.01% and ~1.3% of that.
+  # Grids come from the low-pass sweep on the d16 checkpoint: the
+  # truth restricted to 12 px scores 0.0234 and to 48 px 0.0100,
+  # against the current rungs' 0.0279 and 0.0145, so each member has
+  # room to improve before its output grid is what limits it.
+  decoder_bank:
+    - {tiers: 1, out_px: 12, dim: 128, depth: 2, heads: 4, head_feat: 32}
+    - {tiers: 2, out_px: 48, dim: 256, depth: 6, heads: 8, head_feat: 48}
+    - {tiers: 3, out_px: 96, dim: 384, depth: 12, heads: 8, head_feat: 64}
   vq:
     commit_weight: 0.25
     dead_threshold: 0.000625

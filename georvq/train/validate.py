@@ -56,6 +56,21 @@ def canonical_tuples(specs, mins=None, sampling="nested"):
                      key=lambda t: t[0], default=path[0])
         pts = {"min": path[0], "coarse_only": coarse,
                "half": half, "full": path[-1]}
+        # One named point per active-tier count, so a decoder bank has a
+        # rung for every member. Without this the canonical set can skip
+        # a member entirely -- with 1/4/16 tiers, `half` lands past the
+        # point where tier 2 opens, so the two-tier decoder is trained on
+        # sampled rows but never validated, and a member that lags would
+        # not show up anywhere.
+        for n in range(2, len(specs)):
+            sat = [t for t in path
+                   if all(L > 0 for L in t[:n]) and all(L == 0
+                                                        for L in t[n:])]
+            if sat and not any(
+                    all(v > 0 for v in t[:n]) and all(v == 0 for v in t[n:])
+                    for t in pts.values()):
+                pts[f"tier{n - 1}_full"] = max(
+                    sat, key=lambda t: tuple_bits(specs, t))
     else:
         half = [max(L // 2, m) for L, m in zip(full, mins)]
         pts = {"min": list(mins),

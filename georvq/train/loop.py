@@ -583,6 +583,15 @@ def train(cfg: Config, gpu=0):
                    "perf/tokens_per_s": tok_s,
                    "perf/data_wait_ms": data_ms,
                    "perf/pool_chips_loaded": pool.chips_loaded}
+            # Which decoder served how much of the batch. With a bank the
+            # realised step cost depends on how the depth sampler split
+            # the rows, so this is what explains a throughput change, and
+            # a member starved of rows is one whose rung will lag.
+            counts = getattr(model.decoder, "last_counts", None)
+            if counts:
+                tot = sum(counts.values()) or 1
+                for k, c in counts.items():
+                    log[f"train/bucket_frac_{k}"] = c / tot
             if gnorm is not None:
                 # PRE-clip norm: the diagnostic that would have shown the
                 # step-1900 blow-up coming
@@ -649,9 +658,18 @@ def train(cfg: Config, gpu=0):
             base_str = "".join(
                 f" {b.key}={vs[f'{qm.key}_{b.key}']:.4f}"
                 for b in report.baselines if f"{qm.key}_{b.key}" in vs)
+            # with a decoder bank, say which member served each rung: a
+            # step in the ladder at a member boundary is the continuity
+            # risk of decoding adjacent rates with different networks
+            def _dec(t):
+                if getattr(model.decoder, "members", None) is None:
+                    return ""
+                from georvq.model.decoder import active_tiers
+                return f"[d{active_tiers(list(t)) - 1}]"
+
             print(f"step {step} VAL[{qm.key}]: "
                   + ("" if vq_live else "[warmup: ceiling only] ")
-                  + " ".join(f"{k}({tname(t)})={cbt[tname(t)]:.4f}"
+                  + " ".join(f"{k}({tname(t)}){_dec(t)}={cbt[tname(t)]:.4f}"
                              for k, t in canon.items() if tname(t) in cbt)
                   + f" ceil={vs[f'{qm.key}_ceiling']:.4f}"
                   + extra_str + base_str,
