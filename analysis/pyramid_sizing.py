@@ -81,7 +81,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--store", required=True)
     ap.add_argument("--source", required=True,
-                    choices=["tessera", "ae", "dem", "s2", "s1"])
+                    help="tessera | ae | dem | s2 | s1 | era5:<var>[+std]")
     ap.add_argument("--chips", type=int, default=30)
     ap.add_argument("--window", type=int, default=64)
     ap.add_argument("--grids", default="1,4,16")

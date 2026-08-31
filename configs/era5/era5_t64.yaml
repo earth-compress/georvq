@@ -1,0 +1,59 @@
+# ERA5 temperature on 37 pressure levels: the standard 64px 3-tier
+# pyramid on single hourly slices, levels as bands (0.25deg posting,
+# 64px window = 16deg). Slices are per-level standardized in
+# Era5Source.prep with the fixed moments in georvq/sources/era5_stats.json.
+#
+# Sizing from the onboarding probes (val store, 2026-08-31):
+# per-level-standardized tier energies 88.1/10.4/1.4% with 0.15% below
+# 4px, so grids 1/4/16 reach 99.85% of the energy; tier d95 = 5/12/21
+# sets the latent floors for dims 16/32/32; K per tier from the
+# ~450-vectors-per-code sample budget at batch 512.
+data:
+  source: "era5:t"
+  store_dir: /data/ERA5-samples/train/store_t
+  val_frac: 0.04     # split by draw window (Era5Store.split)
+  pool:
+    size: 12288      # (37,128,128) fp32 slices -> ~29 GiB in host RAM
+    workers: 6
+    slot_rows: 128
+    refresh_per_s: 16.0
+    device: cpu
+    cycle: true
+
+model:
+  window: 64
+  bands: 37
+  tiers: ["1:16:64:8", "4:32:1024:8", "16:32:16384:8"]
+  min_depths: [6, 1, 0]
+  full_frac: 0.005
+  ff_ratio: 2.0
+  tokenizer: {dim: 192, depth: 6}
+  decoder: {dim: 256, depth: 8, heads: 8, head_feat: 64, cls_bridge: true}
+  vq:
+    commit_weight: 0.25
+    dead_threshold: 0.000625
+    ema_decay: 0.99
+    bf16_scores: true
+    skip_masked: true
+    reset_mode: split
+    warmup_steps: 500
+    kmeans_sample: 32768
+
+train:
+  steps: 60000
+  batch_windows: 512
+  amp: true
+  grad_ckpt: true
+  tf32: true
+  optim: {lr: 5.0e-5, wd: 0.01, warmup: 3000}
+  val_interval: 1000
+  fig_interval: 2000
+  save_interval: 2500
+  val_tuples: 16
+
+eval:
+  recon_tuples: ["8-1-0", "8-8-0", "8-8-2", "8-8-8"]
+
+log:
+  run_tag: era5_t64
+  wandb_project: georvq

@@ -68,6 +68,11 @@ def get_source(name: str, model_cfg) -> Source:
     from georvq.sources.ae import AESource
     from georvq.sources.tessera import TesseraSource
     from georvq.sources.dem import DEMSource
+    # "era5:<var>" carries the variable in the name so the adapter can
+    # pick that variable's standardization moments
+    if name.startswith("era5:"):
+        from georvq.sources.era5 import Era5Source
+        return Era5Source(model_cfg, var=name.split(":", 1)[1])
     SOURCES = {"ae": AESource, "tessera": TesseraSource,
                "dem": DEMSource}
     try:

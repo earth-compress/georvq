@@ -42,14 +42,19 @@ def geographic_split(index: pd.DataFrame, val_frac=0.04, cell_deg=10.0,
 
 
 def open_store(store_dir):
-    """ChipStore, or a live store when the manifest says so (currently
-    kind="live_dem": chips read on demand from GLO-30 COGs, no shards)."""
+    """ChipStore, or a live store when the manifest says so
+    (kind="live_dem": chips read on demand from GLO-30 COGs;
+    kind="era5": hourly variable slices read from a cube zarr)."""
     mpath = os.path.join(str(store_dir), "manifest.json")
     if os.path.exists(mpath):
         with open(mpath) as f:
-            if json.load(f).get("kind") == "live_dem":
-                from georvq.data.live_dem import LiveDEMStore
-                return LiveDEMStore(store_dir)
+            kind = json.load(f).get("kind")
+        if kind == "live_dem":
+            from georvq.data.live_dem import LiveDEMStore
+            return LiveDEMStore(store_dir)
+        if kind == "era5":
+            from georvq.data.era5 import Era5Store
+            return Era5Store(store_dir)
     return ChipStore(store_dir)
 
 
