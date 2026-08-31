@@ -54,7 +54,50 @@ def iter_chips(source, path, n_chips, seed=0):
       dem         float32 metres; the lossless unit is the integer metre
       s2          uint16 DN, three native grids upsampled onto the 10m
                   lattice (1068 = 2*534 = 6*178, so this is exact)
+      era5:<var>  int16 as stored (matches the native GRIB 16-bit
+                  packing); one chip is one hourly slice of one variable
+                  with pressure levels as bands, so the time axis is
+                  flattened into the chip draw. "era5:t+std" standardises
+                  each level by moments estimated from a held-aside draw
+                  of slices; the default is physical units.
     """
+    if source.startswith("era5:"):
+        import zarr
+        var = source.split(":", 1)[1]
+        std = var.endswith("+std")
+        var = var[:-4] if std else var
+        root = zarr.open(os.path.join(path, "cubes.zarr"), mode="r")
+        a = root[var]
+        sc = np.asarray(root[var + "_scale"], dtype=np.float64)
+        off = np.asarray(root[var + "_offset"], dtype=np.float64)
+        pl = a.ndim == 5
+        n_cubes, n_t = a.shape[0], a.shape[-3]
+        rng = np.random.default_rng(seed)
+
+        def slice_(c, t):
+            q = np.asarray(a[c, :, t]) if pl else np.asarray(a[c, t])[None]
+            s = sc[c] if pl else sc[c:c + 1]
+            o = off[c] if pl else off[c:c + 1]
+            x = ((q.astype(np.int64) + 32768) * s[:, None, None]
+                 + o[:, None, None])
+            return x, q
+
+        mu = sig = None
+        if std:
+            xs = [slice_(int(c), int(t))[0] for c, t in zip(
+                rng.integers(0, n_cubes, 16), rng.integers(0, n_t, 16))]
+            flat = np.stack(xs).transpose(1, 0, 2, 3).reshape(len(xs[0]), -1)
+            mu = flat.mean(1)[:, None, None]
+            sig = np.maximum(flat.std(1), 1e-12)[:, None, None]
+        for c, t in zip(rng.integers(0, n_cubes, n_chips),
+                        rng.integers(0, n_t, n_chips)):
+            x, q = slice_(int(c), int(t))
+            if std:
+                x = (x - mu) / sig
+            valid = np.ones(x.shape[1:], dtype=bool)
+            yield x.astype(np.float32), valid, q.astype(np.int32)
+        return
+
     if source == "s1":
         # SAR gamma0 is stored as LINEAR power, where speckle is
         # multiplicative and the distribution spans orders of magnitude.
@@ -183,7 +226,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--store", required=True)
     ap.add_argument("--source", default="tessera",
-                    choices=["tessera", "ae", "dem", "s2", "s1"])
+                    help="tessera | ae | dem | s2 | s1 | era5:<var>[+std]")
     ap.add_argument("--chips", type=int, default=40)
     ap.add_argument("--entropy-bands", type=int, default=16,
                     help="bands to histogram (extrapolated); the full set is "
@@ -238,6 +281,8 @@ def main():
 
     unit = {"s1": "dB @0.1dB", "dem": "integer metre",
             "s2": "uint16 DN"}.get(args.source, "int8 as stored")
+    if args.source.startswith("era5:"):
+        unit = "int16 as stored (per-cube affine, GRIB-matched)"
     print(f"\nLOSSLESS RATE from spatial prediction (bits/pixel, all bands)"
           f"\n  [lossless unit: {unit}]")
     for k in ("raw", "left", "avg"):
