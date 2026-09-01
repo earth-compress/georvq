@@ -103,7 +103,8 @@ class Codec:
         """
         m = self.model
         if m.stats_cond is not None and mean is None:
-            mean = m.patch_mean(x, valid)
+            # (B, bands) mean, or [mean ‖ std] for a use_std model
+            mean = m.patch_stats(x, valid)
         zs = m.encode_levels(x, stats=mean, valid=valid)
         B = x.shape[0]
         want = set(refine_tiers) | ({0} if coarse_residual else set())
