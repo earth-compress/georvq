@@ -6,8 +6,13 @@
 # Sizing from the onboarding probes (val store, 2026-08-31):
 # per-level-standardized tier energies 88.1/10.4/1.4% with 0.15% below
 # 4px, so grids 1/4/16 reach 99.85% of the energy; tier d95 = 5/12/21
-# sets the latent floors for dims 16/32/32; K per tier from the
-# ~450-vectors-per-code sample budget at batch 512.
+# sets the latent floors for dims 16/32/32. Depth 20 per tier and
+# K = 512/1024/2048 are the maintainer's call (2026-09-01): K capped
+# well below the AE/tessera 16384 fine tier to keep the shipped
+# codebooks small. At batch 512 the coarse tier sees 512 vectors per
+# step, so the 450-per-code budget needs an EMA window of ~450 steps
+# for K=512: ema_decay_final=0.998 (window 500) gets there after the
+# ramp, with split resets covering the faster early decay.
 data:
   source: "era5:t"
   store_dir: /data/ERA5-samples/train/store_t
@@ -23,8 +28,8 @@ data:
 model:
   window: 64
   bands: 37
-  tiers: ["1:16:64:8", "4:32:1024:8", "16:32:16384:8"]
-  min_depths: [6, 1, 0]
+  tiers: ["1:16:512:20", "4:32:1024:20", "16:32:2048:20"]
+  min_depths: [15, 2, 0]
   full_frac: 0.005
   ff_ratio: 2.0
   tokenizer: {dim: 192, depth: 6}
@@ -33,11 +38,16 @@ model:
     commit_weight: 0.25
     dead_threshold: 0.000625
     ema_decay: 0.99
+    ema_decay_final: 0.998
     bf16_scores: true
     skip_masked: true
     reset_mode: split
     warmup_steps: 500
-    kmeans_sample: 32768
+    # tree init cannot seed an empty leaf; per-code budget decouples the
+    # tiers (32768 shared samples would give the 2048-code fine tier 16
+    # vectors per centroid)
+    init_mode: tree
+    init_per_code: 1024
 
 train:
   steps: 60000
@@ -52,7 +62,7 @@ train:
   val_tuples: 16
 
 eval:
-  recon_tuples: ["8-1-0", "8-8-0", "8-8-2", "8-8-8"]
+  recon_tuples: ["20-1-0", "20-20-0", "20-20-5", "20-20-20"]
 
 log:
   run_tag: era5_t64

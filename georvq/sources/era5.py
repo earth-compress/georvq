@@ -25,11 +25,28 @@ from dataclasses import replace
 import torch
 import torch.nn as nn
 
-from georvq.metrics import masked_r2, masked_recon_stats
+from georvq.metrics import masked_r2, masked_recon_stats, masked_rmse
 from georvq.model.decoder import DenseHead
 from georvq.sources import Source
 
 _STATS_PATH = os.path.join(os.path.dirname(__file__), "era5_stats.json")
+
+# Units of the DEQUANTIZED store values, per variable (ECMWF conventions).
+_UNITS = {"t": "K", "z": "m2 s-2", "u": "m s-1", "v": "m s-1",
+          "q": "kg kg-1", "msl": "Pa", "t2m": "K", "u10": "m s-1",
+          "v10": "m s-1"}
+
+
+class _FixedNormalizer:
+    """Per-level affine with FIXED global moments, so `stats` is unused.
+    Exists so the error histogram can draw its second panel in physical
+    units; there is no per-tile side channel to encode."""
+
+    def __init__(self, mu, sd):
+        self._mu, self._sd = mu, sd
+
+    def denormalize(self, x, stats):
+        return x * self._sd.to(x.device) + self._mu.to(x.device)
 
 
 class Era5Source(Source):
@@ -77,14 +94,34 @@ class Era5Source(Source):
                          normalize=False,
                          dw=model_cfg.decoder.head_dw)
 
+    def normalizer(self, model_cfg):
+        return _FixedNormalizer(self._mu, self._sd)
+
+    def last_stats(self):
+        return None
+
+    def _rmse_phys(self, out, x, valid):
+        """RMSE in the variable's physical unit. The per-level sd converts
+        each level's standardized error back before pooling; the mean
+        cancels in the difference, so only the scale is applied."""
+        sd = self._sd.to(out.device)
+        return masked_rmse(out * sd, x * sd, valid)
+
     def recon_stats(self, out, x, valid):
         mse, _ = masked_recon_stats(out, x, valid)
-        return mse, {"mse": mse, "r2": masked_r2(out, x, valid)}
+        return mse, {"mse": mse, "r2": masked_r2(out, x, valid),
+                     "rmse_phys": self._rmse_phys(out, x, valid)}
 
     def report(self, model_cfg):
         """R2 with RMSE, as for DEM, but a PCA-RGB preview: with levels as
         bands there is a full profile per pixel to project, and a single
-        gray level would show one arbitrary pressure surface."""
-        from georvq.sources.report import PCA_RGB, scalar_field_spec
-        spec = scalar_field_spec(units="sigma (per-level standardized)")
-        return replace(spec, preview=PCA_RGB)
+        gray level would show one arbitrary pressure surface. rmse_phys
+        pools the de-standardized error over all levels, so it reads in
+        the variable's own unit (K for t)."""
+        from georvq.sources.report import (Metric, PCA_RGB, replace_extra,
+                                           scalar_field_spec)
+        unit = _UNITS.get(self.var, "source units")
+        spec = scalar_field_spec(units=unit)
+        phys = Metric("rmse_phys", f"RMSE ({unit})", self._rmse_phys,
+                      higher_better=False, bounded=False)
+        return replace(replace_extra(spec, add=(phys,)), preview=PCA_RGB)
