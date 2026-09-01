@@ -60,7 +60,9 @@ train:
   amp: true
   grad_ckpt: true
   tf32: true
-  optim: {lr: 5.0e-5, wd: 0.01, warmup: 3000}
+  # 2e-4: the from-scratch value (tessera from-scratch ran 1.5e-4);
+  # 5e-5 was a warm-start rate carried in from the AE preset
+  optim: {lr: 2.0e-4, wd: 0.01, warmup: 3000}
   val_interval: 1000
   fig_interval: 2000
   save_interval: 2500
