@@ -307,3 +307,48 @@ def error_hist_figure(model, source, val_s, step, tuples=None, mins=None,
     if was_training:
         model.train()
     return fig
+
+
+def rd_err_figure(model, source, val_s, tuples, step, px, side_bits=0.0,
+                  unit="source units", val_loc=None, max_tokens=512,
+                  chunk=128):
+    """Rate vs error in the source's PHYSICAL unit, on one log axis:
+    MAE, RMSE, and the 90th and 99th percentiles of |error|, per depth
+    tuple. Requires a source normalizer (the unit conversion); the
+    trainer skips the figure otherwise. This is the plot to judge a
+    model in the units the field is used in, where R2's compression of
+    the last percent hides a factor of two in Kelvin."""
+    was_training = model.training
+    model.eval()
+    norm = source.normalizer(source.cfg)
+    errs = {tname(t): [] for t in tuples}
+    for i in range(0, min(max_tokens, val_s.shape[0]), chunk):
+        x, v = source.prep(val_s[i:i + chunk], val_s.device)
+        loc = val_loc[i:i + chunk] if val_loc is not None else None
+        _, cums = model.level_cumsums(x, loc=loc)
+        stats = source.last_stats()
+        for t in tuples:
+            out = model.eval_tuple(cums, t, x).float()
+            m = v.unsqueeze(1).expand_as(out)
+            e = (norm.denormalize(out, stats)
+                 - norm.denormalize(x, stats))[m]
+            errs[tname(t)].append(e.abs().cpu())
+    specs = model.specs
+    bits = np.array([tuple_bits(specs, t, side_bits) for t in tuples]) / px
+    order = np.argsort(bits)
+    series = {"MAE": lambda a: a.mean(), "RMSE": lambda a: a.pow(2).mean().sqrt(),
+              "p90": lambda a: a.quantile(0.90), "p99": lambda a: a.quantile(0.99)}
+    fig, ax = plt.subplots(figsize=(6.5, 4.5), constrained_layout=True)
+    for name, fn in series.items():
+        y = [float(fn(torch.cat(errs[tname(t)]))) for t in tuples]
+        ax.plot(bits[order], np.asarray(y)[order], "o-", ms=4, lw=1.2,
+                label=name)
+    ax.set_yscale("log")
+    ax.set_xlabel("bits / pixel")
+    ax.set_ylabel(f"|error| ({unit})")
+    ax.grid(True, which="both", alpha=0.25)
+    ax.legend(fontsize=8)
+    ax.set_title(f"rate vs physical error, step {step}", fontsize=9)
+    if was_training:
+        model.train()
+    return fig

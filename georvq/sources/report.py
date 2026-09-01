@@ -200,7 +200,7 @@ def band_rgb_preview(r, g, b, select=None) -> Preview:
 # conditioned model (it plots the per-tier prior-to-level cascade), and
 # `rd_log` an unbounded-free metric; both are filtered where inapplicable.
 FIGURES = ("rd", "rd_log", "codebook", "recon", "reset", "cosdist",
-           "error_hist")
+           "error_hist", "rd_err")
 
 
 @dataclass(frozen=True)

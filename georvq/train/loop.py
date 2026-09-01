@@ -30,7 +30,8 @@ from georvq.model.vqinit import residual_init_rvq
 from georvq.repro import (run_metadata, save_checkpoint, seed_all,
                           write_resolved_config)
 from georvq.train.figures import (codebook_figure, cosdist_figure,
-                                   error_hist_figure, rd_figure,
+                                   error_hist_figure, rd_err_figure,
+                                   rd_figure,
                                    recon_figure, reset_figure)
 from georvq.sources.report import resolve_report
 from georvq.train.validate import canonical_tuples, load_rd_ref, tname, validate
@@ -118,9 +119,18 @@ def train(cfg: Config, gpu=0):
 
     specs = cfg.model.tiers
     mins = cfg.model.min_depths
-    tuples = [t for t in monotone_tuples(specs)
-              if all(L >= m for L, m in zip(t, mins))]
-    canon = canonical_tuples(specs, mins)
+    on_path = cfg.model.depth_sampling == "path"
+    if on_path:
+        # Path sampling trains only the strict fill order (each tier
+        # saturated before the next opens), so validation and the R-D
+        # front enumerate that path and nothing else -- scoring a tuple
+        # like 15-10-10 would put never-trained operating points on the
+        # pareto.
+        tuples = [list(t) for t in path_tuples(specs, mins)]
+    else:
+        tuples = [t for t in monotone_tuples(specs)
+                  if all(L >= m for L, m in zip(t, mins))]
+    canon = canonical_tuples(specs, mins, path=on_path)
     ref_fronts = [load_rd_ref(s) for s in cfg.eval.rd_refs]
     run_dir = os.path.join(cfg.log.out_dir, cfg.log.run_tag)
     os.makedirs(run_dir, exist_ok=True)
@@ -703,25 +713,36 @@ def train(cfg: Config, gpu=0):
                     wandb.log(scalars, step=step)
                     for f in open_figs:
                         plt.close(f)
-                    if report.has_figure("recon") and (
-                            step % cfg.train.fig_interval == 0
-                            or step == cfg.train.steps):
-                        rt = ([[int(x_) for x_ in t.split("-")]
-                               for t in cfg.eval.recon_tuples]
-                              if cfg.eval.recon_tuples else None)
+                    fig_step = (step % cfg.train.fig_interval == 0
+                                or step == cfg.train.steps)
+                    rt = ([[int(x_) for x_ in t.split("-")]
+                           for t in cfg.eval.recon_tuples]
+                          if cfg.eval.recon_tuples else None)
+                    if report.has_figure("recon") and fig_step:
                         f3 = recon_figure(model, source, val_s, step,
                                           mins=mins, tuples=rt,
                                           val_loc=val_loc,
                                           preview=report.preview)
                         wandb.log({"figs/recon": wandb.Image(f3)}, step=step)
                         plt.close(f3)
-                    if report.has_figure("error_hist") and (
-                            step % cfg.train.fig_interval == 0
-                            or step == cfg.train.steps):
+                    if (report.has_figure("rd_err") and fig_step
+                            and source.normalizer(cfg.model) is not None):
+                        # rate vs physical-unit error (MAE/RMSE/p90/p99)
+                        # over the same operating points as the R-D front
+                        f6 = rd_err_figure(model, source, val_s, val_ts,
+                                           step, px=cfg.model.window ** 2,
+                                           side_bits=sb,
+                                           unit=report.units,
+                                           val_loc=val_loc)
+                        wandb.log({"figs/rd_err": wandb.Image(f6)},
+                                  step=step)
+                        plt.close(f6)
+                    if report.has_figure("error_hist") and fig_step:
                         # signed error, in model space and -- where the
                         # source normalizes -- in its own physical unit
                         f5 = error_hist_figure(model, source, val_s, step,
-                                               mins=mins, val_loc=val_loc,
+                                               mins=mins, tuples=rt,
+                                               val_loc=val_loc,
                                                unit=report.units)
                         wandb.log({"figs/error_hist": wandb.Image(f5)},
                                   step=step)

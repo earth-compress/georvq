@@ -15,10 +15,13 @@ def tname(ls):
     return "-".join(map(str, ls))
 
 
-def canonical_tuples(specs, mins=None):
+def canonical_tuples(specs, mins=None, path=False):
     """Named operating points for scalar logging: minimal / coarse-only /
     half-ladder / full. With min-depths training, every point is clamped
-    into the TRAINED tuple space (untrained tuples mislead)."""
+    into the TRAINED tuple space (untrained tuples mislead). With `path`
+    (strict fill-order training), every named point must lie ON the path:
+    half becomes the path's midpoint rather than the per-tier half
+    cascade, which the path never visits."""
     mins = mins or [1] + [0] * (len(specs) - 1)
 
     def cascade(start):
@@ -27,10 +30,18 @@ def canonical_tuples(specs, mins=None):
             L = min(prev, sp.depth); out.append(L); prev = L
         return out
     d0 = specs[0].depth
-    half = [max(L // 2, m) for L, m in zip(cascade(d0), mins)]
-    pts = {"min": list(mins),
-           "coarse_only": [d0] + list(mins[1:]),
-           "half": half, "full": cascade(d0)}
+    if path:
+        from georvq.model.codec import path_tuples
+        p = path_tuples(specs, mins)
+        pts = {"min": list(p[0]),
+               "coarse_only": [d0] + [0] * (len(specs) - 1),
+               "half": list(p[len(p) // 2]),
+               "full": cascade(d0)}
+    else:
+        half = [max(L // 2, m) for L, m in zip(cascade(d0), mins)]
+        pts = {"min": list(mins),
+               "coarse_only": [d0] + list(mins[1:]),
+               "half": half, "full": cascade(d0)}
     return {k: v for k, v in pts.items()}
 
 
