@@ -199,8 +199,13 @@ def _recon_figure(model, source, val_s, step, n, mins, tuples, val_loc,
     basis would hide exactly the errors this figure exists to show.
     Call `recon_figure`, which owns the eval-mode guard.
     """
-    val_x, val_valid = source.prep(val_s[:n], val_s.device)
-    loc = val_loc[:n] if val_loc is not None else None
+    # Spread the rows over the whole val set. The fixed val tokens are
+    # built as a grid of overlapping crops per chip in index order, so
+    # the first n are near-duplicates of one chip; even spacing shows n
+    # different chips instead.
+    sel = torch.linspace(0, val_s.shape[0] - 1, n).long()
+    val_x, val_valid = source.prep(val_s[sel], val_s.device)
+    loc = val_loc[sel] if val_loc is not None else None
     if tuples:
         pts = {tname(t): t for t in tuples}
     else:

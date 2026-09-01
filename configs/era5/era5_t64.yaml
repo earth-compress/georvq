@@ -53,6 +53,9 @@ model:
     # vectors per centroid)
     init_mode: tree
     init_per_code: 1024
+    # keep the continuous path trained so the ceiling stays a real
+    # headroom diagnostic instead of sagging onto the quantized path
+    passthrough_frac: 0.15
 
 train:
   steps: 60000
