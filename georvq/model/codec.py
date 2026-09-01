@@ -198,9 +198,10 @@ class PyramidCodec(nn.Module):
         self.stats_cond = cfg.stats_cond
         if cfg.stats_cond is not None:
             from georvq.model.stats_cond import StatsEmbed
-            self.stats_enc = (StatsEmbed(cfg.bands, cfg.tokenizer.dim)
+            sw = cfg.bands * (2 if cfg.stats_cond.use_std else 1)
+            self.stats_enc = (StatsEmbed(sw, cfg.tokenizer.dim)
                               if cfg.stats_cond.cond_encoder else None)
-            self.stats_dec = (StatsEmbed(cfg.bands, cfg.decoder.dim)
+            self.stats_dec = (StatsEmbed(sw, cfg.decoder.dim)
                               if cfg.stats_cond.cond_decoder else None)
         else:
             self.stats_enc = self.stats_dec = None
@@ -266,8 +267,9 @@ class PyramidCodec(nn.Module):
         if self.stats_cond is not None and stats is None:
             raise ValueError(
                 f"{where}: model.stats_cond is enabled, so the per-window "
-                "mean must be passed (model.patch_mean(x, valid)). Omitting "
-                "it would silently produce a mean-removed field.")
+                "stats must be passed (model.patch_stats(x, valid)). "
+                "Omitting them would silently produce a stats-removed "
+                "field.")
 
     def side_bits(self):
         """Fixed per-window bits outside the index stream (stats channel)."""
@@ -282,7 +284,13 @@ class PyramidCodec(nn.Module):
         call at the call site while staying explicit inside the model."""
         if self.stats_cond is None:
             return None
-        return self.patch_mean(x, valid)
+        return self.patch_stats(x, valid)
+
+    def patch_stats(self, x, valid=None):
+        from georvq.model.stats_cond import patch_stats
+        sc = self.stats_cond
+        return patch_stats(x, valid, use_std=sc.use_std,
+                           std_floor=sc.std_floor)
 
     def patch_mean(self, x, valid=None):
         from georvq.model.stats_cond import patch_mean

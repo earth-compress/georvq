@@ -30,7 +30,8 @@ def test_prep_standardizes_per_level(era5_cfg):
         s = json.load(f)["t"]
     mu = torch.tensor(s["mean"]).view(1, -1, 1, 1)
     sd = torch.tensor(s["std"]).view(1, -1, 1, 1)
-    raw = mu + sd * torch.randn(6, 37, 16, 16)
+    raw = mu + sd * torch.randn(6, 37, 16, 16,
+                                generator=torch.Generator().manual_seed(0))
     x, valid = src.prep(raw, "cpu")
     assert valid.all() and valid.shape == (6, 16, 16)
     # each level lands near N(0, 1) regardless of its physical scale

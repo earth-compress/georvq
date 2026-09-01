@@ -157,17 +157,23 @@ class VQConfig(StrictModel):
 
 
 class StatsCondConfig(StrictModel):
-    """Transmit the per-window mean as a side channel; code what is left.
+    """Transmit per-window stats as a side channel; code what is left.
 
     The mean is subtracted before the encoder and added back after the
     decoder, so loss and metrics stay on the full field. Both encoder and
-    decoder are conditioned on it. See georvq/model/stats_cond.py.
+    decoder are conditioned on the stats. See georvq/model/stats_cond.py.
 
-    use_std is off and BLOCKED, not merely defaulted off: matching the
-    std was measured to hurt full-depth cosine, unlike the S2 version this
-    is ported from, whose bands have genuinely different physical scales.
-    The measurement is in lab/findings/stats-channel-is-per-field.md and the mechanism's reasoning
-    in georvq/model/stats_cond.py.
+    Which stats is a per-field choice
+    (lab/findings/stats-channel-is-per-field.md): matching the std was
+    measured to hurt on Tessera, whose dims are a learned embedding
+    already on comparable scales, while S2 and DEM standardise by both.
+    `use_std` additionally divides by the per-window std after centering
+    (floored at `std_floor` in model units against near-uniform windows),
+    appends it to the conditioning vector, and doubles the channel rate.
+    It requires `subtract_mean`: dividing an un-centred field would scale
+    its offset. The inference mean codec does not yet quantize a std
+    channel, so a use_std model trains and evaluates but cannot ship a
+    real bitstream until that exists.
 
     bits_per_band is rate accounting only -- it does not quantize anything
     during training. 6 bits/band reaches cos 0.9767 against 0.9769 for the
@@ -176,16 +182,18 @@ class StatsCondConfig(StrictModel):
     cond_encoder: bool = True
     cond_decoder: bool = True
     use_std: bool = False
+    std_floor: float = 0.05
     bits_per_band: int = 6
 
     @model_validator(mode="after")
     def _check(self):
-        """Refuse the combinations that would silently do nothing, and
-        `use_std`, which the class docstring above explains is not merely
-        unimplemented but measured to be harmful."""
-        assert not self.use_std, "stats_cond.use_std is not implemented"
+        """Refuse the combinations that would silently do nothing or
+        silently distort (std division without centering)."""
         assert self.subtract_mean or self.cond_encoder or self.cond_decoder, \
             "stats_cond does nothing with every option off"
+        assert not (self.use_std and not self.subtract_mean), \
+            "stats_cond.use_std requires subtract_mean"
+        assert self.std_floor > 0
         assert self.bits_per_band > 0
         return self
 
