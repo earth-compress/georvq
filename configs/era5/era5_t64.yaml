@@ -9,17 +9,21 @@
 # sets the latent floors for dims 16/32/32. Depth 20 per tier and
 # K = 512/1024/2048 are the maintainer's call (2026-09-01): K capped
 # well below the AE/tessera 16384 fine tier to keep the shipped
-# codebooks small. At batch 512 the coarse tier sees 512 vectors per
-# step, so the 450-per-code budget needs an EMA window of ~450 steps
-# for K=512: ema_decay_final=0.998 (window 500) gets there after the
-# ramp, with split resets covering the faster early decay.
+# codebooks small. At batch 1024 the coarse tier sees 1024 vectors per
+# step; the ema_decay ramp to 0.998 (window 500) puts K=512 at ~1000
+# vectors per code, with split resets covering the faster early decay.
+#
+# depth_sampling "path": tiers fill strictly coarse-to-fine, one book
+# at a time (the maintainer's rate-ladder semantics, 2026-09-01) --
+# training, validation and the R-D front all live on that path, so no
+# operating point with an unsaturated coarse tier ever appears.
 data:
   source: "era5:t"
   store_dir: /data/ERA5-samples/train/store_t
   val_frac: 0.04     # split by draw window (Era5Store.split)
   pool:
-    size: 12288      # (37,128,128) fp32 slices -> ~29 GiB in host RAM
-    workers: 6
+    size: 32000      # the full 32000-slice train split resident (~76 GiB)
+    workers: 12
     slot_rows: 128
     refresh_per_s: 16.0
     device: cpu
@@ -29,7 +33,8 @@ model:
   window: 64
   bands: 37
   tiers: ["1:16:512:20", "4:32:1024:20", "16:32:2048:20"]
-  min_depths: [15, 2, 0]
+  depth_sampling: path
+  min_depths: [15, 0, 0]   # the path starts at 15-0-0
   full_frac: 0.005
   ff_ratio: 2.0
   tokenizer: {dim: 192, depth: 6}
@@ -51,7 +56,7 @@ model:
 
 train:
   steps: 60000
-  batch_windows: 512
+  batch_windows: 1024
   amp: true
   grad_ckpt: true
   tf32: true
@@ -62,7 +67,7 @@ train:
   val_tuples: 16
 
 eval:
-  recon_tuples: ["20-1-0", "20-20-0", "20-20-5", "20-20-20"]
+  recon_tuples: ["20-0-0", "20-20-0", "20-20-1", "20-20-20"]
 
 log:
   run_tag: era5_t64
