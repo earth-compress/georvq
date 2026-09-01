@@ -1,0 +1,26 @@
+# era5_t64 plus stats conditioning: transmit the per-window per-level
+# mean (37 x 6 bits = 222 bits = 0.054 b/px at W=64), subtract it
+# before the encoder and add it back after the decoder, conditioning
+# both. The A/B partner of era5_t64 -- everything else is inherited
+# unchanged, so a difference between the runs is attributable to the
+# mean channel. The channel is charged in the R-D figures through
+# model.side_bits(); metrics (r2, rmse_phys) are computed on the full
+# reassembled field, so the two runs read on the same scale.
+#
+# The probes' case for trying this on ERA5 t: tier 0 holds 88.1% of
+# the per-level-standardized window energy, so handing the window mean
+# over should free the coarse ladder to code low-frequency shape, as
+# measured on tessera (configs/tessera/tessera_vq8_k256_statscond.yaml).
+# Mean only: stats_cond.use_std is blocked in the schema, measured
+# harmful on tessera (lab/findings/stats-channel-is-per-field.md).
+inherit: era5_t64.yaml
+
+model:
+  stats_cond:
+    subtract_mean: true
+    cond_encoder: true
+    cond_decoder: true
+    bits_per_band: 6
+
+log:
+  run_tag: era5_t64_sc
