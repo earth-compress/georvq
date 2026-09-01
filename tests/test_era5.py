@@ -59,7 +59,21 @@ def test_model_builds_and_runs(era5_cfg):
     out = model.decode(zqs, Ls).float()
     assert out.shape == x.shape
     loss, stats = src.recon_stats(out, x, valid)
-    assert torch.isfinite(loss) and {"mse", "r2"} <= set(stats)
+    assert torch.isfinite(loss) and {"mse", "r2", "rmse_phys"} <= set(stats)
+
+
+def test_rmse_phys_is_in_physical_units(era5_cfg):
+    src = get_source("era5:t", era5_cfg.model)
+    x = torch.zeros(2, 37, 8, 8)
+    out = x + 1.0    # one sigma of error on every level
+    valid = torch.ones(2, 8, 8, dtype=torch.bool)
+    _, stats = src.recon_stats(out, x, valid)
+    # one sigma pooled over levels = rms of the per-level sds, in K
+    want = src._sd.pow(2).mean().sqrt()
+    assert torch.allclose(stats["rmse_phys"], want, rtol=1e-5)
+    spec = src.report(era5_cfg.model)
+    assert "rmse_phys" in [m.key for m in spec.extra]
+    assert spec.units == "K"
 
 
 def _synth_store(tmp_path, n_cubes=2, levels=3, hours=8, px=8):
