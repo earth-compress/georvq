@@ -184,15 +184,6 @@ def train(cfg: Config, gpu=0):
             for lev in rvq.levels:
                 lev.decay = v.ema_decay
                 lev.reset_interval = 2500
-                # Zero the inherited step counters. They come from the
-                # source checkpoint -- already tens of thousands of steps
-                # in, and desynchronised across levels by skip_masked --
-                # so resets would fire at arbitrary offsets in this run.
-                # Observed: resets at 464 / 803 / 2963, the last landing 37
-                # steps before the validation at 3000, which then scored
-                # books with 6828 codes just moved (cos 0.9572 -> 0.9550).
-                lev.step.fill_(2500 - _reset_offset(2500,
-                                                    cfg.train.val_interval))
         print(f"warm-started books kept LIVE: decay {v.ema_decay}, "
               f"resets every 2500 steps, reset_mode={v.reset_mode}",
               flush=True)
@@ -222,6 +213,24 @@ def train(cfg: Config, gpu=0):
                 z = torch.cat(samples[i])[:need[i]]
                 rvq.all_levels(z)
         del samples
+    # Resets fire on a GLOBAL-step schedule. Each level's private counter
+    # advances only on batches where depth sampling makes it active, so
+    # left to themselves the counters desynchronise (observed on era5_t64:
+    # resets at 3000 / 3002 / 3003, and an earlier warm-start case at
+    # 464 / 803 / 2963, the last landing 37 steps before a validation,
+    # which then scored books with 6828 codes just moved). The loop syncs
+    # every counter to the global step each iteration and anchors the
+    # schedule to the first point past the VQ warmup; a level inactive at
+    # a schedule point fires at its next active batch without shifting
+    # the schedule.
+    first_reset = _reset_offset(2500, cfg.train.val_interval)
+    while first_reset <= v.warmup_steps:
+        first_reset += 2500
+    for rvq in model.rvqs:
+        for lev in rvq.levels:
+            if lev.reset_interval > 0:
+                lev.next_reset = first_reset
+
     Ls_full = torch.tensor([sp.depth for sp in specs], device=device)[None]
 
     if cfg.train.freeze_codec:        # only the selector trains
@@ -346,7 +355,13 @@ def train(cfg: Config, gpu=0):
             for rvq in model.rvqs:
                 for lev in rvq.levels:
                     lev.reset_interval = 1 << 30
+                    lev.next_reset = None    # no pending schedule point
             print(f"step {step}: dead-code resets frozen", flush=True)
+        # keep every level's counter on the trainer's clock (see the
+        # schedule anchor above the loop)
+        for rvq in model.rvqs:
+            for lev in rvq.levels:
+                lev.step.fill_(step)
         if v.ema_decay_final is not None:
             s0, s1 = v.decay_ramp
             f = min(1.0, max(0.0, (step - s0) / max(s1 - s0, 1)))
