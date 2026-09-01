@@ -336,8 +336,15 @@ def rd_err_figure(model, source, val_s, tuples, step, px, side_bits=0.0,
     specs = model.specs
     bits = np.array([tuple_bits(specs, t, side_bits) for t in tuples]) / px
     order = np.argsort(bits)
+
+    def _q(a, q):
+        # torch.quantile refuses tensors over 2^24 elements, and pooling
+        # every valid pixel of the val subset is far past that; kthvalue
+        # is exact and unbounded
+        return a.kthvalue(max(1, int(round(q * a.numel())))).values
+
     series = {"MAE": lambda a: a.mean(), "RMSE": lambda a: a.pow(2).mean().sqrt(),
-              "p90": lambda a: a.quantile(0.90), "p99": lambda a: a.quantile(0.99)}
+              "p90": lambda a: _q(a, 0.90), "p99": lambda a: _q(a, 0.99)}
     fig, ax = plt.subplots(figsize=(6.5, 4.5), constrained_layout=True)
     for name, fn in series.items():
         y = [float(fn(torch.cat(errs[tname(t)]))) for t in tuples]
