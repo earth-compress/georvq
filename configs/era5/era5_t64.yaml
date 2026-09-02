@@ -32,7 +32,11 @@ data:
 model:
   window: 64
   bands: 37
-  tiers: ["1:16:512:20", "4:32:1024:20", "16:32:2048:20"]
+  # 128-D everywhere (2026-09-02): the two-tier probe showed the same
+  # 180 coarse codebook bits carrying R2 0.979 at 128-D against 0.936
+  # at 16-D -- the d95-derived widths undersold what a decoder can use
+  # from a cell, so width is no longer tied to the data's linear rank.
+  tiers: ["1:128:512:20", "4:128:1024:20", "16:128:2048:20"]
   depth_sampling: path
   min_depths: [15, 0, 0]   # the path starts at 15-0-0
   full_frac: 0.005
@@ -47,7 +51,9 @@ model:
     bf16_scores: true
     skip_masked: true
     reset_mode: split
-    warmup_steps: 500
+    # 3k unquantized with matryoshka truncation before the codebook
+    # init, so the wider latents settle before the books are fitted
+    warmup_steps: 3000
     # tree init cannot seed an empty leaf; per-code budget decouples the
     # tiers (32768 shared samples would give the 2048-code fine tier 16
     # vectors per centroid)
