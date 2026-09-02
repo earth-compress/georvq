@@ -41,7 +41,7 @@ import argparse
 import json
 import os
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 
 import numpy as np
 import pandas as pd
@@ -160,9 +160,17 @@ def open_store(out_dir, px, hours, levels, args):
     return root
 
 
-def fetch_var(ds, arco_name, ti0, hours, cubes, px, workers):
+def fetch_var(ds, arco_name, ti0, hours, cubes, px, workers,
+              stall_timeout=600):
     """One variable, one window: fetch `hours` global fields concurrently
-    and slice every cube from each. Returns fp32 (k, [L,] hours, px, px)."""
+    and slice every cube from each. Returns fp32 (k, [L,] hours, px, px).
+
+    A remote read can hang without raising, which the per-attempt retry
+    cannot see. When no fetch completes for stall_timeout seconds, the
+    outstanding hours are resubmitted on fresh threads and the stuck
+    futures abandoned; the executor is shut down without joining so an
+    abandoned thread cannot block the window (a duplicate late write of
+    the same hour is harmless)."""
     da = ds[arco_name]
     has_levels = "level" in da.dims
     k = len(cubes)
@@ -187,8 +195,30 @@ def fetch_var(ds, arco_name, ti0, hours, cubes, px, workers):
             else:
                 buf[ci, h] = crop
 
-    with ThreadPoolExecutor(max_workers=workers) as ex:
-        list(ex.map(one_hour, range(hours)))
+    ex = ThreadPoolExecutor(max_workers=workers)
+    tries = dict.fromkeys(range(hours), 1)
+    futs = {ex.submit(one_hour, h): h for h in range(hours)}
+    try:
+        while futs:
+            done, _ = wait(futs, timeout=stall_timeout,
+                           return_when=FIRST_COMPLETED)
+            if not done:
+                for f, h in list(futs.items()):
+                    if tries[h] >= 3:
+                        raise RuntimeError(
+                            f"{arco_name}: hour {h} stalled "
+                            f"{tries[h]} times")
+                    tries[h] += 1
+                    del futs[f]
+                    print(f"  ! {arco_name} hour {h} stalled "
+                          f">{stall_timeout}s, resubmitting", flush=True)
+                    futs[ex.submit(one_hour, h)] = h
+                continue
+            for f in done:
+                futs.pop(f)
+                f.result()
+    finally:
+        ex.shutdown(wait=False, cancel_futures=True)
     return buf
 
 
