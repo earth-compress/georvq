@@ -67,6 +67,13 @@ class TokenizerConfig(StrictModel):
 
 
 class DecoderConfig(StrictModel):
+    # "attn": mixing decoder + per-source pixel head read from the fine
+    # tokens. "tiersum": every present tier gets its own map head, the
+    # maps are bilinearly upsampled and summed, absent tiers contribute
+    # no tokens, and coarse-only rows skip attention entirely (see
+    # georvq/model/tiersum.py). tiersum requires map_px (one output map
+    # size per tier) and fill-order depth sampling.
+    kind: Literal["attn", "tiersum"] = "attn"
     dim: int = 384
     depth: int = 12
     heads: int = 8
@@ -75,6 +82,9 @@ class DecoderConfig(StrictModel):
     late_join: int = 0             # same contract as tokenizer.late_join
     head_dw: bool = False          # depthwise-separable head convs (8x fewer
                                    # MACs; smooths intra-window tile seams)
+    map_px: Optional[list[int]] = None   # tiersum: per-tier map size, px
+    solo_hidden: int = 512               # tiersum coarse-only MLP width
+    solo_layers: int = 3
 
 
 class VQConfig(StrictModel):
