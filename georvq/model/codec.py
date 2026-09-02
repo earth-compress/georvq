@@ -206,15 +206,31 @@ class PyramidCodec(nn.Module):
         else:
             self.stats_enc = self.stats_dec = None
 
-        head_in = PyramidAttnDecoder.head_in_dim(
-            self.specs, cfg.decoder.dim, cfg.decoder.cls_bridge)
-        self.decoder = PyramidAttnDecoder(
-            self.specs, head=source.build_head(cfg, head_in),
-            dim=cfg.decoder.dim, depth=cfg.decoder.depth,
-            heads=cfg.decoder.heads, cls_bridge=cfg.decoder.cls_bridge,
-            ff_ratio=cfg.ff_ratio, sigma_cond=cfg.sigma is not None,
-            sigma_freqs=cfg.sigma.freqs if cfg.sigma else 8,
-            late_join=cfg.decoder.late_join)
+        if cfg.decoder.kind == "tiersum":
+            assert cfg.decoder.map_px is not None, \
+                "decoder.kind=tiersum requires decoder.map_px"
+            assert cfg.sigma is None and cfg.local_attn is None, \
+                "tiersum supports neither stage-1 sigma mode nor local attention"
+            assert cfg.depth_sampling == "path", \
+                "tiersum groups rows by tier-presence prefix, which only " \
+                "fill-order (depth_sampling=path) training guarantees"
+            from georvq.model.tiersum import TierSumDecoder
+            self.decoder = TierSumDecoder(
+                self.specs, cfg.window, cfg.bands, dim=cfg.decoder.dim,
+                depth=cfg.decoder.depth, heads=cfg.decoder.heads,
+                ff_ratio=cfg.ff_ratio, map_px=cfg.decoder.map_px,
+                solo_hidden=cfg.decoder.solo_hidden,
+                solo_layers=cfg.decoder.solo_layers)
+        else:
+            head_in = PyramidAttnDecoder.head_in_dim(
+                self.specs, cfg.decoder.dim, cfg.decoder.cls_bridge)
+            self.decoder = PyramidAttnDecoder(
+                self.specs, head=source.build_head(cfg, head_in),
+                dim=cfg.decoder.dim, depth=cfg.decoder.depth,
+                heads=cfg.decoder.heads, cls_bridge=cfg.decoder.cls_bridge,
+                ff_ratio=cfg.ff_ratio, sigma_cond=cfg.sigma is not None,
+                sigma_freqs=cfg.sigma.freqs if cfg.sigma else 8,
+                late_join=cfg.decoder.late_join)
         if cfg.local_attn is not None:
             self.decoder.register_buffer(
                 "attn_mask", build_local_mask(self.specs, cfg.window,
