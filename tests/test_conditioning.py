@@ -36,6 +36,31 @@ def test_ancestor_map():
     assert m.tolist() == [0, 0, 1, 1, 0, 0, 1, 1, 2, 2, 3, 3, 2, 2, 3, 3]
 
 
+def test_child_slot_map():
+    from georvq.model.conditioning import child_slot_map
+    m = child_slot_map(4, 2)
+    # each 2x2 block of children enumerates slots 0..3 in raster order
+    assert m.tolist() == [0, 1, 0, 1, 2, 3, 2, 3, 0, 1, 0, 1, 2, 3, 2, 3]
+
+
+def test_child_pos_distinguishes_siblings():
+    """Without child_pos all children of one parent get identical inputs,
+    so their predictions are identical; with it they differ."""
+    specs = _specs3()
+    zs = _zs(specs)
+    B = zs[0].shape[0]
+    recons = [zs[0]]
+    depths = [torch.full((B,), specs[0].depth, dtype=torch.long)]
+    for flag in (False, True):
+        torch.manual_seed(3)
+        tp = TierPredictor(specs, loc_dim=0, child_pos=flag)
+        for p in tp.predictors:      # defeat the zero-init on the last layer
+            nn.init.normal_(p[-1].weight, std=0.05)
+        pred = tp._predict(1, recons, depths, None, B)
+        same = torch.allclose(pred[:, 0], pred[:, 1], atol=1e-7)
+        assert same != flag
+
+
 def test_cascade_cumulative_vs_masked():
     """Full-depth masked recon must equal the cumulative recon's last slice."""
     specs = _specs3()

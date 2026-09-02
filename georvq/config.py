@@ -241,6 +241,12 @@ class CascadeConfig(StrictModel):
     location: Optional[LocationConfig] = Field(default_factory=LocationConfig)
     hidden: int = 512
     layers: int = 3
+    # Append each child cell's one-hot position within its parent on the
+    # immediately-coarser grid, so the 16 children of one parent get
+    # DISTINCT predictions. Without it the predictor's inputs are
+    # identical across siblings and the prediction is constant within a
+    # parent, which can only remove the child tier's per-parent mean.
+    child_pos: bool = False
 
 
 class SelectConfig(StrictModel):
