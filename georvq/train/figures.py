@@ -214,13 +214,19 @@ def _recon_figure(model, source, val_s, step, n, mins, tuples, val_loc,
     rows = {"orig": val_x}
     for name, t in pts.items():
         rows[f"{name}\n({tname(t)})"] = model.eval_tuple(cums, t, val_x)
-    basis = preview.basis(val_x, val_valid)
+    # One basis PER SAMPLE, shared down its column: a basis fitted across
+    # all samples spends its components on the between-sample spread,
+    # which flattens each window's internal variation to low contrast.
+    # Within a column the original and every reconstruction still share
+    # the basis, which is the comparison the figure exists for.
+    bases = [preview.basis(val_x[c:c + 1], val_valid[c:c + 1])
+             for c in range(n)]
     fig, axes = plt.subplots(len(rows), n, figsize=(1.3 * n, 1.45 * len(rows)),
                              constrained_layout=True)
     for r, (name, t) in enumerate(rows.items()):
-        rgb = preview.render(t, basis)
         for c in range(n):
-            axes[r, c].imshow(rgb[c]); axes[r, c].axis("off")
+            rgb = preview.render(t[c:c + 1], bases[c])
+            axes[r, c].imshow(rgb[0]); axes[r, c].axis("off")
         axes[r, 0].axis("on"); axes[r, 0].set_xticks([])
         axes[r, 0].set_yticks([]); axes[r, 0].set_ylabel(name, fontsize=7)
     fig.suptitle(f"step {step}", fontsize=9)
