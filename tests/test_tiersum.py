@@ -58,6 +58,33 @@ def test_solo_rows_match_solo_only_batch(ts_cfg):
         assert torch.allclose(mixed[0], alone[0], atol=1e-6)
 
 
+def test_feat_sum_render_keeps_semantics(ts_cfg):
+    """sum_feat mode: absence semantics survive the shared renderer, and
+    the FiLM zero-init means conditioning starts neutral but reaches the
+    renderer's gradient."""
+    raw = ts_cfg.model_dump(mode="json")
+    raw["model"]["decoder"]["sum_feat"] = 16
+    cfg = Config.model_validate(raw)
+    torch.manual_seed(0)
+    m = build_model(cfg, torch.device("cpu"))
+    x, v = _batch(cfg)
+    with torch.no_grad():
+        _, cums = m.level_cumsums(x, valid=v)
+        Ls = torch.tensor([[3, 0], [3, 1], [3, 3], [2, 0]])
+        zqs = [c[torch.arange(4), :, Ls[:, i]] for i, c in enumerate(cums)]
+        out = m.decode(zqs, Ls, valid=v)
+        assert out.shape == x.shape
+        z2 = [q.clone() for q in zqs]
+        z2[1] = torch.randn_like(z2[1])
+        out2 = m.decode(z2, Ls, valid=v)
+        absent = Ls[:, 1] == 0
+        assert torch.allclose(out[absent], out2[absent], atol=1e-6)
+    out, commit, _ = m.forward_train(x, Ls, valid=v)
+    (out.pow(2).mean() + commit).backward()
+    assert m.decoder.rc1.weight.grad is not None
+    assert m.decoder.film.weight.grad is not None
+
+
 def test_forward_train_backward_reaches_all_paths(ts_cfg):
     torch.manual_seed(0)
     m = build_model(ts_cfg, torch.device("cpu"))

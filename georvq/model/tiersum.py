@@ -18,6 +18,15 @@ its own projection weights -- separate from the transformer-path coarse
 head, whose input is a token shaped by interaction with the finer
 tiers.
 
+With `sum_feat`, the tiers communicate after the sum: each head emits a
+`sum_feat`-channel feature map instead of bands, the summed features go
+through a small shared conv stack that renders bands, and the stack is
+FiLM-conditioned on the depth-thermometer (+stats) vector so it knows
+how quantized the composite it is looking at is. The renderer is shared
+by every presence group, the solo path included, so the coarse-only
+readout stops being a fully separate head. Zero-init keeps the FiLM
+neutral at the start.
+
 Limitations (asserted at build time): no cls_bridge, no local attention
 mask, no sigma/stage-1 mode, and the output is a plain dense band map
 (no per-source head, no unit-norm fields).
@@ -33,9 +42,9 @@ from georvq.model.layers import thermometer
 
 
 class TierSumDecoder(nn.Module):
-    def __init__(self, specs, window, bands, dim=256, depth=8, heads=8,
+    def __init__(self, specs, window, bands, dim=256, heads=8, depth=8,
                  ff_ratio=2.0, map_px=(8, 8, 64), solo_hidden=512,
-                 solo_layers=3):
+                 solo_layers=3, sum_feat=None):
         super().__init__()
         assert len(map_px) == len(specs), "map_px needs one entry per tier"
         for sp, mp in zip(specs, map_px):
@@ -44,6 +53,8 @@ class TierSumDecoder(nn.Module):
         self.specs = specs
         self.window = window
         self.bands = bands
+        self.sum_feat = sum_feat
+        self.ch = sum_feat or bands      # channels the tier maps carry
         self.map_px = tuple(map_px)
         self.grad_ckpt = False        # set by the factory from train cfg
         n_tokens = sum(sp.cells for sp in specs)
@@ -60,7 +71,7 @@ class TierSumDecoder(nn.Module):
         # per-tier map heads (transformer path); each token emits its
         # (map_px/grid)^2-pixel tile of the tier's map
         self.heads = nn.ModuleList([
-            nn.Linear(dim, (mp // sp.grid) ** 2 * bands)
+            nn.Linear(dim, (mp // sp.grid) ** 2 * self.ch)
             for sp, mp in zip(specs, map_px)])
         # coarse-only path: quantized coarse vector (+ conditioning)
         # straight to the coarse map, no attention
@@ -68,8 +79,18 @@ class TierSumDecoder(nn.Module):
         for _ in range(solo_layers - 1):
             seq += [nn.Linear(d_in, solo_hidden), nn.GELU()]
             d_in = solo_hidden
-        seq += [nn.Linear(d_in, map_px[0] ** 2 * bands)]
+        seq += [nn.Linear(d_in, map_px[0] ** 2 * self.ch)]
         self.solo = nn.Sequential(*seq)
+        if sum_feat:
+            # shared post-sum renderer: the tiers' feature maps interact
+            # here, FiLM-conditioned on the depth/stats vector (zero-init
+            # -> neutral modulation at the start)
+            self.rc1 = nn.Conv2d(sum_feat, sum_feat, 3, 1, 1)
+            self.rc2 = nn.Conv2d(sum_feat, sum_feat, 3, 1, 1)
+            self.rc3 = nn.Conv2d(sum_feat, bands, 3, 1, 1)
+            self.film = nn.Linear(dim, 4 * sum_feat)
+            nn.init.zeros_(self.film.weight)
+            nn.init.zeros_(self.film.bias)
 
     def _cond(self, Ls, stats=None):
         c = self.cond_mlp(torch.cat(
@@ -78,10 +99,19 @@ class TierSumDecoder(nn.Module):
         return c if stats is None else c + stats
 
     def _tile(self, flat, grid, mp):
-        """(B, cells, p*p*bands) token tiles -> (B, bands, mp, mp) map."""
+        """(B, cells, p*p*ch) token tiles -> (B, ch, mp, mp) map."""
         B, p = flat.shape[0], mp // grid
-        f = flat.view(B, grid, grid, self.bands, p, p)
-        return f.permute(0, 3, 1, 4, 2, 5).reshape(B, self.bands, mp, mp)
+        f = flat.view(B, grid, grid, self.ch, p, p)
+        return f.permute(0, 3, 1, 4, 2, 5).reshape(B, self.ch, mp, mp)
+
+    def _render(self, m, c):
+        """Summed feature maps -> bands, FiLM'd on the conditioning."""
+        g1, b1, g2, b2 = self.film(c).chunk(4, -1)
+        h = self.rc1(m)
+        h = F.gelu(h * (1 + g1[:, :, None, None]) + b1[:, :, None, None])
+        h = self.rc2(h)
+        h = F.gelu(h * (1 + g2[:, :, None, None]) + b2[:, :, None, None])
+        return self.rc3(h)
 
     def _up(self, m):
         if m.shape[-1] == self.window:
@@ -126,7 +156,7 @@ class TierSumDecoder(nn.Module):
         B, dev = Ls.shape[0], Ls.device
         c = self._cond(Ls, stats)
         n_present = (Ls > 0).long().sum(1)          # prefix length per row
-        out = zqs[0].new_zeros(B, self.bands, self.window, self.window)
+        out = zqs[0].new_zeros(B, self.ch, self.window, self.window)
 
         solo = n_present <= 1
         if bool(solo.any()):
@@ -138,4 +168,6 @@ class TierSumDecoder(nn.Module):
             rows = n_present == k
             if bool(rows.any()):
                 out[rows] = self._attn_group(zqs, rows, k, c).to(out.dtype)
+        if self.sum_feat:
+            out = self._render(out, c)
         return out
