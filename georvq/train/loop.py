@@ -503,8 +503,15 @@ def train(cfg: Config, gpu=0):
         aux = getattr(model.decoder, "last_aux", None)
         if aux:
             for rows_i, amap in aux:
-                al, _ = source.recon_stats(amap.float(), x[rows_i],
-                                           valid[rows_i])
+                am = amap.float()
+                if model.stats_cond is not None \
+                        and model.stats_cond.subtract_mean:
+                    # decode() uncenters only the returned output; the aux
+                    # exits live in the same centred space and must be
+                    # restored before scoring against the full field
+                    from georvq.model.stats_cond import uncenter
+                    am = uncenter(am, st[rows_i].float(), valid[rows_i])
+                al, _ = source.recon_stats(am, x[rows_i], valid[rows_i])
                 recon_loss = recon_loss + al
             # mean over exit terms, not sum: keeps the exits at 1:1:1 while
             # holding the loss (and gradient) scale of a single-exit run,
