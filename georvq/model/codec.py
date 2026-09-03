@@ -220,7 +220,8 @@ class PyramidCodec(nn.Module):
                 depth=cfg.decoder.depth, heads=cfg.decoder.heads,
                 ff_ratio=cfg.ff_ratio, map_px=cfg.decoder.map_px,
                 solo_hidden=cfg.decoder.solo_hidden,
-                solo_layers=cfg.decoder.solo_layers)
+                solo_layers=cfg.decoder.solo_layers,
+                sum_feat=cfg.decoder.sum_feat)
         else:
             head_in = PyramidAttnDecoder.head_in_dim(
                 self.specs, cfg.decoder.dim, cfg.decoder.cls_bridge)

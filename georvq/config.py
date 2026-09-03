@@ -85,6 +85,10 @@ class DecoderConfig(StrictModel):
     map_px: Optional[list[int]] = None   # tiersum: per-tier map size, px
     solo_hidden: int = 512               # tiersum coarse-only MLP width
     solo_layers: int = 3
+    # tiersum: sum the tiers in a feature space this many channels wide,
+    # then render bands through a shared conv stack FiLM-conditioned on
+    # the depth thermometers. None = sum band maps directly.
+    sum_feat: Optional[int] = None
 
 
 class VQConfig(StrictModel):
