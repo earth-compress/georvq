@@ -1,0 +1,14 @@
+# The ladder run with latents doubled to 256-D on every tier, K and
+# depths unchanged -- the dimension-starvation test. The 13-level run's
+# ceiling beat the 37-level run's by 1.6x at matched steps with only a
+# 1.02x pooled-sd factor, and a fine cell folds 4x4 px x 37 levels =
+# 592 values into its latent (4.6x squeeze at 128-D, 2.3x here). Rate
+# is identical (bits depend on K and depth only), so any gain over
+# era5_t64_ladder is pure latent capacity.
+inherit: era5_t64_ladder.yaml
+
+model:
+  tiers: ["1:256:512:20", "4:256:1024:20", "16:256:2048:20"]
+
+log:
+  run_tag: era5_t64_ladder256
