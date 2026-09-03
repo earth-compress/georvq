@@ -502,6 +502,12 @@ class LogConfig(StrictModel):
     run_tag: str = "dev"
     wandb: bool = True
     wandb_project: str = "georvq"
+    # Deferred reporting: figure decodes are harvested on the GPU, then
+    # percentiles/matplotlib/wandb uploads render on a background worker
+    # while training resumes -- recovers most of the GPU idle time at
+    # every fig-interval validation. false = the old synchronous path.
+    # Figures log against their own `figs/step` metric in this mode.
+    async_report: bool = True
     out_dir: Path = Path("checkpoints")
     report: ReportConfig = Field(default_factory=ReportConfig)
 
