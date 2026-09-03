@@ -10,6 +10,10 @@
 inherit: era5_t64_statscond_std.yaml
 
 model:
+  vq:
+    # deep supervision already trains every prefix exit on every row, so
+    # warmup tier truncation would only rob stages 1-2 of warmup traffic
+    warmup_truncate: false
   decoder:
     kind: ladder
     dim: 256
