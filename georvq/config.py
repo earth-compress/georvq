@@ -73,7 +73,11 @@ class DecoderConfig(StrictModel):
     # no tokens, and coarse-only rows skip attention entirely (see
     # georvq/model/tiersum.py). tiersum requires map_px (one output map
     # size per tier) and fill-order depth sampling.
-    kind: Literal["attn", "tiersum"] = "attn"
+    # "ladder": staged decoding with one exit per rate-ladder prefix and
+    # deep supervision of every licensed exit (georvq/model/ladder.py);
+    # map_px gives each exit head's feature-map resolution and
+    # solo_layers the coarse stem depth.
+    kind: Literal["attn", "tiersum", "ladder"] = "attn"
     dim: int = 384
     depth: int = 12
     heads: int = 8
