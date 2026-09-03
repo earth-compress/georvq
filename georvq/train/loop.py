@@ -30,9 +30,9 @@ from georvq.model.vqinit import residual_init_rvq
 from georvq.repro import (run_metadata, save_checkpoint, seed_all,
                           write_resolved_config)
 from georvq.train.figures import (codebook_figure, cosdist_figure,
-                                   error_hist_figure, rd_err_figure,
-                                   rd_figure,
-                                   recon_figure, reset_figure)
+                                  error_hist_harvest, error_hist_render,
+                                  rd_err_harvest, rd_err_render, rd_figure,
+                                  recon_harvest, recon_render, reset_figure)
 from georvq.sources.report import resolve_report
 from georvq.train.validate import canonical_tuples, load_rd_ref, tname, validate
 from georvq.train import dist as D
@@ -322,10 +322,19 @@ def train(cfg: Config, gpu=0):
     sched = torch.optim.lr_scheduler.LambdaLR(opt, lr_fn)
 
     use_wandb = cfg.log.wandb and D.is_main()
+    reporter = None
     if use_wandb:
         import wandb
         wandb.init(project=cfg.log.wandb_project, name=cfg.log.run_tag,
                    config=cfg.model_dump(mode="json") | run_metadata(cfg))
+        if cfg.log.async_report:
+            # figures render on a background worker after the training
+            # thread has moved past `step`, so they log against their own
+            # monotone metric instead of the global step
+            from georvq.train.report import AsyncReporter
+            reporter = AsyncReporter()
+            wandb.define_metric("figs/step")
+            wandb.define_metric("figs/*", step_metric="figs/step")
 
 
     select_weight = (cfg.model.conditioning.weight
@@ -707,66 +716,87 @@ def train(cfg: Config, gpu=0):
                     wandb.log(scalars, step=step)
                 else:
                     sb = model.side_bits()
-                    open_figs = []
-                    if report.has_figure("rd"):
-                        f1 = rd_figure(cbt, vs, specs, val_ts, step, report,
-                                       ref_fronts=ref_fronts,
-                                       px=cfg.model.window ** 2,
-                                       side_bits=sb)
-                        scalars["figs/rd"] = wandb.Image(f1)
-                        open_figs.append(f1)
-                    if report.has_figure("rd_log"):
-                        f1b = rd_figure(cbt, vs, specs, val_ts, step, report,
-                                        ref_fronts=ref_fronts,
-                                        px=cfg.model.window ** 2,
-                                        dist_log=True, side_bits=sb)
-                        scalars["figs/rd_log"] = wandb.Image(f1b)
-                        open_figs.append(f1b)
-                    if report.has_figure("codebook"):
-                        f2 = codebook_figure(vs, specs, step)
-                        scalars["figs/codebook"] = wandb.Image(f2)
-                        open_figs.append(f2)
-                    if "cosdist" in vs and report.has_figure("cosdist"):
-                        f4 = cosdist_figure(vs["cosdist"], None, specs, step)
-                        scalars["figs/cosdist_by_level"] = wandb.Image(f4)
-                        open_figs.append(f4)
-                    wandb.log(scalars, step=step)
-                    for f in open_figs:
-                        plt.close(f)
                     fig_step = (step % cfg.train.fig_interval == 0
                                 or step == cfg.train.steps)
                     rt = ([[int(x_) for x_ in t.split("-")]
                            for t in cfg.eval.recon_tuples]
                           if cfg.eval.recon_tuples else None)
+                    # HARVEST: every decode the figures need runs now,
+                    # while the model is at hand; the payloads are plain
+                    # subsampled CPU tensors and the model is not touched
+                    # again after this point
+                    payloads = {}
                     if report.has_figure("recon") and fig_step:
-                        f3 = recon_figure(model, source, val_s, step,
-                                          mins=mins, tuples=rt,
-                                          val_loc=val_loc,
-                                          preview=report.preview)
-                        wandb.log({"figs/recon": wandb.Image(f3)}, step=step)
-                        plt.close(f3)
+                        payloads["recon"] = recon_harvest(
+                            model, source, val_s, mins=mins, tuples=rt,
+                            val_loc=val_loc)
                     if (report.has_figure("rd_err") and fig_step
                             and source.normalizer(cfg.model) is not None):
-                        # rate vs physical-unit error (MAE/RMSE/p90/p99)
-                        # over the same operating points as the R-D front
-                        f6 = rd_err_figure(model, source, val_s, val_ts,
-                                           step, px=cfg.model.window ** 2,
-                                           side_bits=sb,
-                                           unit=report.units,
-                                           val_loc=val_loc)
-                        wandb.log({"figs/rd_err": wandb.Image(f6)},
-                                  step=step)
-                        plt.close(f6)
+                        payloads["rd_err"] = rd_err_harvest(
+                            model, source, val_s, val_ts,
+                            px=cfg.model.window ** 2, side_bits=sb,
+                            val_loc=val_loc)
                     if report.has_figure("error_hist") and fig_step:
-                        # signed error, in model space and -- where the
-                        # source normalizes -- in its own physical unit
-                        f5 = error_hist_figure(model, source, val_s, step,
-                                               mins=mins, tuples=rt,
-                                               val_loc=val_loc,
-                                               unit=report.units)
-                        wandb.log({"figs/error_hist": wandb.Image(f5)},
-                                  step=step)
-                        plt.close(f5)
+                        payloads["hist"] = error_hist_harvest(
+                            model, source, val_s, tuples=rt, mins=mins,
+                            val_loc=val_loc)
+                    wandb.log(scalars, step=step)  # scalars stay sync
+
+                    # RENDER: CPU only (percentiles, matplotlib, upload).
+                    # With async_report it runs on the worker while the
+                    # GPU goes back to training; otherwise inline.
+                    vs_snap, cbt_snap = dict(vs), dict(cbt)
+                    ts_snap = [list(t) for t in val_ts]
+
+                    def _render(step=step, payloads=payloads, vs=vs_snap,
+                                cbt=cbt_snap, val_ts=ts_snap, sb=sb,
+                                deferred=reporter is not None):
+                        figs = {"figs/step": step} if deferred else {}
+                        open_figs = []
+
+                        def add(key, f):
+                            figs[key] = wandb.Image(f)
+                            open_figs.append(f)
+                        if report.has_figure("rd"):
+                            add("figs/rd", rd_figure(
+                                cbt, vs, specs, val_ts, step, report,
+                                ref_fronts=ref_fronts,
+                                px=cfg.model.window ** 2, side_bits=sb))
+                        if report.has_figure("rd_log"):
+                            add("figs/rd_log", rd_figure(
+                                cbt, vs, specs, val_ts, step, report,
+                                ref_fronts=ref_fronts,
+                                px=cfg.model.window ** 2, dist_log=True,
+                                side_bits=sb))
+                        if report.has_figure("codebook"):
+                            add("figs/codebook", codebook_figure(
+                                vs, specs, step))
+                        if "cosdist" in vs and report.has_figure("cosdist"):
+                            add("figs/cosdist_by_level", cosdist_figure(
+                                vs["cosdist"], None, specs, step))
+                        if "recon" in payloads:
+                            add("figs/recon", recon_render(
+                                payloads["recon"], step,
+                                preview=report.preview))
+                        if "rd_err" in payloads:
+                            # rate vs physical-unit error (MAE/RMSE/
+                            # p90/p99) over the R-D front's points
+                            add("figs/rd_err", rd_err_render(
+                                payloads["rd_err"], step,
+                                unit=report.units))
+                        if "hist" in payloads:
+                            add("figs/error_hist", error_hist_render(
+                                payloads["hist"], step, unit=report.units))
+                        if deferred:
+                            wandb.log(figs)
+                        else:
+                            wandb.log(figs, step=step)
+                        for f in open_figs:
+                            plt.close(f)
+                    if reporter is not None:
+                        reporter.submit(_render)
+                    else:
+                        _render()
 
             # Track the ceiling during warmup: cos_full would be the
             # model scored against unfitted books, so model_best.pt would
@@ -806,6 +836,9 @@ def train(cfg: Config, gpu=0):
                 # off this name; keep it where it still means the same
                 blob["cos_by_tuple"] = cbt
             json.dump(blob, f, indent=1)
+    if reporter is not None and not reporter.close():
+        print("warning: report worker did not flush before timeout",
+              flush=True)
     pool.shutdown()
     D.cleanup()
     print(f"done -> {run_dir}", flush=True)
