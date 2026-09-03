@@ -1,0 +1,21 @@
+# The tessera release-candidate architecture (tessera_vq8_k256_statscond:
+# same tiers, stats channel, path sampling, from-scratch recipe) with the
+# tier-sum decoder from the ERA5 work: per-tier map heads summed in a
+# 64-channel feature space, a shared FiLM-conditioned conv renderer, no
+# empty relay tokens, and a transformer-free coarse-only path. On ERA5
+# the layout converged ~4x faster at an equal-or-better ceiling; this
+# run asks whether that transfers to an embedding field whose sub-4px
+# energy is 46% rather than 0.15%.
+inherit: tessera_vq8_k256_statscond.yaml
+
+model:
+  decoder:
+    kind: tiersum
+    dim: 576
+    depth: 12
+    heads: 8
+    map_px: [8, 8, 64]
+    sum_feat: 64
+
+log:
+  run_tag: tessera_tiersum
