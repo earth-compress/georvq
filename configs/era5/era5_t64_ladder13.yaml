@@ -1,0 +1,16 @@
+# The ladder run repeated on the 13 standard pressure levels (50..1000
+# hPa) instead of all 37 -- the subset most reanalysis users work with.
+# Same architecture, tiers, rate ladder and schedule as era5_t64_ladder,
+# so the comparison reads directly: if this model's quality on the 13
+# levels matches the 37-level model's quality restricted to the same 13,
+# the other 24 levels ride along at no cost in the full model.
+inherit: era5_t64_ladder.yaml
+
+data:
+  source: "era5:t@std13"
+
+model:
+  bands: 13
+
+log:
+  run_tag: era5_t64_ladder13

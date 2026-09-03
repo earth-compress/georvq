@@ -49,12 +49,28 @@ class _FixedNormalizer:
         return x * self._sd.to(x.device) + self._mu.to(x.device)
 
 
+# Named level subsets, as indices into the store's ascending 37-level
+# axis [1..1000 hPa]. "std13" is the classic 13-level set (50, 100,
+# 150, 200, 250, 300, 400, 500, 600, 700, 850, 925, 1000 hPa) most
+# reanalysis users work with. Selected as "era5:<var>@<subset>".
+_LEVEL_SUBSETS = {
+    "std13": [8, 10, 12, 14, 16, 17, 19, 21, 23, 25, 30, 33, 36],
+}
+
+
 class Era5Source(Source):
     name = "era5"
     grid_period = 1
 
     def __init__(self, model_cfg, var="t"):
         super().__init__(model_cfg)
+        self._levels = None
+        if "@" in var:
+            var, subset = var.split("@", 1)
+            if subset not in _LEVEL_SUBSETS:
+                raise KeyError(f"unknown era5 level subset {subset!r}; "
+                               f"have {sorted(_LEVEL_SUBSETS)}")
+            self._levels = _LEVEL_SUBSETS[subset]
         self.var = var
         with open(_STATS_PATH) as f:
             stats = json.load(f)
@@ -63,17 +79,25 @@ class Era5Source(Source):
                 f"no standardization moments for era5 variable {var!r} in "
                 f"{_STATS_PATH}; have {sorted(stats)}")
         s = stats[var]
-        if len(s["mean"]) != model_cfg.bands:
+        mean, std = s["mean"], s["std"]
+        if self._levels is not None:
+            mean = [mean[i] for i in self._levels]
+            std = [std[i] for i in self._levels]
+        if len(mean) != model_cfg.bands:
             raise ValueError(
-                f"era5:{var} has {len(s['mean'])} levels but model.bands="
+                f"era5:{var} has {len(mean)} levels but model.bands="
                 f"{model_cfg.bands}")
-        self._mu = torch.tensor(s["mean"]).view(1, -1, 1, 1)
-        self._sd = torch.tensor(s["std"]).clamp_min(1e-12).view(1, -1, 1, 1)
+        self._mu = torch.tensor(mean).view(1, -1, 1, 1)
+        self._sd = torch.tensor(std).clamp_min(1e-12).view(1, -1, 1, 1)
 
     def prep(self, raw, device):
         """float32 (B, levels, W, W) physical units -> per-level
-        standardized floats. ERA5 is gap-free, so validity is all-true."""
+        standardized floats. ERA5 is gap-free, so validity is all-true.
+        With a level subset, the store still serves all 37 levels and
+        the unused ones are dropped here."""
         x = raw.to(device, non_blocking=True).float()
+        if self._levels is not None and x.shape[1] != len(self._levels):
+            x = x[:, self._levels]
         if self._mu.device != x.device:
             self._mu = self._mu.to(x.device)
             self._sd = self._sd.to(x.device)
