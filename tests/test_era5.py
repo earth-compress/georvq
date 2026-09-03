@@ -40,6 +40,23 @@ def test_prep_standardizes_per_level(era5_cfg):
     assert m.abs().max() < 0.1 and (v - 1).abs().max() < 0.1
 
 
+def test_level_subset_selects_the_right_channels(era5_cfg):
+    from georvq.sources.era5 import _LEVEL_SUBSETS
+    idx = _LEVEL_SUBSETS["std13"]
+    cfg13 = era5_cfg.model.model_copy(update={"bands": 13})
+    src = get_source("era5:t@std13", cfg13)
+    # encode each level's index into its value; prep must pick exactly
+    # the subset levels (then standardize with the subset moments)
+    raw = torch.arange(37).float().view(1, 37, 1, 1).expand(2, 37, 4, 4)
+    x, valid = src.prep(raw, "cpu")
+    assert x.shape == (2, 13, 4, 4)
+    back = x * src._sd + src._mu
+    assert torch.allclose(back[0, :, 0, 0], torch.tensor(idx).float(),
+                          atol=1e-4)
+    with pytest.raises(KeyError):
+        get_source("era5:t@nosuchset", cfg13)
+
+
 def test_unknown_variable_and_band_mismatch(era5_cfg):
     with pytest.raises(KeyError):
         get_source("era5:nosuchvar", era5_cfg.model)
