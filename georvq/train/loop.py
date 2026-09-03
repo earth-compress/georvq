@@ -506,6 +506,10 @@ def train(cfg: Config, gpu=0):
                 al, _ = source.recon_stats(amap.float(), x[rows_i],
                                            valid[rows_i])
                 recon_loss = recon_loss + al
+            # mean over exit terms, not sum: keeps the exits at 1:1:1 while
+            # holding the loss (and gradient) scale of a single-exit run,
+            # so clip_norm keeps its meaning
+            recon_loss = recon_loss / (1 + len(aux))
             model.decoder.last_aux = None
         loss = recon_loss + commit_weight * commit + select_weight * select
         # rate term: entropy-model bits/px over a sub-batch (fp32, outside
