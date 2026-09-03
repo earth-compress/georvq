@@ -161,7 +161,7 @@ def open_store(out_dir, px, hours, levels, args):
 
 
 def fetch_var(ds, arco_name, ti0, hours, cubes, px, workers,
-              stall_timeout=600):
+              stall_timeout=180):
     """One variable, one window: fetch `hours` global fields concurrently
     and slice every cube from each. Returns fp32 (k, [L,] hours, px, px).
 
