@@ -498,6 +498,15 @@ def train(cfg: Config, gpu=0):
                 out = model.decode(zqs, Ls, st, valid)
             out = out.float()
         recon_loss, m = source.recon_stats(out, x, valid)
+        # ladder decoder: every exit a row's tuple licenses is supervised
+        # (1:1:1); `out` carries the deepest, the shallower ones are here
+        aux = getattr(model.decoder, "last_aux", None)
+        if aux:
+            for rows_i, amap in aux:
+                al, _ = source.recon_stats(amap.float(), x[rows_i],
+                                           valid[rows_i])
+                recon_loss = recon_loss + al
+            model.decoder.last_aux = None
         loss = recon_loss + commit_weight * commit + select_weight * select
         # rate term: entropy-model bits/px over a sub-batch (fp32, outside
         # autocast), ramped in over rate.warmup. Shares the encoder with the

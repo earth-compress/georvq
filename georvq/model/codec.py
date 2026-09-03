@@ -206,7 +206,22 @@ class PyramidCodec(nn.Module):
         else:
             self.stats_enc = self.stats_dec = None
 
-        if cfg.decoder.kind == "tiersum":
+        if cfg.decoder.kind == "ladder":
+            assert cfg.decoder.map_px is not None, \
+                "decoder.kind=ladder requires decoder.map_px"
+            assert cfg.sigma is None and cfg.local_attn is None, \
+                "ladder supports neither stage-1 sigma mode nor local attention"
+            assert cfg.depth_sampling == "path", \
+                "ladder exits follow the tier-presence prefix, which only " \
+                "fill-order (depth_sampling=path) training guarantees"
+            from georvq.model.ladder import LadderDecoder
+            self.decoder = LadderDecoder(
+                self.specs, cfg.window, cfg.bands, dim=cfg.decoder.dim,
+                depth=cfg.decoder.depth, heads=cfg.decoder.heads,
+                ff_ratio=cfg.ff_ratio, map_px=cfg.decoder.map_px,
+                head_feat=cfg.decoder.head_feat,
+                stem_layers=cfg.decoder.solo_layers)
+        elif cfg.decoder.kind == "tiersum":
             assert cfg.decoder.map_px is not None, \
                 "decoder.kind=tiersum requires decoder.map_px"
             assert cfg.sigma is None and cfg.local_attn is None, \
