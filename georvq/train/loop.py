@@ -357,6 +357,7 @@ def train(cfg: Config, gpu=0):
     best_q = -math.inf if qm.higher_better else math.inf
     nonfinite_steps = 0
     best_is_quantized = False   # warmup selects on the ceiling; see below
+    best_ceil_guard = -math.inf if report.quality.higher_better else math.inf
     vs, cbt = {}, {}
     for step in range(1, cfg.train.steps + 1):
         if enc_frozen and step > cfg.train.freeze_encoder_steps:
@@ -618,6 +619,9 @@ def train(cfg: Config, gpu=0):
                     gnorm > v.clip_norm)
                 log["train/nonfinite_steps"] = nonfinite_steps
             log.update({f"train/{k}": float(val) for k, val in m.items()})
+            # per-stage activation maxima (ladder): the latch precursor
+            for k_, v_ in getattr(model.decoder, "act_max", {}).items():
+                log[f"train/act_max_{k_}"] = v_
             if pool.cycle:
                 log["data/epochs"] = pool.epochs
                 log["data/tiles_streamed"] = pool.tiles_streamed
@@ -797,6 +801,30 @@ def train(cfg: Config, gpu=0):
                         reporter.submit(_render)
                     else:
                         _render()
+
+            # Collapse guard: a stage latch is a catastrophic ceiling drop
+            # that never recovers; trip on the FIRST validation past it.
+            ceil_q = vs[f"{qm.key}_ceiling"]
+            if cfg.train.guard_drop is not None:
+                worse = (best_ceil_guard - ceil_q if qm.higher_better
+                         else ceil_q - best_ceil_guard)
+                if worse > cfg.train.guard_drop:
+                    save_checkpoint(
+                        os.path.join(run_dir, "model_collapsed.pt"),
+                        model, cfg, step,
+                        {"quality_key": qm.key,
+                         f"{qm.key}_ceiling": ceil_q,
+                         "best_ceiling": best_ceil_guard})
+                    print(f"step {step}: COLLAPSE GUARD TRIPPED -- "
+                          f"{qm.key}_ceiling {ceil_q:.4f} vs running best "
+                          f"{best_ceil_guard:.4f} (guard_drop="
+                          f"{cfg.train.guard_drop}). Forensic state in "
+                          f"model_collapsed.pt; resume from model_best.pt "
+                          f"or the last periodic save.", flush=True)
+                    raise SystemExit(3)
+                best_ceil_guard = (max(best_ceil_guard, ceil_q)
+                                   if qm.higher_better
+                                   else min(best_ceil_guard, ceil_q))
 
             # Track the ceiling during warmup: cos_full would be the
             # model scored against unfitted books, so model_best.pt would

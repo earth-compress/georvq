@@ -141,12 +141,14 @@ class LadderDecoder(nn.Module):
         n_present = (Ls > 0).long().sum(1).clamp_min(1)
         out = None
         aux = []
+        act = {}                       # per-stage activation maxima
 
         # stage 0: every row, single token, no attention
         c0 = self._cond(0, Ls, stats)
         h = self.projs[0](zqs[0]) + self.pos[:, :1]
         for blk in self.stem:
             h = blk(h, c0)
+        act["stem"] = float(h.detach().abs().max())
         a_map = self.heads[0](h)
         out = a_map.new_zeros(B, a_map.shape[1], self.window, self.window)
         final0 = n_present == 1
@@ -167,10 +169,15 @@ class LadderDecoder(nn.Module):
             off += sp.cells
             h = self._run(self.stages[s - 1], torch.cat([h, t], 1),
                           self._cond(s, Ls, stats)[rows])
+            act[f"stage{s}"] = float(h.detach().abs().max())
             m = self.heads[s](h[:, -sp.cells:])
             final = n_present[rows] == s + 1
             out[rows[final]] = m[final].to(out.dtype)
             if self.training and (~final).any():
                 aux.append((rows[~final], m[~final]))
         self.last_aux = aux if self.training else None
+        # activation telemetry: the latch failure mode (activations blow
+        # up, norms saturate, the stage freezes) shows here as a rising
+        # max long before the val ceiling moves
+        self.act_max = act
         return out

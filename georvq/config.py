@@ -451,6 +451,13 @@ class TrainConfig(StrictModel):
     steps: int = 20000
     batch_windows: int = 512
     batch_ramp: Optional[BatchRamp] = None
+    # Collapse guard: abort (exit 3, after saving a forensic checkpoint)
+    # when the val ceiling falls this far below its running best. A
+    # stage latch (era5_t64_ladder @38k: ceiling 0.9994 -> 0.8025,
+    # frozen thereafter) trips it at the first validation instead of
+    # training dead weights for hours; benign spikes recover between
+    # validations and never trip it. None disables.
+    guard_drop: Optional[float] = 0.05
     amp: bool = True
     grad_ckpt: bool = False
     tf32: bool = True
