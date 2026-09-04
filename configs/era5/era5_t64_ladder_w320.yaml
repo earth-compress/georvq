@@ -1,0 +1,13 @@
+# Trunk-width test: the ladder run with the tokenizer widened 192 ->
+# 320 and everything else unchanged (128-D latents, same rate ladder).
+# Isolates the variable the ladder256 run confounded: if this improves
+# over era5_t64_ladder, the 192-D trunk was the binding constraint for
+# the 37-level column and the latent-width null stands; if it does
+# not, the trunk was not the pinch either.
+inherit: era5_t64_ladder.yaml
+
+model:
+  tokenizer: {dim: 320, depth: 6}
+
+log:
+  run_tag: era5_t64_ladder_w320

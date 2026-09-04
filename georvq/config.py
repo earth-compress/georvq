@@ -364,6 +364,17 @@ class ModelConfig(StrictModel):
         for m, t in zip(self.min_depths, self.tiers):
             assert 0 <= m <= t.depth, f"min depth {m} > tier depth {t.depth}"
         assert 0.0 <= self.full_frac <= 1.0
+        # The latents must be the TIGHTEST bottleneck in the model: a
+        # trunk narrower than a tier's latent caps that latent's usable
+        # rank and silently confounds any latent-width experiment (the
+        # era5_t64_ladder256 null result was exactly this).
+        widest = max(t.dim for t in self.tiers)
+        assert self.tokenizer.dim >= widest, \
+            f"tokenizer.dim {self.tokenizer.dim} < widest tier latent " \
+            f"{widest}: the encoder trunk would bottleneck the latents"
+        assert self.decoder.dim >= widest, \
+            f"decoder.dim {self.decoder.dim} < widest tier latent " \
+            f"{widest}: the decoder trunk would bottleneck the latents"
         assert (self.vq is None) != (self.sigma is None), \
             "set exactly one of model.vq (quantized) / model.sigma (stage-1 continuous)"
         if self.sigma is not None:
