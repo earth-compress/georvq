@@ -143,9 +143,17 @@ class LadderDecoder(nn.Module):
         aux = []
         act = {}                       # per-stage activation maxima
 
-        # stage 0: every row, single token, no attention
+        # stage 0: every row, single token, no attention. Input tokens
+        # are LayerNorm'd (parameter-free) before entering the stream:
+        # both observed latches began with a synchronized activation
+        # surge across every stage, i.e. magnitude entering through the
+        # shared inputs; bounding the stream's injection point closes
+        # that channel without touching the state dict.
         c0 = self._cond(0, Ls, stats)
-        h = self.projs[0](zqs[0]) + self.pos[:, :1]
+        act["cond"] = float(c0.detach().abs().max())
+        t0 = F.layer_norm(self.projs[0](zqs[0]), (self.pos.shape[-1],))
+        act["in0"] = float(t0.detach().abs().max())
+        h = t0 + self.pos[:, :1]
         for blk in self.stem:
             h = blk(h, c0)
         act["stem"] = float(h.detach().abs().max())
@@ -165,7 +173,9 @@ class LadderDecoder(nn.Module):
             if rows.numel() == 0:
                 break
             h = h[keep]
-            t = self.projs[s](zqs[s][rows]) + self.pos[:, off:off + sp.cells]
+            t = F.layer_norm(self.projs[s](zqs[s][rows]),
+                             (self.pos.shape[-1],)) \
+                + self.pos[:, off:off + sp.cells]
             off += sp.cells
             h = self._run(self.stages[s - 1], torch.cat([h, t], 1),
                           self._cond(s, Ls, stats)[rows])
