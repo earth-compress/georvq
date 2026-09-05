@@ -84,6 +84,8 @@ def test_deep_supervision_reaches_every_exit(ld_cfg):
     assert m.decoder.heads[0].to_patch.weight.grad is not None
     assert m.decoder.heads[1].to_patch.weight.grad is not None
     assert m.decoder.stages[0][0].mlp[0].weight.grad is not None
-    # activation telemetry populated for every stage that ran
-    assert set(m.decoder.act_max) == {"stem", "stage1"}
+    # activation telemetry populated for every stage that ran, plus the
+    # shared-input probes (conditioning and normalized input tokens)
+    assert {"stem", "stage1", "cond", "in0"} <= set(m.decoder.act_max)
+    assert "stage2" not in m.decoder.act_max   # no 3rd tier in this cfg
     assert all(v > 0 for v in m.decoder.act_max.values())
