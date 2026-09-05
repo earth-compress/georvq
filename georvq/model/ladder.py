@@ -40,10 +40,12 @@ from georvq.model.layers import AdaLNBlock, modulate, thermometer
 
 class FiLMMLPBlock(nn.Module):
     """Residual MLP block with AdaLN-Zero-style conditioning (the
-    attention-free sibling of AdaLNBlock, for the single-token stem)."""
+    attention-free sibling of AdaLNBlock, for the single-token stem).
+    `mod_cap` as in AdaLNBlock."""
 
-    def __init__(self, dim, cond_dim, ff_ratio=2.0):
+    def __init__(self, dim, cond_dim, ff_ratio=2.0, mod_cap=None):
         super().__init__()
+        self.mod_cap = mod_cap
         self.norm = nn.LayerNorm(dim, elementwise_affine=False, eps=1e-6)
         ff = int(dim * ff_ratio)
         self.mlp = nn.Sequential(nn.Linear(dim, ff), nn.GELU(),
@@ -53,7 +55,10 @@ class FiLMMLPBlock(nn.Module):
         nn.init.zeros_(self.ada[-1].bias)   # identity at init
 
     def forward(self, x, c):
-        s, sc, g = self.ada(c).chunk(3, dim=-1)
+        mods = self.ada(c)
+        if self.mod_cap is not None:
+            mods = self.mod_cap * torch.tanh(mods / self.mod_cap)
+        s, sc, g = mods.chunk(3, dim=-1)
         return x + g.unsqueeze(1) * self.mlp(
             modulate(self.norm(x), s, sc))
 
@@ -106,11 +111,15 @@ class LadderDecoder(nn.Module):
         self.cond_mlps = nn.ModuleList([
             nn.Sequential(nn.Linear(sp.depth, dim), nn.SiLU(),
                           nn.Linear(dim, dim)) for sp in specs])
+        # mod_cap 3.0 on every conditioned block: the latch forensics
+        # showed the modulation weights doubling until the stream
+        # saturated into the zero-output attractor
         self.stem = nn.ModuleList(
-            [FiLMMLPBlock(dim, dim, ff_ratio) for _ in range(stem_layers)])
+            [FiLMMLPBlock(dim, dim, ff_ratio, mod_cap=3.0)
+             for _ in range(stem_layers)])
         self.stages = nn.ModuleList([
             nn.ModuleList([AdaLNBlock(dim, heads, cond_dim=dim,
-                                      ff_ratio=ff_ratio)
+                                      ff_ratio=ff_ratio, mod_cap=3.0)
                            for _ in range(depth)])
             for _ in specs[1:]])
         self.heads = nn.ModuleList([
