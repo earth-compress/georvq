@@ -153,7 +153,8 @@ class PyramidCodec(nn.Module):
         self.tokenizer = ViTTokenizer(
             self.specs, cfg.window, cfg.bands, dim=cfg.tokenizer.dim,
             depth=cfg.tokenizer.depth, ff_ratio=cfg.ff_ratio,
-            late_join=cfg.tokenizer.late_join)
+            late_join=cfg.tokenizer.late_join,
+            embed_norm=cfg.tokenizer.embed_norm)
         if cfg.local_attn is not None:
             m = build_local_mask(self.specs, cfg.window, cfg.local_attn)
             # computed once; non-persistent so checkpoints stay unchanged

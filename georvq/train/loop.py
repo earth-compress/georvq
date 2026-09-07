@@ -321,6 +321,42 @@ def train(cfg: Config, gpu=0):
         return ramp * 0.5 * (1 + np.cos(np.pi * min(1.0, s / total)))
     sched = torch.optim.lr_scheduler.LambdaLR(opt, lr_fn)
 
+    if cfg.train.init_from:
+        ck = torch.load(cfg.train.init_from, map_location=device,
+                        weights_only=False)
+        if "opt" in ck:
+            try:
+                # moments only -- the lr SCHEDULE stays what this run's
+                # config says (resume recipes set their warmup on
+                # purpose); Adam's per-param step counters travel with
+                # the state, so bias correction does not restart either
+                opt.load_state_dict(ck["opt"])
+                print(f"restored optimizer state from "
+                      f"{cfg.train.init_from}", flush=True)
+            except (ValueError, KeyError) as e:
+                print(f"optimizer state in {cfg.train.init_from} does not "
+                      f"match this model ({e}); starting FRESH -- expect "
+                      f"full-lr updates while the moments warm, consider "
+                      f"optim.lr0_steps", flush=True)
+        else:
+            print(f"no optimizer state in {cfg.train.init_from}: fresh "
+                  f"AdamW. Zero second moments give every parameter "
+                  f"full-lr updates at first (the measured storm "
+                  f"trigger); consider optim.lr0_steps to warm the "
+                  f"moments at lr=0.", flush=True)
+        del ck
+
+    trap = None
+    if cfg.train.trap is not None and D.is_main():
+        from georvq.train.trap import Trap
+        assert cfg.model.vq is not None and cfg.model.vq.clip_norm, \
+            "trap needs model.vq.clip_norm for the gnorm"
+        trap = Trap(cfg.train.trap, model, run_dir)
+        print(f"trap armed: abs>{cfg.train.trap.gnorm_abs} and "
+              f"ratio>{cfg.train.trap.gnorm_ratio}x EMA, "
+              f"{cfg.train.trap.n_dumps} dumps, hold="
+              f"{cfg.train.trap.hold}", flush=True)
+
     use_wandb = cfg.log.wandb and D.is_main()
     reporter = None
     if use_wandb:
@@ -451,6 +487,7 @@ def train(cfg: Config, gpu=0):
         data_ms = 0.9 * data_ms + 0.1 * (time.time() - td) * 1000
         amp = torch.autocast(device.type, torch.bfloat16, enabled=amp_on)
         select = torch.zeros((), device=device)
+        pt = None
         if v.warmup_steps and step <= v.warmup_steps:
             with amp:
                 zs = model.encode_levels(x, st, valid)
@@ -474,6 +511,7 @@ def train(cfg: Config, gpu=0):
                 out = model.decode(zs, Lw, st, valid)
             out = out.float()
             commit = torch.zeros((), device=device)
+            Ls_used = Lw
         else:
             if cfg.model.depth_sampling == "path":
                 Ls = sample_path_depths(x.shape[0], specs, device, mins=mins,
@@ -507,10 +545,12 @@ def train(cfg: Config, gpu=0):
             with amp:
                 out = model.decode(zqs, Ls, st, valid)
             out = out.float()
+            Ls_used = Ls
         recon_loss, m = source.recon_stats(out, x, valid)
         # ladder decoder: every exit a row's tuple licenses is supervised
         # (1:1:1); `out` carries the deepest, the shallower ones are here
         aux = getattr(model.decoder, "last_aux", None)
+        aux_vals = []
         if aux:
             for rows_i, amap in aux:
                 am = amap.float()
@@ -522,6 +562,7 @@ def train(cfg: Config, gpu=0):
                     from georvq.model.stats_cond import uncenter
                     am = uncenter(am, st[rows_i].float(), valid[rows_i])
                 al, _ = source.recon_stats(am, x[rows_i], valid[rows_i])
+                aux_vals.append(float(al.detach()))
                 recon_loss = recon_loss + al
             # mean over exit terms, not sum: keeps the exits at 1:1:1 while
             # holding the loss (and gradient) scale of a single-exit run,
@@ -551,6 +592,26 @@ def train(cfg: Config, gpu=0):
         if v.clip_norm:
             gnorm = float(torch.nn.utils.clip_grad_norm_(
                 base_p + rate_p, v.clip_norm))
+            if trap is not None:
+                # observe (and possibly dump) BEFORE the non-finite skip
+                # zeroes the grads and before opt.step() moves the
+                # weights: a dump holds the exact pre-transition state
+                tscal = {"loss": float(loss.detach()),
+                         "recon": float(recon_loss.detach()),
+                         "commit": float(commit.detach()),
+                         "select": float(select.detach()),
+                         **{f"aux{i}": a for i, a in enumerate(aux_vals)},
+                         **{f"act_{k}": av for k, av in
+                            getattr(model.decoder, "act_max", {}).items()}}
+                if trap.observe(step, gnorm, opt, tscal):
+                    trap.dump(step, model, opt, sched,
+                              batch={"x": x, "valid": valid, "st": st,
+                                     "Ls": Ls_used, "loc": loc, "pt": pt},
+                              scalars={"gnorm": gnorm, **tscal})
+                    if trap.cfg.hold and trap.dumps == 1:
+                        # hold only at the first trip (the onset); later
+                        # trips in the same storm dump and move on
+                        trap.hold({"trap": trap})
             if not math.isfinite(gnorm):
                 # a non-finite gradient would write NaN/inf into Adam's
                 # moments and poison every later step, so drop it entirely
@@ -562,6 +623,10 @@ def train(cfg: Config, gpu=0):
                 sched.step()
                 continue
         opt.step(); sched.step()
+        if trap is not None:
+            trap.after_step(step, model, opt,
+                            {"x": x, "valid": valid, "st": st,
+                             "Ls": Ls_used, "loc": loc, "pt": pt})
 
         rst = {}
         for i, rvq in enumerate(model.rvqs):
@@ -622,6 +687,8 @@ def train(cfg: Config, gpu=0):
             # per-stage activation maxima (ladder): the latch precursor
             for k_, v_ in getattr(model.decoder, "act_max", {}).items():
                 log[f"train/act_max_{k_}"] = v_
+            for i_, a_ in enumerate(aux_vals):
+                log[f"train/aux_exit{i_}"] = a_
             if pool.cycle:
                 log["data/epochs"] = pool.epochs
                 log["data/tiles_streamed"] = pool.tiles_streamed
@@ -849,7 +916,9 @@ def train(cfg: Config, gpu=0):
                 or step == cfg.train.steps) and D.is_main():
             save_checkpoint(os.path.join(run_dir, "model.pt"), model, cfg,
                             step, {"quality_key": qm.key,
-                                   f"{qm.key}_full": best_q})
+                                   f"{qm.key}_full": best_q},
+                            opt=opt if cfg.train.save_optim else None,
+                            sched=sched if cfg.train.save_optim else None)
 
     if D.is_main():
         # one writer: every rank reaching this line would race on the

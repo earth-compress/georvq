@@ -64,6 +64,14 @@ class TokenizerConfig(StrictModel):
     # layer). High-frequency content is local: a few joint layers suffice
     # and the coarse-only prefix runs at a fraction of the sequence length
     late_join: int = 0
+    # Parameter-free LayerNorm on the token stream entering the trunk.
+    # The patch-embed output is small and low-variance, and layer 0's
+    # pre-norm backward scales by 1/std of it: the tessera trap runs
+    # measured a ~300x single-layer gradient amplification there, the
+    # site of every recorded spike. Normalizing the stream bounds that
+    # factor. New runs only -- it changes the forward, so it must stay
+    # false for existing checkpoints (the default).
+    embed_norm: bool = False
 
 
 class DecoderConfig(StrictModel):
@@ -458,6 +466,29 @@ class BatchRamp(StrictModel):
         return self
 
 
+class TrapConfig(StrictModel):
+    """Instability trap (georvq/train/trap.py): per-step flight recorder
+    plus a tripwire on the pre-clip gradient norm. On a trip the loop
+    saves pre-step weights, gradients, optimizer state, the batch and
+    RNG states, so the offending step can be replayed exactly. `hold`
+    additionally parks the process on a localhost pdb socket for live
+    inspection. Requires train.optim -- the update-ratio telemetry reads
+    Adam moments -- and train.clip_norm, which provides the norm."""
+    gnorm_abs: float = 0.5         # trip only above this absolute norm
+    gnorm_ratio: float = 10.0      # ... and above ratio * running EMA
+    min_step: int = 200            # let init transients through
+    n_dumps: int = 3
+    cooldown: int = 250            # min steps between dumps: a storm
+    #                                trips every step; spacing the dumps
+    #                                samples its whole arc
+    hold: bool = False
+    hold_port: int = 4444
+    hold_timeout: float = 14400.0
+    snapshot_every: int = 500      # rolling pre-history model+opt copy
+    batch_history_bytes: int = 2_000_000_000
+    flight_maxlen: int = 20000
+
+
 class TrainConfig(StrictModel):
     steps: int = 20000
     batch_windows: int = 512
@@ -469,6 +500,11 @@ class TrainConfig(StrictModel):
     # training dead weights for hours; benign spikes recover between
     # validations and never trip it. None disables.
     guard_drop: Optional[float] = 0.05
+    trap: Optional[TrapConfig] = None
+    # Carry optimizer+scheduler state in the periodic model.pt (about 3x
+    # the file) so a resume continues the Adam trajectory instead of
+    # rebuilding fresh moments, which storms; see save_checkpoint.
+    save_optim: bool = True
     amp: bool = True
     grad_ckpt: bool = False
     tf32: bool = True
