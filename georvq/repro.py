@@ -49,21 +49,34 @@ def run_metadata(cfg: Config) -> dict:
     return meta
 
 
-def save_checkpoint(path, model, cfg: Config, step: int, metrics=None):
+def save_checkpoint(path, model, cfg: Config, step: int, metrics=None,
+                    opt=None, sched=None):
     """Write a checkpoint that can rebuild its own model.
 
     The resolved config travels with the weights, which is what makes
     `georvq.from_checkpoint` exact and `config_diff` possible between
     any two runs. Nothing here is optional: a checkpoint without its
     config is a tensor dump.
+
+    `opt`/`sched` add optimizer and scheduler state for resume. A resume
+    without them builds a fresh AdamW whose zero second moments give
+    every parameter full-lr updates for thousands of steps -- the
+    measured trigger of the tessera gradient storms -- so the periodic
+    `model.pt` should carry them. Additive keys: older checkpoints and
+    readers are unaffected.
     """
-    torch.save({
+    d = {
         "model": model.state_dict(),
         "config": cfg.model_dump(mode="json"),
         "step": step,
         "metrics": metrics or {},
         **run_metadata(cfg),
-    }, path)
+    }
+    if opt is not None:
+        d["opt"] = opt.state_dict()
+    if sched is not None:
+        d["sched"] = sched.state_dict()
+    torch.save(d, path)
 
 
 def write_resolved_config(run_dir, cfg: Config):

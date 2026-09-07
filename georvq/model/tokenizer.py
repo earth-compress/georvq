@@ -15,13 +15,14 @@ class ViTTokenizer(nn.Module):
     """x: (B, C, W, W) -> list of per-tier latents [(B, cells_i, dim_i)]."""
 
     def __init__(self, specs, window, bands, dim=256, depth=9, ff_ratio=4.0,
-                 grad_ckpt=False, late_join=0):
+                 grad_ckpt=False, late_join=0, embed_norm=False):
         super().__init__()
         assert specs[0].cells == 1, "coarsest tier must be grid=1 (CLS token)"
         assert 0 <= late_join < depth
         self.specs = specs
         self.grad_ckpt = grad_ckpt
         self.late_join = late_join
+        self.embed_norm = embed_norm
         # tokens before the finest tier: the late-join prefix runs on
         # these alone, so the split point is a property of the geometry
         self.n_base = 1 + sum(sp.cells for sp in specs[1:-1])
@@ -71,6 +72,10 @@ class ViTTokenizer(nn.Module):
             streams[0] = streams[0] + stats_bias.unsqueeze(1)
         streams += [pe(x).flatten(2).transpose(1, 2) for pe in self.patches]
         h = torch.cat(streams, 1) + self.pos
+        if self.embed_norm:
+            # parameter-free: bounds layer 0's pre-norm backward (1/std
+            # of this stream), the measured spike-amplification site
+            h = nn.functional.layer_norm(h, (h.shape[-1],))
         layers = self.vit.layers
         if self.late_join:
             # coarse tiers run the prefix alone; the finest tier's tokens
