@@ -1,0 +1,14 @@
+# ERA5 geopotential (z) on the ladder w320 recipe -- the reference
+# temperature architecture (era5_t64_ladder_w320, the best-scoring t
+# model) with only the variable changed. Cycle 1 across variables holds
+# the architecture fixed so the curves measure variable difficulty; the
+# onboarding probes put z at the LOW end (tier d95 3/3/3, smoothest of
+# the five 3D vars).
+inherit: era5_t64_ladder_w320.yaml
+
+data:
+  source: "era5:z"
+  store_dir: /data/ERA5-samples/train/store_z
+
+log:
+  run_tag: era5_z64_ladder

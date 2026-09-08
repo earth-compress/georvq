@@ -49,6 +49,32 @@ class _FixedNormalizer:
         return x * self._sd.to(x.device) + self._mu.to(x.device)
 
 
+def _boxcox(x, lam):
+    """Per-level Box-Cox: log at lam=0, (x^lam - 1)/lam elsewhere.
+    `x` strictly positive, `lam` broadcast as (1, C, 1, 1)."""
+    logx = torch.log(x)
+    y = torch.expm1(lam * logx) / lam.clamp_min(1e-12)
+    return torch.where(lam.expand_as(x) < 1e-12, logx, y)
+
+
+def _boxcox_inv(y, lam):
+    z = (lam * y + 1).clamp_min(1e-30)
+    x = torch.exp(torch.log(z) / lam.clamp_min(1e-12))
+    return torch.where(lam.expand_as(y) < 1e-12, torch.exp(y), x)
+
+
+class _BoxCoxNormalizer:
+    """Inverse of the transform pipeline for physical-unit reporting:
+    unstandardize, invert the per-level Box-Cox, remove the eps shift."""
+
+    def __init__(self, mu, sd, lam, eps):
+        self._mu, self._sd, self._lam, self._eps = mu, sd, lam, eps
+
+    def denormalize(self, x, stats):
+        y = x * self._sd.to(x.device) + self._mu.to(x.device)
+        return _boxcox_inv(y, self._lam.to(x.device)) - self._eps
+
+
 # Named level subsets, as indices into the store's ascending 37-level
 # axis [1..1000 hPa]. "std13" is the classic 13-level set (50, 100,
 # 150, 200, 250, 300, 400, 500, 600, 700, 850, 925, 1000 hPa) most
@@ -65,6 +91,15 @@ class Era5Source(Source):
     def __init__(self, model_cfg, var="t"):
         super().__init__(model_cfg)
         self._levels = None
+        self._bc = None
+        if var.endswith("+boxcox"):
+            # per-level Box-Cox ahead of standardization, for
+            # heavy-tailed variables (q). The exponents and the
+            # post-transform moments are model-space constants stored
+            # beside the raw moments; the raw entry is untouched, so
+            # "era5:q" checkpoints are unaffected.
+            var = var[:-len("+boxcox")]
+            self._bc = True
         if "@" in var:
             var, subset = var.split("@", 1)
             if subset not in _LEVEL_SUBSETS:
@@ -79,16 +114,31 @@ class Era5Source(Source):
                 f"no standardization moments for era5 variable {var!r} in "
                 f"{_STATS_PATH}; have {sorted(stats)}")
         s = stats[var]
-        mean, std = s["mean"], s["std"]
+        if self._bc:
+            if "boxcox" not in s:
+                raise KeyError(
+                    f"era5:{var}+boxcox requested but {_STATS_PATH} has "
+                    f"no 'boxcox' block for {var!r}; fit and store the "
+                    f"per-level exponents first")
+            b = s["boxcox"]
+            mean, std, lam = b["mean"], b["std"], b["lam"]
+            self._bc_eps = float(b["eps"])
+        else:
+            mean, std = s["mean"], s["std"]
+            lam = None
         if self._levels is not None:
             mean = [mean[i] for i in self._levels]
             std = [std[i] for i in self._levels]
+            if lam is not None:
+                lam = [lam[i] for i in self._levels]
         if len(mean) != model_cfg.bands:
             raise ValueError(
                 f"era5:{var} has {len(mean)} levels but model.bands="
                 f"{model_cfg.bands}")
         self._mu = torch.tensor(mean).view(1, -1, 1, 1)
         self._sd = torch.tensor(std).clamp_min(1e-12).view(1, -1, 1, 1)
+        self._lam = (None if lam is None
+                     else torch.tensor(lam).view(1, -1, 1, 1))
 
     def prep(self, raw, device):
         """float32 (B, levels, W, W) physical units -> per-level
@@ -101,6 +151,10 @@ class Era5Source(Source):
         if self._mu.device != x.device:
             self._mu = self._mu.to(x.device)
             self._sd = self._sd.to(x.device)
+            if self._lam is not None:
+                self._lam = self._lam.to(x.device)
+        if self._lam is not None:
+            x = _boxcox(x.clamp_min(0) + self._bc_eps, self._lam)
         x = (x - self._mu) / self._sd
         valid = torch.ones(x.shape[0], *x.shape[2:], dtype=torch.bool,
                            device=x.device)
@@ -119,15 +173,23 @@ class Era5Source(Source):
                          dw=model_cfg.decoder.head_dw)
 
     def normalizer(self, model_cfg):
+        if self._lam is not None:
+            return _BoxCoxNormalizer(self._mu, self._sd, self._lam,
+                                     self._bc_eps)
         return _FixedNormalizer(self._mu, self._sd)
 
     def last_stats(self):
         return None
 
     def _rmse_phys(self, out, x, valid):
-        """RMSE in the variable's physical unit. The per-level sd converts
-        each level's standardized error back before pooling; the mean
-        cancels in the difference, so only the scale is applied."""
+        """RMSE in the variable's physical unit. Affine normalization
+        needs only the per-level scale (the mean cancels in the
+        difference); the Box-Cox variant is nonlinear, so both fields
+        are inverted to physical units before differencing."""
+        if self._lam is not None:
+            n = self.normalizer(None)
+            return masked_rmse(n.denormalize(out, None),
+                               n.denormalize(x, None), valid)
         sd = self._sd.to(out.device)
         return masked_rmse(out * sd, x * sd, valid)
 
