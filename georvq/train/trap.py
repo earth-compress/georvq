@@ -123,10 +123,15 @@ class Trap:
     def observe(self, step, gnorm, opt, scalars) -> bool:
         """Record one step; return True when the tripwire fires (call
         before opt.step(), while grads and pre-step weights are live)."""
-        row = {"step": step, "gnorm": gnorm, **scalars,
-               **self._group_stats(opt)}
-        self.flight.append(row)
         c = self.cfg
+        row = {"step": step, "gnorm": gnorm, **scalars}
+        # group stats are the expensive part: sample them, but always
+        # take them on a step loud enough to be a spike candidate, so
+        # trip rows and their neighbours carry the localization
+        loud = gnorm > 0.5 * c.gnorm_abs or not np.isfinite(gnorm)
+        if loud or step % max(c.stats_every, 1) == 0:
+            row.update(self._group_stats(opt))
+        self.flight.append(row)
         finite = np.isfinite(gnorm)
         trip = (step >= c.min_step and self.dumps < c.n_dumps and
                 step >= self.last_dump_step + c.cooldown and

@@ -485,7 +485,16 @@ class TrapConfig(StrictModel):
     hold_port: int = 4444
     hold_timeout: float = 14400.0
     snapshot_every: int = 500      # rolling pre-history model+opt copy
-    batch_history_bytes: int = 2_000_000_000
+    # per-group grad norms + Adam update ratios cost ~1500 small kernels
+    # and a host sync per call; every step was measured at ~27% of
+    # ladder-w320 throughput. The tripwire itself reads only the free
+    # whole-model gnorm, so throttled group stats lose nothing but
+    # flight-record resolution between trips.
+    stats_every: int = 10
+    # per-step CPU copies of the batch (~310 MB/step at batch 1024) buy
+    # pre-trip context only; the trip step's own batch is dumped live.
+    # 0 disables.
+    batch_history_bytes: int = 0
     flight_maxlen: int = 20000
 
 
