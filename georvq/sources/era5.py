@@ -51,16 +51,22 @@ class _FixedNormalizer:
 
 def _boxcox(x, lam):
     """Per-level Box-Cox: log at lam=0, (x^lam - 1)/lam elsewhere.
-    `x` strictly positive, `lam` broadcast as (1, C, 1, 1)."""
-    logx = torch.log(x)
-    y = torch.expm1(lam * logx) / lam.clamp_min(1e-12)
-    return torch.where(lam.expand_as(x) < 1e-12, logx, y)
+    `x` strictly positive and OWNED by the caller (mutated in place);
+    `lam` broadcast as (1, C, 1, 1). In-place: at batch 1024 each
+    full-batch temporary is ~620 MB on the GPU and the caching
+    allocator retains the peak, so the count of temporaries is the
+    footprint."""
+    logx = torch.log_(x)
+    lam_z = lam < 1e-12
+    y = logx.mul(lam).expm1_().div_(lam.clamp_min(1e-12))
+    return torch.where(lam_z.expand_as(y), logx, y)
 
 
 def _boxcox_inv(y, lam):
-    z = (lam * y + 1).clamp_min(1e-30)
-    x = torch.exp(torch.log(z) / lam.clamp_min(1e-12))
-    return torch.where(lam.expand_as(y) < 1e-12, torch.exp(y), x)
+    lam_z = lam < 1e-12
+    x = y.mul(lam).add_(1).clamp_min_(1e-30).log_() \
+         .div_(lam.clamp_min(1e-12)).exp_()
+    return torch.where(lam_z.expand_as(x), torch.exp(y), x)
 
 
 class _BoxCoxNormalizer:
