@@ -135,3 +135,26 @@ def test_store_dequant_and_window_split(tmp_path):
     tr, va = s.split(val_frac=0.5, seed=0)
     assert len(tr) and len(va)
     assert not set(tr.window) & set(va.window)
+
+
+def test_boxcox_variant_roundtrips_and_departs_from_raw():
+    import torch
+    from georvq.config import load_config
+    from georvq.sources import get_source
+    cfg = load_config("configs/era5/era5_q64_ladder.yaml").model
+    raw = get_source("era5:q", cfg)
+    bc = get_source("era5:q+boxcox", cfg)
+    x = torch.rand(2, 37, 8, 8) * 2e-2 + 1e-7
+    x[0, 5, 0, 0] = -1e-6          # spectral-artifact negative
+    yb, _ = bc.prep(x.clone(), "cpu")
+    yr, _ = raw.prep(x.clone(), "cpu")
+    assert not torch.allclose(yb, yr)
+    assert torch.isfinite(yb).all()
+    # physical roundtrip through the normalizer (clipped negatives come
+    # back at the clip floor, so exclude the planted artifact pixel)
+    back = bc.normalizer(cfg).denormalize(yb, None)
+    err = (back - x.clamp_min(0)).abs().max()
+    assert float(err) < 1e-6
+    # rmse_phys of a perfect reconstruction is zero
+    v = torch.ones(2, 8, 8, dtype=torch.bool)
+    assert float(bc._rmse_phys(yb, yb, v)) < 1e-9

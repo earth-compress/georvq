@@ -1,0 +1,16 @@
+# ERA5 specific humidity, per-level Box-Cox arm: identical to
+# era5_q64_ladder except the source applies the fitted [0,1]-bounded
+# exponent per level ahead of standardization (era5_stats.json
+# q.boxcox; lam ~0.05-0.15 mid-troposphere rising to ~1 at the surface
+# and in the stratosphere). Removes the heavy tails (|z| 25 -> ~2-6)
+# that dominate the untransformed loss. Judge against the baseline on
+# tail-conditional physical RMSE as well as the pooled score: the
+# transform also removes the loss's over-weighting of extreme moist
+# pixels (lab/TODO.md, per-band bounded Box-Cox).
+inherit: era5_q64_ladder.yaml
+
+data:
+  source: "era5:q+boxcox"
+
+log:
+  run_tag: era5_q64bc_ladder
