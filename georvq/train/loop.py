@@ -830,6 +830,19 @@ def train(cfg: Config, gpu=0):
                         payloads["hist"] = error_hist_harvest(
                             model, source, val_s, tuples=rt, mins=mins,
                             val_loc=val_loc)
+                    # host RSS per val: two 60k runs died on silent ~1
+                    # GB/val growth (glibc arena bloat under the report
+                    # worker's large transient allocs); this makes any
+                    # recurrence a visible slope instead of an OOM kill
+                    try:
+                        with open("/proc/self/status") as f:
+                            for ln in f:
+                                if ln.startswith("VmRSS"):
+                                    scalars["perf/rss_gb"] = \
+                                        int(ln.split()[1]) / 2 ** 20
+                                    break
+                    except OSError:
+                        pass
                     wandb.log(scalars, step=step)  # scalars stay sync
 
                     # RENDER: CPU only (percentiles, matplotlib, upload).
