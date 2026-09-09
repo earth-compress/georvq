@@ -1,0 +1,30 @@
+# Single-level temperature: one T level per sample (era5:t@single --
+# the level is a content hash of the chip, so validation chips keep
+# their level across passes while training covers all 37). Ladder w320
+# recipe with every layer width and the latent dims divided by 4
+# (tokenizer 320->80, decoder 256->64, latents 128->32, head_feat
+# 64->16); the codebook layout (512/1024/2048 x 20) is unchanged by
+# request. At that layout, full depth costs 59,700 index bits + 12
+# stats bits per 64px window = 14.58 b/px against the 16 b/px of the
+# int16 original: the full-rate point is barely below the raw format,
+# so the interesting operating points are the lower rungs.
+inherit: era5_t64_ladder_w320.yaml
+
+data:
+  source: "era5:t@single"
+
+model:
+  bands: 1
+  tiers: ["1:32:512:20", "4:32:1024:20", "16:32:2048:20"]
+  tokenizer: {dim: 80, depth: 6}
+  decoder:
+    kind: ladder
+    dim: 64
+    depth: 8
+    heads: 4
+    head_feat: 16
+    map_px: [8, 16, 64]
+    solo_layers: 3
+
+log:
+  run_tag: era5_t64_mono_ladder
