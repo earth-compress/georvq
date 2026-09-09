@@ -12,6 +12,12 @@ inherit: era5_t64_ladder_w320.yaml
 
 data:
   source: "era5:t@single"
+  # single-level store: one index row per (cube, hour, level), planes
+  # served in model space. The pool holds 64 KB planes rather than 2.4
+  # MB columns, so the per-step CPU gather and transfer drop 37x, and
+  # the (chip, level) cross-product lives in the index (1.9M rows)
+  # instead of a per-draw sampling trick.
+  store_dir: /data/ERA5-samples/train/store_t_single
 
 model:
   bands: 1

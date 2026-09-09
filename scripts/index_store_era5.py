@@ -27,16 +27,30 @@ def main():
     ap.add_argument("--var", required=True)
     ap.add_argument("--stride-h", type=int, default=6)
     ap.add_argument("--out", required=True)
+    ap.add_argument("--single-level", action="store_true",
+                    help="one row per (cube, hour, LEVEL): slices are "
+                         "single standardized planes (slot = hour * "
+                         "n_levels + level), for bands=1 models")
     args = ap.parse_args()
 
     root = zarr.open(os.path.join(args.zarr_dir, "cubes.zarr"), mode="r")
     a = root[args.var]
     man = pd.read_parquet(os.path.join(args.zarr_dir, "manifest.parquet"))
     hours = list(range(0, a.shape[-3], args.stride_h))
-    rows = pd.DataFrame(
-        [{"shard": int(r.cube_id), "slot": h, "window": int(r.window),
-          "lat": float(r.lat_center), "lon": float(r.lon_center)}
-         for r in man.itertuples() for h in hours])
+    if args.single_level:
+        assert a.ndim == 5, "--single-level needs a pressure-level var"
+        nl = a.shape[1]
+        rows = pd.DataFrame(
+            [{"shard": int(r.cube_id), "slot": h * nl + lv,
+              "window": int(r.window), "lat": float(r.lat_center),
+              "lon": float(r.lon_center)}
+             for r in man.itertuples() for h in hours
+             for lv in range(nl)])
+    else:
+        rows = pd.DataFrame(
+            [{"shard": int(r.cube_id), "slot": h, "window": int(r.window),
+              "lat": float(r.lat_center), "lon": float(r.lon_center)}
+             for r in man.itertuples() for h in hours])
 
     os.makedirs(args.out, exist_ok=True)
     rows.to_parquet(os.path.join(args.out, "index.parquet"))
@@ -50,6 +64,17 @@ def main():
         "stride_h": args.stride_h,
         "n_cubes": int(man.cube_id.max()) + 1,
     }
+    if args.single_level:
+        # the moments bake into the store's output (model space): record
+        # them so the mapping is part of the store's identity
+        import sys
+        sys.path.insert(0, os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))))
+        from georvq.sources.era5 import _STATS_PATH
+        with open(_STATS_PATH) as f:
+            stats = json.load(f)[args.var]
+        manifest.update(single_level=True, bands=1,
+                        level_mean=stats["mean"], level_std=stats["std"])
     with open(os.path.join(args.out, "manifest.json"), "w") as f:
         json.dump(manifest, f, indent=1)
     print(f"{args.out}: {len(rows)} slices of {args.var!r} over "

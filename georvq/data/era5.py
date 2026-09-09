@@ -52,6 +52,20 @@ class Era5Store:
         self.nodata = None
         self.grid_period = 1
         self.stride_h = m["stride_h"]
+        # single-level store: one index row per (cube, hour, level),
+        # slot = hour * n_levels + level, each slice one standardized
+        # plane. Built by index_store_era5.py --single-level for models
+        # that take one level as their band: the pool then holds 64 KB
+        # planes instead of full columns, the (chip, level)
+        # cross-product lives in the index, and the moments are baked
+        # here (recorded in the manifest), so the source's prep is a
+        # pass-through.
+        self.single_level = bool(m.get("single_level", False))
+        self._sl_mu = self._sl_sd = None
+        if self.single_level:
+            self.bands = 1
+            self._sl_mu = np.asarray(m["level_mean"], dtype=np.float64)
+            self._sl_sd = np.asarray(m["level_std"], dtype=np.float64)
         import zarr
         root = zarr.open(os.path.join(self.dir, m["zarr"]), mode="r")
         self._arr = root[self.var]
@@ -85,6 +99,14 @@ class Era5Store:
     # ---- live reads ----
 
     def read_slice(self, cube: int, hour: int) -> np.ndarray:
+        if self.single_level:
+            n = len(self._sl_mu)
+            hour, lev = divmod(hour, n)
+            q = np.asarray(self._arr[cube, lev, hour])
+            x = ((q.astype(np.int64) + 32768) * self._scale[cube, lev]
+                 + self._offset[cube, lev])
+            x = (x - self._sl_mu[lev]) / self._sl_sd[lev]
+            return x.astype(np.float32)[None]
         if self._pl:
             q = np.asarray(self._arr[cube, :, hour])
             s, o = self._scale[cube], self._offset[cube]
