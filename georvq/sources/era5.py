@@ -97,6 +97,38 @@ _LEVEL_SUBSETS = {
 _SINGLE = "single"
 
 
+class Era5BoxcoxPrep:
+    """Named prep `boxcox`: the per-level bounded Box-Cox ahead of
+    standardization, from the variable's fitted block in
+    era5_stats.json. Equivalent to the legacy "era5:<var>+boxcox"
+    source grammar (kept for old resolved configs); new configs write
+    `data.prep: {name: boxcox}`."""
+
+    requires: tuple = ()
+    invertible = True
+
+    def __init__(self, source, model_cfg):
+        # a boxcox-mode twin of the source does the arithmetic; the
+        # outer source (plain moments) keeps serving the model/report
+        self._src = Era5Source(model_cfg, var=source.var + "+boxcox")
+
+    def forward(self, raw, meta, device):
+        x, valid = self._src.prep(raw, device)
+        return x, valid, meta
+
+    def inverse(self, y, meta):
+        return self._src.normalizer(None).denormalize(y, None)
+
+    def state(self):
+        return {"boxcox": {"lam": self._src._lam.view(-1).tolist(),
+                           "mean": self._src._mu.view(-1).tolist(),
+                           "std": self._src._sd.view(-1).tolist(),
+                           "eps": self._src._bc_eps}}
+
+    def __call__(self, raw, meta, device):
+        return self.forward(raw, meta, device)
+
+
 class Era5Source(Source):
     name = "era5"
     grid_period = 1
@@ -182,11 +214,12 @@ class Era5Source(Source):
         standardized floats. ERA5 is gap-free, so validity is all-true.
         With a level subset, the store still serves all 37 levels and
         the unused ones are dropped here."""
-        if self._single and torch.device(device).type != "cpu":
-            # select the level BEFORE the transfer: the batch arrives as
-            # all 37 levels and only one survives prep, so slicing on
-            # host cuts the PCIe copy 37x
-            raw = self._pick_single(raw)
+        if self._single:
+            self._pick_idx = None
+            if raw.shape[1] != 1 and torch.device(device).type != "cpu":
+                # legacy 37-band store: select the level BEFORE the
+                # transfer so only one plane crosses the bus
+                raw = self._pick_single(raw)
         x = raw.to(device, non_blocking=True).float()
         if self._levels is not None and x.shape[1] != len(self._levels):
             x = x[:, self._levels]
@@ -198,10 +231,14 @@ class Era5Source(Source):
         if self._single:
             if x.shape[1] != 1:            # cpu path: not yet selected
                 x = self._pick_single(x)
-            idx = self._pick_idx.to(x.device)
-            mu = self._mu.view(-1).to(x.device)[idx].view(-1, 1, 1, 1)
-            sd = self._sd.view(-1).to(x.device)[idx].view(-1, 1, 1, 1)
-            x = (x - mu) / sd
+            if self._pick_idx is not None:
+                # picked from a 37-band store: standardize by the
+                # drawn level. A single-level store (--single-level
+                # index) serves planes already in model space.
+                idx = self._pick_idx.to(x.device)
+                mu = self._mu.view(-1).to(x.device)[idx].view(-1, 1, 1, 1)
+                sd = self._sd.view(-1).to(x.device)[idx].view(-1, 1, 1, 1)
+                x = (x - mu) / sd
             valid = torch.ones(x.shape[0], *x.shape[2:], dtype=torch.bool,
                                device=x.device)
             return x, valid
@@ -211,6 +248,9 @@ class Era5Source(Source):
         valid = torch.ones(x.shape[0], *x.shape[2:], dtype=torch.bool,
                            device=x.device)
         return x, valid
+
+    def named_preps(self):
+        return {"boxcox": Era5BoxcoxPrep}
 
     def build_stem(self, model_cfg) -> nn.Module:
         return nn.Identity()
@@ -273,8 +313,16 @@ class Era5Source(Source):
                                            replace_extra, scalar_field_spec)
         unit = _UNITS.get(self.var, "source units")
         spec = scalar_field_spec(units=unit)
-        phys = Metric("rmse_phys", f"RMSE ({unit})", self._rmse_phys,
-                      higher_better=False, bounded=False)
+        # declared-physical: the harness inverts out and x through the
+        # RUN'S prep before this plain RMSE, so the metric is paired
+        # with whatever transform actually made the model space (the
+        # train-side rmse_phys in recon_stats keeps the source's own
+        # conversion and is approximate under a non-default prep)
+        from georvq.metrics import masked_rmse as _mr
+        phys = Metric("rmse_phys", f"RMSE ({unit})",
+                      lambda o, x, v: _mr(o, x, v),
+                      higher_better=False, bounded=False,
+                      space="physical")
         # levels-as-bands gets the PCA-RGB profile preview; the @single
         # variant is one plane and draws grayscale like DEM
         pv = GRAY if model_cfg.bands < 3 else PCA_RGB

@@ -65,6 +65,28 @@ def validate(model, source, val_s, tuples, canon_names=(), val_loc=None,
         from georvq.sources.prep import SourcePrep
         prep = SourcePrep(source, getattr(model, "cfg", None))
     q = spec.quality
+
+    def scorer(cx):
+        """Route metrics by declared space: model-space metrics see
+        (o, cx) as the network does; physical ones see prep.inverse of
+        both, inverted once per (chunk, output) rather than per metric."""
+        cache = {"cx": None}
+
+        def score(m, o, cv, po_cache):
+            if m.space != "physical":
+                return m(o, cx, cv)
+            if cache["cx"] is None:
+                cache["cx"] = prep.inverse(cx, {})
+            if po_cache.get("o") is None:
+                po_cache["o"] = prep.inverse(o, {})
+            return m(po_cache["o"], cache["cx"], cv)
+        return score
+
+    for m in list(spec.metrics) + list(spec.extra):
+        if m.space == "physical" and not prep.invertible:
+            raise RuntimeError(
+                f"metric {m.key!r} is declared physical but prep "
+                f"{type(prep).__name__} has no inverse")
     was_training = model.training
     model.eval()
     # sources with sampled prep (era5 @single draws a level per chip)
@@ -99,10 +121,12 @@ def validate(model, source, val_s, tuples, canon_names=(), val_loc=None,
         # until the books are fitted.
         ceil = {m.key: [0.0, 0] for m in spec.metrics}
         for cx, cv, _ in chunks:
+            score = scorer(cx)
             o = model.eval_ceiling(cx, valid=cv)
             n = int(cv.sum())
+            oc = {}
             for m in spec.metrics:
-                ceil[m.key][0] += float(m(o, cx, cv)) * n
+                ceil[m.key][0] += float(score(m, o, cv, oc)) * n
                 ceil[m.key][1] += n
         for k, (tot, n) in ceil.items():
             out[f"{k}_ceiling"] = tot / max(n, 1)
@@ -120,6 +144,7 @@ def validate(model, source, val_s, tuples, canon_names=(), val_loc=None,
     cd_sum = [np.zeros(sp.depth + 1) for sp in specs] if track_cd else None
     cd_n = 0
     for cx, cv, cloc in chunks:
+        score = scorer(cx)
         zs, cums = model.level_cumsums(cx, loc=cloc, valid=cv)
         if track_cd:       # per-tier cos-dist by cumulative level (0 = prior)
             for ti, sp in enumerate(specs):
@@ -135,12 +160,14 @@ def validate(model, source, val_s, tuples, canon_names=(), val_loc=None,
             # the extras are the expensive ones and only the canonical
             # operating points are ever read, so skip the rest
             if tname(t) in canon_names:
+                oc = {}
                 for m in spec.extra:
                     e = esums[m.key][tname(t)]
-                    e[0] += float(m(o, cx, cv)) * n; e[1] += n
+                    e[0] += float(score(m, o, cv, oc)) * n; e[1] += n
         o = model.eval_ceiling(cx, valid=cv)
+        oc = {}
         for m in spec.metrics:
-            ceil[m.key][0] += float(m(o, cx, cv)) * n
+            ceil[m.key][0] += float(score(m, o, cv, oc)) * n
             ceil[m.key][1] += n
     for t in tuples:
         s = sums[tname(t)]

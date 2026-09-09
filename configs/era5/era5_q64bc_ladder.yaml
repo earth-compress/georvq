@@ -10,7 +10,7 @@
 inherit: era5_q64_ladder.yaml
 
 data:
-  source: "era5:q+boxcox"
+  prep: {name: boxcox}
 
 log:
   run_tag: era5_q64bc_ladder

@@ -50,7 +50,7 @@ def run_metadata(cfg: Config) -> dict:
 
 
 def save_checkpoint(path, model, cfg: Config, step: int, metrics=None,
-                    opt=None, sched=None):
+                    opt=None, sched=None, prep_state=None):
     """Write a checkpoint that can rebuild its own model.
 
     The resolved config travels with the weights, which is what makes
@@ -76,6 +76,10 @@ def save_checkpoint(path, model, cfg: Config, step: int, metrics=None,
         d["opt"] = opt.state_dict()
     if sched is not None:
         d["sched"] = sched.state_dict()
+    if prep_state:
+        # the fitted prep constants (model-space definition) travel with
+        # the weights, so decode never depends on the artifact file
+        d["prep"] = prep_state
     torch.save(d, path)
 
 
