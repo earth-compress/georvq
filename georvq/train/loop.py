@@ -562,7 +562,7 @@ def train(cfg: Config, gpu=0):
                     from georvq.model.stats_cond import uncenter
                     am = uncenter(am, st[rows_i].float(), valid[rows_i])
                 al, _ = source.recon_stats(am, x[rows_i], valid[rows_i])
-                aux_vals.append(float(al.detach()))
+                aux_vals.append(al.detach())   # tensor; float at log time
                 recon_loss = recon_loss + al
             # mean over exit terms, not sum: keeps the exits at 1:1:1 while
             # holding the loss (and gradient) scale of a single-exit run,
@@ -595,14 +595,23 @@ def train(cfg: Config, gpu=0):
             if trap is not None:
                 # observe (and possibly dump) BEFORE the non-finite skip
                 # zeroes the grads and before opt.step() moves the
-                # weights: a dump holds the exact pre-transition state
-                tscal = {"loss": float(loss.detach()),
-                         "recon": float(recon_loss.detach()),
-                         "commit": float(commit.detach()),
-                         "select": float(select.detach()),
-                         **{f"aux{i}": a for i, a in enumerate(aux_vals)},
-                         **{f"act_{k}": av for k, av in
-                            getattr(model.decoder, "act_max", {}).items()}}
+                # weights: a dump holds the exact pre-transition state.
+                # Scalars only on stats-cadence or loud steps: each
+                # float() is a host sync (clip has already synced once,
+                # but ~12 conversions per step still add up)
+                tscal = {}
+                if (gnorm > 0.5 * trap.cfg.gnorm_abs
+                        or not math.isfinite(gnorm)
+                        or step % max(trap.cfg.stats_every, 1) == 0):
+                    tscal = {"loss": float(loss.detach()),
+                             "recon": float(recon_loss.detach()),
+                             "commit": float(commit.detach()),
+                             "select": float(select.detach()),
+                             **{f"aux{i}": float(a)
+                                for i, a in enumerate(aux_vals)},
+                             **{f"act_{k}": float(av) for k, av in
+                                getattr(model.decoder, "act_max",
+                                        {}).items()}}
                 if trap.observe(step, gnorm, opt, tscal):
                     trap.dump(step, model, opt, sched,
                               batch={"x": x, "valid": valid, "st": st,
@@ -686,9 +695,9 @@ def train(cfg: Config, gpu=0):
             log.update({f"train/{k}": float(val) for k, val in m.items()})
             # per-stage activation maxima (ladder): the latch precursor
             for k_, v_ in getattr(model.decoder, "act_max", {}).items():
-                log[f"train/act_max_{k_}"] = v_
+                log[f"train/act_max_{k_}"] = float(v_)
             for i_, a_ in enumerate(aux_vals):
-                log[f"train/aux_exit{i_}"] = a_
+                log[f"train/aux_exit{i_}"] = float(a_)
             if pool.cycle:
                 log["data/epochs"] = pool.epochs
                 log["data/tiles_streamed"] = pool.tiles_streamed

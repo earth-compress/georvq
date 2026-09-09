@@ -161,11 +161,32 @@ class Era5Source(Source):
         self._lam = (None if lam is None
                      else torch.tensor(lam).view(1, -1, 1, 1))
 
+    def _pick_single(self, raw):
+        """(B, L, H, W) -> (B, 1, H, W): one level per sample. Training
+        draws fresh per call (pool reuse of a patch then covers many
+        levels); validation (validate() sets _prep_deterministic) uses
+        a content hash so a chip keeps its level across re-preps. The
+        chosen indices land in self._pick_idx for the moment gather."""
+        n = raw.shape[1]
+        if getattr(self, "_prep_deterministic", False):
+            h = raw[:, 0, ::5, ::7].double().abs().sum(dim=(1, 2))
+            idx = (h * 1e3).long() % n
+        else:
+            idx = torch.randint(n, (raw.shape[0],), device=raw.device)
+        self._pick_idx = idx
+        b = torch.arange(raw.shape[0], device=raw.device)
+        return raw[b, idx].unsqueeze(1)
+
     def prep(self, raw, device):
         """float32 (B, levels, W, W) physical units -> per-level
         standardized floats. ERA5 is gap-free, so validity is all-true.
         With a level subset, the store still serves all 37 levels and
         the unused ones are dropped here."""
+        if self._single and torch.device(device).type != "cpu":
+            # select the level BEFORE the transfer: the batch arrives as
+            # all 37 levels and only one survives prep, so slicing on
+            # host cuts the PCIe copy 37x
+            raw = self._pick_single(raw)
         x = raw.to(device, non_blocking=True).float()
         if self._levels is not None and x.shape[1] != len(self._levels):
             x = x[:, self._levels]
@@ -175,20 +196,11 @@ class Era5Source(Source):
             if self._lam is not None:
                 self._lam = self._lam.to(x.device)
         if self._single:
-            n = x.shape[1]
-            if getattr(self, "_prep_deterministic", False):
-                # validation: a chip keeps its level across re-preps
-                # (content hash), so every val scores the same slices
-                h = x[:, 0, ::5, ::7].double().abs().sum(dim=(1, 2))
-                idx = (h * 1e3).long() % n
-            else:
-                # training: a fresh level per draw, so pool reuse of a
-                # patch revisits it at different levels
-                idx = torch.randint(n, (x.shape[0],), device=x.device)
-            b = torch.arange(x.shape[0], device=x.device)
-            x = x[b, idx].unsqueeze(1)
-            mu = self._mu.view(-1)[idx].view(-1, 1, 1, 1)
-            sd = self._sd.view(-1)[idx].view(-1, 1, 1, 1)
+            if x.shape[1] != 1:            # cpu path: not yet selected
+                x = self._pick_single(x)
+            idx = self._pick_idx.to(x.device)
+            mu = self._mu.view(-1).to(x.device)[idx].view(-1, 1, 1, 1)
+            sd = self._sd.view(-1).to(x.device)[idx].view(-1, 1, 1, 1)
             x = (x - mu) / sd
             valid = torch.ones(x.shape[0], *x.shape[2:], dtype=torch.bool,
                                device=x.device)
