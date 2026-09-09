@@ -251,10 +251,13 @@ class Era5Source(Source):
         gray level would show one arbitrary pressure surface. rmse_phys
         pools the de-standardized error over all levels, so it reads in
         the variable's own unit (K for t)."""
-        from georvq.sources.report import (Metric, PCA_RGB, replace_extra,
-                                           scalar_field_spec)
+        from georvq.sources.report import (GRAY, Metric, PCA_RGB,
+                                           replace_extra, scalar_field_spec)
         unit = _UNITS.get(self.var, "source units")
         spec = scalar_field_spec(units=unit)
         phys = Metric("rmse_phys", f"RMSE ({unit})", self._rmse_phys,
                       higher_better=False, bounded=False)
-        return replace(replace_extra(spec, add=(phys,)), preview=PCA_RGB)
+        # levels-as-bands gets the PCA-RGB profile preview; the @single
+        # variant is one plane and draws grayscale like DEM
+        pv = GRAY if model_cfg.bands < 3 else PCA_RGB
+        return replace(replace_extra(spec, add=(phys,)), preview=pv)
