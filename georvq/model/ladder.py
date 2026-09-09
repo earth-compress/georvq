@@ -158,14 +158,16 @@ class LadderDecoder(nn.Module):
         # surge across every stage, i.e. magnitude entering through the
         # shared inputs; bounding the stream's injection point closes
         # that channel without touching the state dict.
+        # telemetry stays on-device: a float() here would sync the
+        # pipeline mid-forward every step; consumers convert at log time
         c0 = self._cond(0, Ls, stats)
-        act["cond"] = float(c0.detach().abs().max())
+        act["cond"] = c0.detach().abs().max()
         t0 = F.layer_norm(self.projs[0](zqs[0]), (self.pos.shape[-1],))
-        act["in0"] = float(t0.detach().abs().max())
+        act["in0"] = t0.detach().abs().max()
         h = t0 + self.pos[:, :1]
         for blk in self.stem:
             h = blk(h, c0)
-        act["stem"] = float(h.detach().abs().max())
+        act["stem"] = h.detach().abs().max()
         a_map = self.heads[0](h)
         out = a_map.new_zeros(B, a_map.shape[1], self.window, self.window)
         final0 = n_present == 1
@@ -188,7 +190,7 @@ class LadderDecoder(nn.Module):
             off += sp.cells
             h = self._run(self.stages[s - 1], torch.cat([h, t], 1),
                           self._cond(s, Ls, stats)[rows])
-            act[f"stage{s}"] = float(h.detach().abs().max())
+            act[f"stage{s}"] = h.detach().abs().max()
             m = self.heads[s](h[:, -sp.cells:])
             final = n_present[rows] == s + 1
             out[rows[final]] = m[final].to(out.dtype)
