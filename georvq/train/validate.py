@@ -64,6 +64,10 @@ def validate(model, source, val_s, tuples, canon_names=(), val_loc=None,
     q = spec.quality
     was_training = model.training
     model.eval()
+    # sources with sampled prep (era5 @single draws a level per chip)
+    # must serve the same slices every validation, or the val metric
+    # jitters with the draw; the flag is a no-op for other sources
+    source._prep_deterministic = True
     specs = model.specs
     out, q_by_tuple = {}, {}
     extra_by_tuple = {m.key: {} for m in spec.extra}
@@ -103,6 +107,7 @@ def validate(model, source, val_s, tuples, canon_names=(), val_loc=None,
         out["_extra"] = {}
         if was_training:
             model.train()
+        source._prep_deterministic = False
         return out, {}
 
     sums = {tname(t): [0.0, 0] for t in tuples}
@@ -157,6 +162,7 @@ def validate(model, source, val_s, tuples, canon_names=(), val_loc=None,
                           for ti in range(len(specs))]
     if was_training:
         model.train()
+    source._prep_deterministic = False
     return out, q_by_tuple
 
 

@@ -176,9 +176,15 @@ class Era5Source(Source):
                 self._lam = self._lam.to(x.device)
         if self._single:
             n = x.shape[1]
-            # content hash -> a chip keeps its level across re-preps
-            h = x[:, 0, ::5, ::7].double().abs().sum(dim=(1, 2))
-            idx = (h * 1e3).long() % n
+            if getattr(self, "_prep_deterministic", False):
+                # validation: a chip keeps its level across re-preps
+                # (content hash), so every val scores the same slices
+                h = x[:, 0, ::5, ::7].double().abs().sum(dim=(1, 2))
+                idx = (h * 1e3).long() % n
+            else:
+                # training: a fresh level per draw, so pool reuse of a
+                # patch revisits it at different levels
+                idx = torch.randint(n, (x.shape[0],), device=x.device)
             b = torch.arange(x.shape[0], device=x.device)
             x = x[b, idx].unsqueeze(1)
             mu = self._mu.view(-1)[idx].view(-1, 1, 1, 1)
