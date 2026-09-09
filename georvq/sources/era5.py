@@ -89,6 +89,13 @@ _LEVEL_SUBSETS = {
     "std13": [8, 10, 12, 14, 16, 17, 19, 21, 23, 25, 30, 33, 36],
 }
 
+# "era5:t@single": one level per sample (bands=1). The level is a hash
+# of the chip's own values, so a chip keeps its level across calls --
+# validation re-preps its chips every pass and must score the same
+# slices each time -- while the training stream still covers all 37
+# levels. Each level is standardized with its own global moments.
+_SINGLE = "single"
+
 
 class Era5Source(Source):
     name = "era5"
@@ -106,12 +113,17 @@ class Era5Source(Source):
             # "era5:q" checkpoints are unaffected.
             var = var[:-len("+boxcox")]
             self._bc = True
+        self._single = False
         if "@" in var:
             var, subset = var.split("@", 1)
-            if subset not in _LEVEL_SUBSETS:
+            if subset == _SINGLE:
+                self._single = True
+            elif subset in _LEVEL_SUBSETS:
+                self._levels = _LEVEL_SUBSETS[subset]
+            else:
                 raise KeyError(f"unknown era5 level subset {subset!r}; "
-                               f"have {sorted(_LEVEL_SUBSETS)}")
-            self._levels = _LEVEL_SUBSETS[subset]
+                               f"have {sorted(_LEVEL_SUBSETS)} + "
+                               f"{_SINGLE!r}")
         self.var = var
         with open(_STATS_PATH) as f:
             stats = json.load(f)
@@ -137,7 +149,10 @@ class Era5Source(Source):
             std = [std[i] for i in self._levels]
             if lam is not None:
                 lam = [lam[i] for i in self._levels]
-        if len(mean) != model_cfg.bands:
+        if self._single:
+            if model_cfg.bands != 1:
+                raise ValueError("era5:<var>@single needs model.bands=1")
+        elif len(mean) != model_cfg.bands:
             raise ValueError(
                 f"era5:{var} has {len(mean)} levels but model.bands="
                 f"{model_cfg.bands}")
@@ -159,6 +174,19 @@ class Era5Source(Source):
             self._sd = self._sd.to(x.device)
             if self._lam is not None:
                 self._lam = self._lam.to(x.device)
+        if self._single:
+            n = x.shape[1]
+            # content hash -> a chip keeps its level across re-preps
+            h = x[:, 0, ::5, ::7].double().abs().sum(dim=(1, 2))
+            idx = (h * 1e3).long() % n
+            b = torch.arange(x.shape[0], device=x.device)
+            x = x[b, idx].unsqueeze(1)
+            mu = self._mu.view(-1)[idx].view(-1, 1, 1, 1)
+            sd = self._sd.view(-1)[idx].view(-1, 1, 1, 1)
+            x = (x - mu) / sd
+            valid = torch.ones(x.shape[0], *x.shape[2:], dtype=torch.bool,
+                               device=x.device)
+            return x, valid
         if self._lam is not None:
             x = _boxcox(x.clamp_min(0) + self._bc_eps, self._lam)
         x = (x - self._mu) / self._sd
@@ -182,6 +210,12 @@ class Era5Source(Source):
         if self._lam is not None:
             return _BoxCoxNormalizer(self._mu, self._sd, self._lam,
                                      self._bc_eps)
+        if self._single:
+            # figure panels only: the per-sample level is not available
+            # to the normalizer, so scale by the median level's sd --
+            # approximate Kelvin, exact standardized values
+            med = self._sd.view(-1).median().view(1, 1, 1, 1)
+            return _FixedNormalizer(torch.zeros_like(med), med)
         return _FixedNormalizer(self._mu, self._sd)
 
     def last_stats(self):
@@ -196,7 +230,14 @@ class Era5Source(Source):
             n = self.normalizer(None)
             return masked_rmse(n.denormalize(out, None),
                                n.denormalize(x, None), valid)
-        sd = self._sd.to(out.device)
+        if self._single:
+            # the level is drawn per sample in prep and is not carried
+            # to the metrics (validate preps every chunk before scoring
+            # any), so physical RMSE uses the median level's sd --
+            # approximate Kelvin; r2/rmse in model space are exact
+            sd = self._sd.view(-1).median().to(out.device)
+        else:
+            sd = self._sd.to(out.device)
         return masked_rmse(out * sd, x * sd, valid)
 
     def recon_stats(self, out, x, valid):
