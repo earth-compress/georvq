@@ -156,6 +156,18 @@ def train(cfg: Config, gpu=0):
               f"figures={list(report.figures)}", flush=True)
     store, train_rows, val_rows, val_s, pool = setup_data(cfg, source, device)
     val_rows.to_parquet(os.path.join(run_dir, "val_chips.parquet"))
+    # geometry and model-space transform resolve by name; the defaults
+    # delegate to pool.sample_batch and Source.prep, so a config that
+    # names neither runs the historical path exactly
+    from georvq.data.sampler import build_sampler
+    from georvq.sources.prep import build_prep
+    sampler = build_sampler(cfg.data.sampler.name, pool, cfg.model,
+                            source=source)
+    prep = build_prep(cfg.data.prep.name, source, cfg.model)
+    missing = [k for k in prep.requires if k not in sampler.provides]
+    assert not missing, (
+        f"prep {cfg.data.prep.name!r} needs meta {missing} that sampler "
+        f"{type(sampler).__name__} does not provide")
 
     # location side-info (conditioner / selector)
     needs_loc = model.conditioner is not None or model.selector is not None
@@ -206,10 +218,10 @@ def train(cfg: Config, gpu=0):
         got = [0] * len(specs)
         with torch.no_grad():
             while any(g < n for g, n in zip(got, need)):
-                s = pool.sample_batch(
+                s, m0 = sampler.draw(
                     min(cfg.train.batch_windows, max(need)),
-                    cfg.model.window, align=cfg.data.pool.align_crops)
-                x0, v0 = source.prep(s, device)
+                    align=cfg.data.pool.align_crops)
+                x0, v0, _ = prep(s, m0, device)
                 # must match the training distribution: with stats
                 # conditioning the encoder sees a mean-SUBTRACTED field, so
                 # books fitted on un-centred latents would be fitted to
@@ -441,9 +453,8 @@ def train(cfg: Config, gpu=0):
                 samples = [[] for _ in specs]
                 got = [0] * len(specs)
                 while any(g < w for g, w in zip(got, want)):
-                    xs, vs = source.prep(
-                        pool.sample_batch(batch, cfg.model.window, align=align),
-                        device)
+                    s_, m_ = sampler.draw(batch, align=align)
+                    xs, vs, _ = prep(s_, m_, device)
                     for i, z in enumerate(
                             model.encode_levels(xs, model._stats_of(xs, vs),
                                                 vs)):
@@ -477,12 +488,11 @@ def train(cfg: Config, gpu=0):
                      else batch_full)
         loc = None
         if needs_loc:
-            s, rows = pool.sample_batch(batch, cfg.model.window, align=align,
-                                        return_rows=True)
-            loc = train_loc[rows]
+            s, meta = sampler.draw(batch, align=align, return_rows=True)
+            loc = train_loc[meta["row"]]
         else:
-            s = pool.sample_batch(batch, cfg.model.window, align=align)
-        x, valid = source.prep(s, device)
+            s, meta = sampler.draw(batch, align=align)
+        x, valid, meta = prep(s, meta, device)
         st = model._stats_of(x, valid)   # None unless stats_cond is on
         data_ms = 0.9 * data_ms + 0.1 * (time.time() - td) * 1000
         amp = torch.autocast(device.type, torch.bfloat16, enabled=amp_on)
@@ -740,7 +750,7 @@ def train(cfg: Config, gpu=0):
             vq_live = not (v.warmup_steps and step <= v.warmup_steps)
             vs, cbt = validate(model, source, val_s, val_ts, canon_names,
                                val_loc=val_loc, quantized=vq_live,
-                               spec=report)
+                               spec=report, prep=prep)
             if cfg.train.freeze_codec:    # keep the codec frozen (no EMA)
                 model.eval()
             if v.freeze_books:            # validate() leaves the model in

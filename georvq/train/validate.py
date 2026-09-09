@@ -47,7 +47,7 @@ def canonical_tuples(specs, mins=None, path=False):
 
 @torch.no_grad()
 def validate(model, source, val_s, tuples, canon_names=(), val_loc=None,
-             quantized=True, spec=None):
+             quantized=True, spec=None, prep=None):
     """val_s: raw val tokens resident on the eval device (converted per
     chunk). val_loc: per-token location embeddings when the model carries a
     conditioner/selector. `spec`: the run's resolved `ReportSpec`, which
@@ -61,6 +61,9 @@ def validate(model, source, val_s, tuples, canon_names=(), val_loc=None,
     """
     if spec is None:        # ad-hoc callers (tests, scripts): unnarrowed
         spec = source.report(getattr(model, "cfg", None))
+    if prep is None:        # ad-hoc callers: the source's default prep
+        from georvq.sources.prep import SourcePrep
+        prep = SourcePrep(source, getattr(model, "cfg", None))
     q = spec.quality
     was_training = model.training
     model.eval()
@@ -74,7 +77,7 @@ def validate(model, source, val_s, tuples, canon_names=(), val_loc=None,
     vchunk = max(64, 65536 // specs[-1].cells)
     chunks = []
     for i in range(0, val_s.shape[0], vchunk):
-        x, v = source.prep(val_s[i:i + vchunk], val_s.device)
+        x, v, _ = prep(val_s[i:i + vchunk], {}, val_s.device)
         chunks.append((x, v, val_loc[i:i + vchunk] if val_loc is not None else None))
 
     def _baselines():

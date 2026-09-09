@@ -416,6 +416,22 @@ class PoolConfig(StrictModel):
         return self
 
 
+class SamplerConfig(StrictModel):
+    """Sample geometry (georvq/data/sampler.py). name=None resolves to
+    the source's default sampler (WindowSampler for every source
+    today), which reproduces the historical behaviour exactly."""
+    name: Optional[str] = None
+    params: dict = Field(default_factory=dict)
+
+
+class PrepConfig(StrictModel):
+    """Model-space transform (georvq/sources/prep.py). name=None
+    resolves to the source's default prep, which delegates to the
+    source's existing prep/normalizer pair."""
+    name: Optional[str] = None
+    params: Optional[str] = None    # named fitted-state artifact
+
+
 class DataConfig(StrictModel):
     source: str = "ae"              # key into georvq.sources.SOURCES
     store_dir: Path
@@ -425,6 +441,8 @@ class DataConfig(StrictModel):
     #   deterministic subsample of N chips (nested: N ⊂ 2N for the same
     #   split_seed); the val split always stays full
     pool: PoolConfig = Field(default_factory=PoolConfig)
+    sampler: SamplerConfig = Field(default_factory=SamplerConfig)
+    prep: PrepConfig = Field(default_factory=PrepConfig)
 
     @field_validator("val_frac")
     @classmethod
