@@ -71,3 +71,44 @@ def test_config_accepts_sampler_and_prep_blocks(tmp_path):
         "data.prep={name: null}"])
     assert cfg.data.sampler.name == "window"
     assert cfg.data.prep.name is None
+
+
+def test_era5_boxcox_named_prep_matches_legacy_grammar():
+    import torch
+    from georvq.config import load_config
+    from georvq.sources import get_source
+    cfg = load_config("configs/era5/era5_q64bc_ladder.yaml")
+    assert cfg.data.prep.name == "boxcox"
+    src = get_source(cfg.data.source, cfg.model)
+    p = build_prep("boxcox", src, cfg.model)
+    legacy = get_source("era5:q+boxcox", cfg.model)
+    raw = torch.rand(2, 37, 8, 8) * 2e-2 + 1e-7
+    x_new, v, meta = p(raw.clone(), {}, "cpu")
+    x_old, _ = legacy.prep(raw.clone(), "cpu")
+    assert torch.equal(x_new, x_old) and meta == {}
+    back = p.inverse(x_new, {})
+    assert float((back - raw.clamp_min(0)).abs().max()) < 1e-6
+    st = p.state()["boxcox"]
+    assert len(st["lam"]) == 37 and st["eps"] > 0
+
+
+def test_physical_metric_routes_through_prep_inverse():
+    import torch
+    from georvq.sources.report import Metric
+    from georvq.train.validate import validate
+    # a run's rmse_phys must equal masked_rmse on prep-inverted pairs;
+    # checked at the unit level against the era5 SourcePrep
+    from georvq.config import load_config
+    from georvq.sources import get_source
+    from georvq.metrics import masked_rmse
+    cfg = load_config("configs/era5/era5_q64_ladder.yaml")
+    src = get_source(cfg.data.source, cfg.model)
+    p = build_prep(None, src, cfg.model)
+    raw = torch.rand(2, 37, 8, 8) * 2e-2 + 1e-7
+    x, v, _ = p(raw, {}, "cpu")
+    o = x + 0.1 * torch.randn_like(x)
+    spec = src.report(cfg.model)
+    phys = [m for m in spec.extra if m.key == "rmse_phys"][0]
+    assert phys.space == "physical"
+    want = masked_rmse(p.inverse(o, {}), p.inverse(x, {}), v)
+    assert torch.allclose(phys(p.inverse(o, {}), p.inverse(x, {}), v), want)

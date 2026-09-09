@@ -930,14 +930,16 @@ def train(cfg: Config, gpu=0):
             if improved:
                 best_q = full_q
                 save_checkpoint(os.path.join(run_dir, "model_best.pt"),
-                                model, cfg, step, metrics)
+                                model, cfg, step, metrics,
+                                prep_state=prep.state())
         if (step % cfg.train.save_interval == 0
                 or step == cfg.train.steps) and D.is_main():
             save_checkpoint(os.path.join(run_dir, "model.pt"), model, cfg,
                             step, {"quality_key": qm.key,
                                    f"{qm.key}_full": best_q},
                             opt=opt if cfg.train.save_optim else None,
-                            sched=sched if cfg.train.save_optim else None)
+                            sched=sched if cfg.train.save_optim else None,
+                            prep_state=prep.state())
 
     if D.is_main():
         # one writer: every rank reaching this line would race on the
