@@ -141,3 +141,58 @@ took through latent space to get to the point its at. These sequences would be l
 to the current data at the bottleneck, is there a way to efficiently think about them in the
 decoder? This would basically be taking the equivalent information used by a sequential decoding operation,
 but doing it all-at-once in a transformer architecture.
+
+## Per-band bounded Box-Cox as a general normalization stage
+
+*2026-09-08, open. Posted for the maintainer after the q onboarding
+analysis; approved in conversation, entry drafted by the agent.*
+
+For ERA5 specific humidity, per-level standardization leaves heavy
+tails (|z| to ~25, excess kurtosis 2.6) because the field is close to
+log-normal through the mid-troposphere and close to linear at the
+surface and in the stratosphere. Fitting one Box-Cox exponent per
+level, bounded to [0,1] (log at 0, identity at 1) with minimum-|skew|
+as the criterion, removes the skew at every tropospheric level and
+cuts |z|max from 25 to ~2.3-5.3; levels that are already symmetric fit
+lambda=1 and reduce to plain standardization. Analysis figures:
+/data/ERA5-samples/analysis_2026-09-08/ (q_hist_meancorr, q_hist_log,
+q_hist_boxcox).
+
+The idea: make this a general per-band normalization stage available
+to any source, not an ERA5 special. The fit degrades gracefully — a
+symmetric band comes back with lambda 1 and nothing changes — so it
+could sit in the standard onboarding path, with the fitted exponents
+stored beside the mean/std moments as part of the model-space
+definition and inverted exactly for decode and physical-unit metrics.
+Candidate beneficiaries beyond q: any bounded-below or multiplicative
+field (precipitation and w when they land in the store; S2 radiance
+over dark scenes; DEM roughness derivatives).
+
+The caveat to test, not assume: a transform chosen to make the
+distribution Gaussian shrinks exactly the values that used to sit far
+out in the tail, so the loss stops over-weighting them. Whether that
+is a feature (spikes in training gradients disappear along with the
+tail; ERA5 q grad-norm spikes of ~20 correlate with tail batches) or a
+loss (the model stops caring about the physically extreme pixels —
+which for humidity are the moist columns a user may care most about)
+is a per-source judgement about what error metric should be uniform.
+The transformed and untransformed q runs give the first measurement:
+compare physical-unit RMSE on the top percentile of q pixels, not just
+the pooled score, before generalizing.
+
+Test: (1) finish the q A/B (era5_q64_ladder untransformed baseline vs
+the transformed arm) and read both pooled and tail-conditional
+physical error; (2) if the tail cost is acceptable or favourable,
+lift the fit into the onboarding tooling (data_probe already computes
+per-band moments) and re-derive one existing source's normalization
+with it to check nothing regresses when lambda comes back ~1.
+
+*Update 2026-09-08: the q A/B ran to ~15k steps on the ladder-w320
+recipe (era5_q64_ladder vs era5_q64bc_ladder, jobs 243/244). Pooled
+physical RMSE tracked within ~1% throughout, full-depth 1.599e-4 kg/kg
+for both at 14-15k, and the untransformed arm showed none of the
+gradient spikes seen under the attn recipe. The maintainer stopped the
+Box-Cox arm: the extra moving parts are not worth the accuracy at this
+recipe. Tail-conditional error was not measured; the entry stays open
+only for the generalization question (w, tp, other bounded fields),
+not for q.*

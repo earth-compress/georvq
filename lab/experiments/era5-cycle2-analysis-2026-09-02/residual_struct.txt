@@ -1,0 +1,11 @@
+checkpoints/era5_t64_scstd/model_43k_analysis.pt
+  1024 held-out windows of 64px, full depth [20, 20, 20]
+  tier cell sizes: [64, 16, 4] px
+
+     tuple    b/px  resid %    lag1    lag2    lag4    lag8   lag16   lag32
+  20-20-20  14.575     0.0%   0.819   0.611   0.421   0.302   0.113   0.007
+    SOURCE       -   100.0%   0.999   0.998   0.993   0.982   0.955   0.886
+
+effective rank (PCA d95 of 37 bands): source 4, residual 32
+per-pixel residual energy: median 0.0222, p90 0.0683, p99 0.2054 (p99/median = 9.2x)
+  the worst 10% of pixels carry 37.1% of the error
