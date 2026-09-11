@@ -1,0 +1,17 @@
+checkpoints/era5_t64_scstd/model_43k_analysis.pt
+  512 val windows
+
+   tiers (0-1-2)     b/px       cos     ccos  gap closed
+          i8-q-q    14.67   0.99948   0.9943       -0.0%
+           q-q-q    14.68   0.99948   0.9943        0.0%
+         i8-i8-q    14.89   0.99949   0.9944       62.6%
+          q-i8-q    14.90   0.99949   0.9944       62.6%
+         i8-q-i8    16.92   0.99949   0.9943       33.5%
+          q-q-i8    16.93   0.99949   0.9943       33.6%
+        i8-i8-i8    17.14   0.99949   0.9944       95.2%
+         q-i8-i8    17.15   0.99949   0.9944       95.2%
+         CEILING        -   0.99949   0.9944      100.0%
+
+'gap closed' = fraction of the ccos gap between the all-quantized point
+and the unquantized ceiling that this combination recovers.
+stats side channel included in every rate: 0.108 b/px

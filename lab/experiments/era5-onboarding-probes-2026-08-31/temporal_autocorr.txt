@@ -1,0 +1,7 @@
+   t: lag1h=0.959  lag2h=0.889  lag3h=0.816  lag6h=0.620  lag12h=0.338  lag24h=0.069  lag48h=-0.328   (<0.5 at 12 h)
+   z: lag1h=0.976  lag2h=0.941  lag3h=0.896  lag6h=0.757  lag12h=0.543  lag24h=0.209  lag48h=-0.514   (<0.5 at 24 h)
+   u: lag1h=0.975  lag2h=0.928  lag3h=0.874  lag6h=0.703  lag12h=0.409  lag24h=0.019  lag48h=-0.433   (<0.5 at 12 h)
+   v: lag1h=0.963  lag2h=0.894  lag3h=0.815  lag6h=0.580  lag12h=0.228  lag24h=-0.032  lag48h=-0.216   (<0.5 at 12 h)
+   q: lag1h=0.963  lag2h=0.894  lag3h=0.815  lag6h=0.590  lag12h=0.264  lag24h=-0.042  lag48h=-0.329   (<0.5 at 12 h)
+ msl: lag1h=0.968  lag2h=0.909  lag3h=0.829  lag6h=0.601  lag12h=0.459  lag24h=0.120  lag48h=-0.174   (<0.5 at 12 h)
+ t2m: lag1h=0.954  lag2h=0.866  lag3h=0.745  lag6h=0.249  lag12h=-0.421  lag24h=0.622  lag48h=0.394   (<0.5 at 6 h)

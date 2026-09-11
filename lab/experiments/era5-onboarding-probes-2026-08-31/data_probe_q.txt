@@ -1,0 +1,19 @@
+/data/ERA5-samples/val  (era5:q, 37 bands)
+  40 chips, 655,360 pixels, 100.00% valid
+
+PER-PIXEL VECTOR MAGNITUDE
+  p1 0.0018  p10 0.0060  p50 0.0254  p90 0.0482  p99 0.0543   p90/p10 = 8.10x
+  -> wide: magnitude is real signal, an absolute loss is justified
+
+LOSSLESS RATE from spatial prediction (bits/pixel, all bands)
+  [lossless unit: int16 as stored (per-cube affine, GRIB-matched)]
+    raw predictor:   466.39 b/px
+   left predictor:   376.74 b/px
+    avg predictor:   393.98 b/px
+  -> best predictor is 'left': saves 19.2%; a lossy codec must beat 376.7 b/px to justify distortion
+
+SOURCE SPATIAL AUTOCORRELATION
+  lag1=0.986  lag2=0.961  lag4=0.899  lag8=0.780  lag16=0.588  lag32=0.337
+  -> correlation falls below 0.5 at lag 32 px
+
+PER-BAND RANGE  min -0.0000..0.0000, max 0.0000..0.0238
