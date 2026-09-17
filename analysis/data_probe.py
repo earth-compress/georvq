@@ -61,6 +61,11 @@ def iter_chips(source, path, n_chips, seed=0):
                   each level by moments estimated from a held-aside draw
                   of slices; the default is physical units.
     """
+    if source.split(":")[0] in ("cmip6", "nextgems", "agb", "cams"):
+        from cbp_sources import iter_chips as cbp_iter
+        yield from cbp_iter(source, path, n_chips, seed)
+        return
+
     if source.startswith("era5:"):
         import zarr
         var = source.split(":", 1)[1]
@@ -72,14 +77,20 @@ def iter_chips(source, path, n_chips, seed=0):
         off = np.asarray(root[var + "_offset"], dtype=np.float64)
         pl = a.ndim == 5
         n_cubes, n_t = a.shape[0], a.shape[-3]
+        # back-filled fields with missing values (sst over land) reserve
+        # int16 -32768 and map the other 65535 codes onto the range
+        nan_coded = var in root.attrs.get("nan_coded_vars", [])
         rng = np.random.default_rng(seed)
 
         def slice_(c, t):
             q = np.asarray(a[c, :, t]) if pl else np.asarray(a[c, t])[None]
             s = sc[c] if pl else sc[c:c + 1]
             o = off[c] if pl else off[c:c + 1]
-            x = ((q.astype(np.int64) + 32768) * s[:, None, None]
+            base = 32767 if nan_coded else 32768
+            x = ((q.astype(np.int64) + base) * s[:, None, None]
                  + o[:, None, None])
+            if nan_coded:
+                x = np.where(q == -32768, 0.0, x)
             return x, q
 
         mu = sig = None
@@ -94,7 +105,8 @@ def iter_chips(source, path, n_chips, seed=0):
             x, q = slice_(int(c), int(t))
             if std:
                 x = (x - mu) / sig
-            valid = np.ones(x.shape[1:], dtype=bool)
+            valid = ((q != -32768).all(0) if nan_coded
+                     else np.ones(x.shape[1:], dtype=bool))
             yield x.astype(np.float32), valid, q.astype(np.int32)
         return
 
@@ -283,6 +295,9 @@ def main():
             "s2": "uint16 DN"}.get(args.source, "int8 as stored")
     if args.source.startswith("era5:"):
         unit = "int16 as stored (per-cube affine, GRIB-matched)"
+    if args.source.split(":")[0] in ("cmip6", "nextgems", "agb", "cams"):
+        from cbp_sources import LOSSLESS_UNIT
+        unit = LOSSLESS_UNIT[":".join(args.source.split(":")[:2])]
     print(f"\nLOSSLESS RATE from spatial prediction (bits/pixel, all bands)"
           f"\n  [lossless unit: {unit}]")
     for k in ("raw", "left", "avg"):
