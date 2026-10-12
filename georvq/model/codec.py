@@ -154,7 +154,8 @@ class PyramidCodec(nn.Module):
             self.specs, cfg.window, cfg.bands, dim=cfg.tokenizer.dim,
             depth=cfg.tokenizer.depth, ff_ratio=cfg.ff_ratio,
             late_join=cfg.tokenizer.late_join,
-            stem_pyramid=cfg.tokenizer.stem_pyramid)
+            stem_pyramid=cfg.tokenizer.stem_pyramid,
+            embed_norm=cfg.tokenizer.embed_norm)
         if cfg.local_attn is not None:
             m = build_local_mask(self.specs, cfg.window, cfg.local_attn)
             # computed once; non-persistent so checkpoints stay unchanged
@@ -199,13 +200,17 @@ class PyramidCodec(nn.Module):
         self.stats_cond = cfg.stats_cond
         if cfg.stats_cond is not None:
             from georvq.model.stats_cond import StatsEmbed
-            self.stats_enc = (StatsEmbed(cfg.bands, cfg.tokenizer.dim)
+            sw = cfg.bands * (2 if cfg.stats_cond.use_std else 1)
+            self.stats_enc = (StatsEmbed(sw, cfg.tokenizer.dim)
                               if cfg.stats_cond.cond_encoder else None)
-            self.stats_dec = (StatsEmbed(cfg.bands, cfg.decoder.dim)
+            self.stats_dec = (StatsEmbed(sw, cfg.decoder.dim)
                               if cfg.stats_cond.cond_decoder else None)
         else:
             self.stats_enc = self.stats_dec = None
 
+        assert cfg.decoder_bank is None or cfg.decoder.kind == "attn", \
+            "decoder_bank builds its own members; it cannot be combined " \
+            f"with decoder.kind={cfg.decoder.kind}"
         if cfg.decoder_bank is not None:
             from georvq.model.decoder import DecoderBank
             members = []
@@ -223,6 +228,37 @@ class PyramidCodec(nn.Module):
                     sigma_cond=cfg.sigma is not None,
                     sigma_freqs=cfg.sigma.freqs if cfg.sigma else 8))
             self.decoder = DecoderBank(members, cfg.window)
+        elif cfg.decoder.kind == "ladder":
+            assert cfg.decoder.map_px is not None, \
+                "decoder.kind=ladder requires decoder.map_px"
+            assert cfg.sigma is None and cfg.local_attn is None, \
+                "ladder supports neither stage-1 sigma mode nor local attention"
+            assert cfg.depth_sampling == "path", \
+                "ladder exits follow the tier-presence prefix, which only " \
+                "fill-order (depth_sampling=path) training guarantees"
+            from georvq.model.ladder import LadderDecoder
+            self.decoder = LadderDecoder(
+                self.specs, cfg.window, cfg.bands, dim=cfg.decoder.dim,
+                depth=cfg.decoder.depth, heads=cfg.decoder.heads,
+                ff_ratio=cfg.ff_ratio, map_px=cfg.decoder.map_px,
+                head_feat=cfg.decoder.head_feat,
+                stem_layers=cfg.decoder.solo_layers)
+        elif cfg.decoder.kind == "tiersum":
+            assert cfg.decoder.map_px is not None, \
+                "decoder.kind=tiersum requires decoder.map_px"
+            assert cfg.sigma is None and cfg.local_attn is None, \
+                "tiersum supports neither stage-1 sigma mode nor local attention"
+            assert cfg.depth_sampling == "path", \
+                "tiersum groups rows by tier-presence prefix, which only " \
+                "fill-order (depth_sampling=path) training guarantees"
+            from georvq.model.tiersum import TierSumDecoder
+            self.decoder = TierSumDecoder(
+                self.specs, cfg.window, cfg.bands, dim=cfg.decoder.dim,
+                depth=cfg.decoder.depth, heads=cfg.decoder.heads,
+                ff_ratio=cfg.ff_ratio, map_px=cfg.decoder.map_px,
+                solo_hidden=cfg.decoder.solo_hidden,
+                solo_layers=cfg.decoder.solo_layers,
+                sum_feat=cfg.decoder.sum_feat)
         else:
             head_in = PyramidAttnDecoder.head_in_dim(
                 self.specs, cfg.decoder.dim, cfg.decoder.cls_bridge)
@@ -295,8 +331,9 @@ class PyramidCodec(nn.Module):
         if self.stats_cond is not None and stats is None:
             raise ValueError(
                 f"{where}: model.stats_cond is enabled, so the per-window "
-                "mean must be passed (model.patch_mean(x, valid)). Omitting "
-                "it would silently produce a mean-removed field.")
+                "stats must be passed (model.patch_stats(x, valid)). "
+                "Omitting them would silently produce a stats-removed "
+                "field.")
 
     def side_bits(self, depths=None):
         """Fixed per-window bits outside the index stream.
@@ -333,7 +370,13 @@ class PyramidCodec(nn.Module):
         call at the call site while staying explicit inside the model."""
         if self.stats_cond is None:
             return None
-        return self.patch_mean(x, valid)
+        return self.patch_stats(x, valid)
+
+    def patch_stats(self, x, valid=None):
+        from georvq.model.stats_cond import patch_stats
+        sc = self.stats_cond
+        return patch_stats(x, valid, use_std=sc.use_std,
+                           std_floor=sc.std_floor)
 
     def patch_mean(self, x, valid=None):
         from georvq.model.stats_cond import patch_mean

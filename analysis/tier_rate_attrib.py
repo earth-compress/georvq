@@ -31,7 +31,7 @@ import torch
 import torch.nn.functional as F
 
 from georvq.data.pool import fixed_val_tokens
-from georvq.data.store import ChipStore
+from georvq.data.store import open_store
 from georvq.factory import from_checkpoint
 from georvq.metrics import centered_cos
 
@@ -58,7 +58,7 @@ def main():
     m = from_checkpoint(args.ckpt, dev)
     cfg = m.full_config
     W = cfg.model.window
-    store = ChipStore(cfg.data.store_dir)
+    store = open_store(cfg.data.store_dir)
     _, va = store.split(cfg.data.val_frac, cfg.data.split_seed)
     val = fixed_val_tokens(store, va, token=W, max_tokens=args.tokens)
     specs = m.specs

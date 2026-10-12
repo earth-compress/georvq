@@ -60,6 +60,12 @@ class Metric:
     # sign agreement, not similarity; refusing it here is what stops a
     # scalar source from silently reporting a meaningless 0.99.
     min_bands: int = 1
+    # The space the metric is defined in: "model" scores (out, x) as the
+    # network sees them; "physical" scores prep.inverse of both. The
+    # harness routes on this declaration -- nothing configures an
+    # inversion point, and a physical metric under a non-invertible
+    # prep is refused at report resolution.
+    space: str = "model"
 
     def __call__(self, out, x, valid):
         return self.fn(out, x, valid)
@@ -200,7 +206,7 @@ def band_rgb_preview(r, g, b, select=None) -> Preview:
 # conditioned model (it plots the per-tier prior-to-level cascade), and
 # `rd_log` an unbounded-free metric; both are filtered where inapplicable.
 FIGURES = ("rd", "rd_log", "codebook", "recon", "reset", "cosdist",
-           "error_hist")
+           "error_hist", "rd_err")
 
 
 @dataclass(frozen=True)

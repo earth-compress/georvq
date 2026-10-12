@@ -1,0 +1,24 @@
+# Predictive pyramid: three tiers 1/4/16, all 128-D, with the cascade
+# conditioner between tiers -- each tier's latents are predicted from
+# the quantized coarser tiers (per-child predictions via child_pos)
+# with depth thermometers as the how-quantized conditioning, and the
+# codebooks sit on the residuals. Under path depth sampling the parent
+# is saturated whenever a child is active, so the predictor always
+# sees a full-depth parent during eval. No location input: the
+# prediction is purely cross-tier.
+#
+# The 192-D tokenizer and 256-D decoder leave no point on the encode
+# path narrower than the 128-D latent bottleneck.
+inherit: era5_t64_statscond_std.yaml
+
+model:
+  tiers: ["1:128:512:20", "4:128:1024:20", "16:128:2048:20"]
+  conditioning:
+    kind: cascade
+    location: null
+    hidden: 512
+    layers: 3
+    child_pos: true
+
+log:
+  run_tag: era5_t64_pred128

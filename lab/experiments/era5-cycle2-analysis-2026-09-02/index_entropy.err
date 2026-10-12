@@ -1,0 +1,4 @@
+/data/ERA5-samples/analysis_2026-09-02/probe_index_entropy_era5.py:128: FutureWarning: Decorating classes is deprecated and will be disabled in future versions. You should only decorate functions or methods. To preserve the current behavior of class decoration, you can directly decorate the `__init__` method and nothing else.
+  @torch.no_grad()
+/home/ali/projects/georvq/.claude/worktrees/era5-model/georvq/model/tokenizer.py:47: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  self.vit = nn.TransformerEncoder(layer, depth)

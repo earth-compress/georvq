@@ -45,7 +45,8 @@ def open_store(store_dir, reader="auto"):
     """ChipStore, or a live store that reads the source rasters directly.
 
     Live stores copy no pixels: `kind="live_dem"` serves chips from the
-    GLO-30 COGs, and a Major-TOM Sentinel-2 root is served by `LiveS2Store`
+    GLO-30 COGs, `kind="era5"` serves hourly variable slices from a cube
+    zarr, and a Major-TOM Sentinel-2 root is served by `LiveS2Store`
     straight from its GeoTIFFs. `reader` pins the choice when a run should
     not depend on what happens to be on disk; "auto" detects.
     """
@@ -68,9 +69,13 @@ def open_store(store_dir, reader="auto"):
     mpath = os.path.join(d, "manifest.json")
     if os.path.exists(mpath):
         with open(mpath) as f:
-            if json.load(f).get("kind") == "live_dem":
-                from georvq.data.live_dem import LiveDEMStore
-                return LiveDEMStore(store_dir)
+            kind = json.load(f).get("kind")
+        if kind == "live_dem":
+            from georvq.data.live_dem import LiveDEMStore
+            return LiveDEMStore(store_dir)
+        if kind == "era5":
+            from georvq.data.era5 import Era5Store
+            return Era5Store(store_dir)
     return ChipStore(store_dir)
 
 
