@@ -53,8 +53,22 @@ class AESource(Source):
                          p=model_cfg.window // fine.grid,
                          bands=model_cfg.bands,
                          head_feat=model_cfg.decoder.head_feat,
-                         normalize=True,
+                         normalize=not self._centred(model_cfg),
                          dw=model_cfg.decoder.head_dw)
+
+    @staticmethod
+    def _centred(model_cfg):
+        sc = model_cfg.stats_cond
+        return sc is not None and sc.subtract_mean
+
+    def finalize_uncentered(self, out, valid):
+        """With a transmitted mean the head emits the mean-removed
+        residual, which is not unit-norm, so the unit-norm constraint is
+        applied after the mean is added back (PyramidCodec.decode)."""
+        out = F.normalize(out, dim=1, eps=1e-6)
+        if valid is not None:
+            out = out * valid.unsqueeze(1).to(out.dtype)
+        return out
 
     def recon_stats(self, out, x, valid):
         mse, cos = masked_recon_stats(out, x, valid)

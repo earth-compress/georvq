@@ -83,9 +83,27 @@ def test_decode_adds_the_mean_back():
     zs = m.encode_levels(x, st, v)
     Ls = torch.tensor([[3, 3]] * x.shape[0])
     m.stats_dec = None               # isolate the add-back from conditioning
+    m.source = None                  # ...and from the source's output constraint
     a = m.decode(zs, Ls, st, v)
     b = m.decode(zs, Ls, st + 2.0, v)
     assert torch.allclose(b - a, torch.full_like(a, 2.0), atol=1e-4)
+
+
+def test_unit_norm_source_stays_unit_norm_with_a_mean():
+    """AE pixels are unit-norm. With a transmitted mean the head predicts
+    the mean-removed residual, so the head must not normalize it; the
+    constraint is applied after the mean is added back instead."""
+    cfg, m = _model("{subtract_mean: true, cond_encoder: true, "
+                    "cond_decoder: true}")
+    assert not m.decoder.head.normalize
+    x, v = _batch(cfg, nodata=False)
+    x = torch.nn.functional.normalize(x, dim=1)
+    st = m.patch_mean(x, v)
+    out = m.eval_ceiling(x, valid=v)
+    n = out.norm(dim=1)
+    assert torch.allclose(n, torch.ones_like(n), atol=1e-4)
+    cfg0, m0 = _model("null")         # no stats channel: head normalizes
+    assert m0.decoder.head.normalize
 
 
 def test_conditioning_actually_reaches_encoder_and_decoder():
