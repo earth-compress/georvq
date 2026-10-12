@@ -54,6 +54,23 @@ def _reset_offset(reset_interval, val_interval):
     return max(1, gcd(reset_interval, val_interval) // 2)
 
 
+def mark_resets(model, step, first_reset):
+    """Flag the levels whose dead-code reset is due at this global step.
+
+    One schedule for every level, owned by the trainer: a level with
+    period R > 0 is due at first_reset + k*R. A flagged level resets at
+    its next training forward that sees data, so a level that sits out
+    the batch (skip_masked) resets a few steps late without moving the
+    schedule; a flag still pending at the next point is not doubled."""
+    if step < first_reset:
+        return
+    for rvq in model.rvqs:
+        for lev in rvq.levels:
+            R = lev.reset_interval
+            if R > 0 and (step - first_reset) % R == 0:
+                lev.reset_pending = True
+
+
 def resolve_device(gpu):
     if torch.cuda.is_available() and gpu is not None and gpu >= 0:
         return torch.device(f"cuda:{gpu}")
@@ -249,23 +266,11 @@ def train(cfg: Config, gpu=0):
                 z = torch.cat(samples[i])[:need[i]]
                 rvq.all_levels(z)
         del samples
-    # Resets fire on a GLOBAL-step schedule. Each level's private counter
-    # advances only on batches where depth sampling makes it active, so
-    # left to themselves the counters desynchronise (observed on era5_t64:
-    # resets at 3000 / 3002 / 3003, and an earlier warm-start case at
-    # 464 / 803 / 2963, the last landing 37 steps before a validation,
-    # which then scored books with 6828 codes just moved). The loop syncs
-    # every counter to the global step each iteration and anchors the
-    # schedule to the first point past the VQ warmup; a level inactive at
-    # a schedule point fires at its next active batch without shifting
-    # the schedule.
+    # Resets fire on one global-step schedule (mark_resets), placed
+    # between validations and after the VQ warmup.
     first_reset = _reset_offset(2500, cfg.train.val_interval)
     while first_reset <= v.warmup_steps:
         first_reset += 2500
-    for rvq in model.rvqs:
-        for lev in rvq.levels:
-            if lev.reset_interval > 0:
-                lev.next_reset = first_reset
 
     Ls_full = torch.tensor([sp.depth for sp in specs], device=device)[None]
 
@@ -445,14 +450,9 @@ def train(cfg: Config, gpu=0):
                 step == int(cfg.train.steps * v.reset_freeze_frac):
             for rvq in model.rvqs:
                 for lev in rvq.levels:
-                    lev.reset_interval = 1 << 30
-                    lev.next_reset = None    # no pending schedule point
+                    lev.reset_interval = 0
+                    lev.reset_pending = False
             print(f"step {step}: dead-code resets frozen", flush=True)
-        # keep every level's counter on the trainer's clock (see the
-        # schedule anchor above the loop)
-        for rvq in model.rvqs:
-            for lev in rvq.levels:
-                lev.step.fill_(step)
         if v.ema_decay_final is not None:
             s0, s1 = v.decay_ramp
             f = min(1.0, max(0.0, (step - s0) / max(s1 - s0, 1)))
@@ -571,6 +571,7 @@ def train(cfg: Config, gpu=0):
                 Ls = torch.where(pt[:, None], Ls_full.expand_as(Ls), Ls)
             with amp:
                 zs = model.encode_levels(x, st, valid)
+            mark_resets(model, step, first_reset)
             if book_sync is not None:
                 book_sync.snapshot()
             zqs, commit, select = model.quantize(zs, Ls, loc=loc)

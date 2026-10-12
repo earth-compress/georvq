@@ -90,8 +90,8 @@ class QuantizedBookVQ(VectorQuantizer):
                         torch.zeros_like(self.ema_sse).index_add_(
                             0, indices, se), alpha=1 - self.decay)
                 self.step += 1
-                if self.reset_interval > 0 and \
-                        (self.step.item() % self.reset_interval == 0):
+                if self.reset_pending:
+                    self.reset_pending = False
                     self._reset_dead(z_flat.detach(), indices,
                                      z_q.detach())
         commit_loss = F.mse_loss(z_flat, z_q.detach())

@@ -62,7 +62,7 @@ def mature_codebooks(model, decay=0.9995):
     setting."""
     for rvq in model.rvqs:
         for lev in rvq.levels:
-            lev.reset_interval = 1 << 30
+            lev.reset_interval = 0
             lev.decay = decay
 
 
@@ -82,7 +82,7 @@ def freeze_books(model):
     for rvq in model.rvqs:
         rvq.eval()
         for lev in rvq.levels:
-            lev.reset_interval = 1 << 30
+            lev.reset_interval = 0
             lev.codebook.weight.requires_grad_(False)
     return sum(l.codebook.weight.numel() for rvq in model.rvqs
                for l in rvq.levels)

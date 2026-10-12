@@ -124,11 +124,12 @@ class BookSync:
 
     A level that skipped the step on one rank (no active rows under
     `skip_masked`) contributes a zero delta there and is counted as
-    stepped if any rank stepped, which keeps `step` (and so the reset
-    schedule) aligned. Dead-code resets, splits and the lazy data init
-    draw from rank-local data, so on a step where any of them ran the
-    level takes rank 0's state outright; that drops one step of the other
-    ranks' statistics, (1-d) of one update.
+    stepped if any rank stepped. Dead-code resets, splits and the lazy
+    data init draw from rank-local data, so on a step where one of them
+    ran the level takes the state of the lowest rank that ran it, and the
+    trainer's `reset_pending` flag is cleared everywhere so a rank that
+    sat the batch out does not reset again later. That drops one step of
+    the other ranks' statistics, (1-d) of one update.
 
     The codebook is re-derived from the synced buffers with the formula
     in `VectorQuantizer.forward`, then projected for b-bit books."""
@@ -149,42 +150,49 @@ class BookSync:
         if not is_distributed():
             return
         self._old = [(int(lev.step), bool(lev.initialized),
+                      bool(lev.reset_pending),
                       [b.clone() for b in self._bufs(lev)])
                      for lev in self.levels]
 
     @torch.no_grad()
     def sync(self):
         """Call after the step's quantize; returns the number of levels
-        that took rank 0's state."""
+        that took one rank's state."""
         if not is_distributed() or self._old is None:
             return 0
         dev = self.levels[0].ema_count.device
-        stepped = torch.tensor([int(lev.step) - o[0] for lev, o
-                                in zip(self.levels, self._old)],
-                               device=dev, dtype=torch.float32)
+        w = world_size()
+        stepped, src = [], []
+        for lev, (s0, init0, pend0, _) in zip(self.levels, self._old):
+            stepped.append(int(lev.step) - s0)
+            # a reset (pending flag consumed) or the lazy init ran here
+            ran = (pend0 and not lev.reset_pending) or \
+                (not init0 and bool(lev.initialized))
+            src.append(rank() if ran else w)
+        stepped = torch.tensor(stepped, device=dev, dtype=torch.float32)
+        src = torch.tensor(src, device=dev, dtype=torch.float32)
         dist.all_reduce(stepped, op=dist.ReduceOp.MAX)
+        dist.all_reduce(src, op=dist.ReduceOp.MIN)
         deltas = []
-        for lev, (s0, _, olds) in zip(self.levels, self._old):
+        for lev, (s0, _, _, olds) in zip(self.levels, self._old):
             d = lev.decay if int(lev.step) > s0 else 1.0
             deltas += [b - d * o for b, o in zip(self._bufs(lev), olds)]
         flat = torch._utils._flatten_dense_tensors(deltas)
         dist.all_reduce(flat, op=dist.ReduceOp.SUM)
         summed = torch._utils._unflatten_dense_tensors(flat, deltas)
         k, n_bcast = 0, 0
-        for lev, (s0, init0, olds), st in zip(self.levels, self._old,
-                                              stepped.tolist()):
+        for lev, (s0, _, _, olds), st, sr in zip(
+                self.levels, self._old, stepped.tolist(), src.tolist()):
             bufs = self._bufs(lev)
             lev.step.fill_(s0 + int(st > 0))
-            ri = lev.reset_interval
-            special = (not init0) or (
-                st > 0 and ri > 0 and (s0 + 1) % ri == 0)
-            if special:
+            if sr < w:
                 k += len(bufs)
                 for t in bufs + [lev.codebook.weight.data]:
-                    dist.broadcast(t, src=0)
+                    dist.broadcast(t, src=int(sr))
                 flag = lev.initialized.to(torch.uint8)
-                dist.broadcast(flag, src=0)
+                dist.broadcast(flag, src=int(sr))
                 lev.initialized.copy_(flag.to(lev.initialized.dtype))
+                lev.reset_pending = False
                 n_bcast += 1
                 continue
             d = lev.decay if st > 0 else 1.0

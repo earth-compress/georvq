@@ -137,30 +137,52 @@ def _ema_state(m):
             for lev in m.rvqs[0].levels]
 
 
-def _synced_books(rank, world, steps=2, reset_interval=100):
-    m = _books(reset_interval=reset_interval)
+def _synced_books(rank, world, steps=2, reset_at=None, skip=None):
+    """Two-level books under the trainer protocol. reset_at: global step
+    at which the trainer flags every level. skip: (step, rank) on which
+    that rank runs only level 0, as skip_masked does when no row in its
+    shard reaches level 1."""
+    from georvq.train.loop import mark_resets
+    m = _books(reset_interval=0 if reset_at is None else 1000)
     D.broadcast_state(m)
+    # tag each reset with the rank that ran it, so a test can tell whose
+    # state the level ended with
+    for lev in m.rvqs[0].levels:
+        orig = lev._reset_dead
+
+        def tagged(*a, _orig=orig, _lev=lev, **k):
+            n = _orig(*a, **k)
+            _lev.ema_count[-1] = 1000.0 + rank
+            return n
+        lev._reset_dead = tagged
     sync = D.BookSync(m)
-    n_bcast = 0
+    n_bcast = []
     for step in range(steps):
         x = _batch(step).chunk(world)[rank]
+        if reset_at is not None:
+            mark_resets(m, step, reset_at)
         sync.snapshot()
-        m.rvqs[0](x)
-        n_bcast += sync.sync()
-    return _ema_state(m), D.state_checksum(m), n_bcast
+        if skip == (step, rank):
+            m.rvqs[0].levels[0](x)
+        else:
+            m.rvqs[0](x)
+        n_bcast.append(sync.sync())
+    pending = [lev.reset_pending for lev in m.rvqs[0].levels]
+    tags = [float(lev.ema_count[-1]) for lev in m.rvqs[0].levels]
+    return _ema_state(m), D.state_checksum(m), n_bcast, pending, tags
 
 
 def test_book_sync_matches_one_process_on_the_global_batch():
     """Two ranks on half a batch each must end with the books one process
     gets from the whole batch. Summed, not averaged: dead_threshold is an
     absolute count."""
-    ref = _books(reset_interval=100)
+    ref = _books(reset_interval=0)
     for step in range(2):
         ref.rvqs[0](_batch(step))
     want = _ema_state(ref)
     out = _run(_synced_books)
     for r in out:
-        got, drift, _ = out[r]
+        got, drift, _, _, _ = out[r]
         assert drift == 0.0
         for g, w in zip(got, want):
             assert g == pytest.approx(w, rel=1e-5, abs=1e-6)
@@ -168,14 +190,45 @@ def test_book_sync_matches_one_process_on_the_global_batch():
 
 
 def _synced_through_reset(rank, world):
-    # level step 3 (init batch + 2) is a reset step on every level
-    return _synced_books(rank, world, steps=4, reset_interval=3)
+    return _synced_books(rank, world, steps=4, reset_at=2)
 
 
 def test_book_sync_ranks_agree_through_a_reset():
     """Resets draw replacements from rank-local data; the ranks must still
     hold identical books afterwards."""
     out = _run(_synced_through_reset)
-    assert out[0][2] == 2, "no reset step was exercised"
+    assert out[0][2] == [0, 0, 2, 0], "the reset step was not synced"
     assert out[0][1] == 0.0 and out[1][1] == 0.0
+    assert out[0][0] == out[1][0]
+
+
+def _reset_while_one_rank_skips(rank, world):
+    return _synced_books(rank, world, steps=4, reset_at=2, skip=(2, 1))
+
+
+def test_book_sync_reset_when_a_rank_sits_the_level_out():
+    """Rank 1 has no rows for level 1 on the reset step, so only rank 0
+    resets it. Rank 0's level is taken, and rank 1's flag is cleared so
+    it does not reset a second time on its next active batch."""
+    out = _run(_reset_while_one_rank_skips)
+    assert out[0][2] == out[1][2] == [0, 0, 2, 0]
+    assert out[0][3] == out[1][3] == [False, False]
+    assert out[0][1] == 0.0 and out[1][1] == 0.0
+    assert out[0][0] == out[1][0]
+
+
+def _reset_while_rank0_skips(rank, world):
+    return _synced_books(rank, world, steps=3, reset_at=2, skip=(2, 0))
+
+
+def test_book_sync_reset_taken_from_the_rank_that_ran_it():
+    """With rank 0 sitting the level out, the reset lives on rank 1, and
+    that is the state both ranks must end with."""
+    out = _run(_reset_while_rank0_skips)
+    assert out[0][2] == [0, 0, 2]
+    # level 0 reset on both ranks and takes rank 0's state; level 1 reset
+    # only on rank 1, and both ranks must hold rank 1's
+    assert out[0][4] == out[1][4] == [1000.0, 1001.0]
+    assert out[0][3] == out[1][3] == [False, False]
+    assert out[0][1] == 0.0
     assert out[0][0] == out[1][0]

@@ -122,12 +122,12 @@ def test_end_to_end_through_the_model():
         "model.tiers=['1:16:32:3','4:8:32:3']",
         "model.vq={warmup_steps: 0, reset_mode: split, dead_threshold: 0.5}"])
     m = build_model(cfg, "cpu")
-    for rvq in m.rvqs:                 # reset_interval is not config-exposed
-        for l in rvq.levels:
-            l.reset_interval = 1
     m.train()
     x = torch.randn(4, cfg.model.bands, cfg.model.window, cfg.model.window)
     for _ in range(3):
+        for rvq in m.rvqs:             # reset every step, as the trainer would
+            for l in rvq.levels:
+                l.reset_pending = True
         out, commit, _ = m.forward_train(x, torch.tensor([[3, 3]] * 4))
     assert torch.isfinite(out).all() and torch.isfinite(commit)
     for rvq in m.rvqs:
