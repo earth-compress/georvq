@@ -253,6 +253,10 @@ def train(cfg: Config, gpu=0):
               f"(last {cfg.train.freeze_head_blocks} blocks + head) for "
               f"{cfg.train.freeze_head_steps} steps", flush=True)
 
+    book_sync = (D.BookSync(model)
+                 if ddp_world > 1 and getattr(model, "rvqs", None) is not None
+                 and not (cfg.model.vq is not None and cfg.model.vq.freeze_books)
+                 else None)
     if ddp_world > 1:
         # Absorb prefill skew explicitly before the first real collective:
         # ranks reach this point many minutes apart because each fills its
@@ -312,6 +316,7 @@ def train(cfg: Config, gpu=0):
     sched = torch.optim.lr_scheduler.LambdaLR(opt, lr_fn)
 
     use_wandb = cfg.log.wandb and D.is_main()
+    step0 = cfg.log.step_offset
     if use_wandb:
         import wandb
         wandb.init(project=cfg.log.wandb_project, name=cfg.log.run_tag,
@@ -406,6 +411,9 @@ def train(cfg: Config, gpu=0):
                           flush=True)
                     del zi
                 torch.cuda.empty_cache()
+            if ddp_world > 1:
+                # each rank fit its books on its own samples
+                D.broadcast_state(model)
             print(f"step {step}: codebooks fit via residual "
                   f"{v.init_mode} init", flush=True)
 
@@ -471,7 +479,11 @@ def train(cfg: Config, gpu=0):
                 Ls = torch.where(pt[:, None], Ls_full.expand_as(Ls), Ls)
             with amp:
                 zs = model.encode_levels(x, st, valid)
+            if book_sync is not None:
+                book_sync.snapshot()
             zqs, commit, select = model.quantize(zs, Ls, loc=loc)
+            if book_sync is not None:
+                book_sync.sync()
             if pt is not None:
                 # straight replacement, not straight-through: these rows
                 # carry a clean gradient to the encoder
@@ -545,7 +557,7 @@ def train(cfg: Config, gpu=0):
                             if k.endswith("_perp_gain")]))}
                 if fr is not None:
                     agg["figs/reset"] = wandb.Image(fr)
-                wandb.log(agg, step=step)
+                wandb.log(agg, step=step + step0)
                 if fr is not None:
                     plt.close(fr)
             worst = max((val, k) for k, val in rst.items()
@@ -590,8 +602,13 @@ def train(cfg: Config, gpu=0):
                 print(f"step {step}: loss={loss.item():.5f}{cstr}{rstr} "
                       f"tok/s={tok_s:,.0f}", flush=True)
             if use_wandb:
-                wandb.log(log, step=step)
+                wandb.log(log, step=step + step0)
 
+        if ddp_world > 1 and step % cfg.train.val_interval == 0:
+            drift = D.state_checksum(model)
+            if D.is_main() and drift > 0:
+                print(f"step {step}: WARNING ranks disagree, max checksum "
+                      f"diff {drift:.3e}", flush=True)
         if (step % cfg.train.val_interval == 0
                 or step == cfg.train.steps) and D.is_main():
             canon_ts = list(canon.values())
@@ -668,7 +685,7 @@ def train(cfg: Config, gpu=0):
                 # be drawn against unfitted books, so log the scalars and
                 # skip them.
                 if not vq_live:
-                    wandb.log(scalars, step=step)
+                    wandb.log(scalars, step=step + step0)
                 else:
                     sb = model.side_bits()
                     open_figs = []
@@ -694,20 +711,24 @@ def train(cfg: Config, gpu=0):
                         f4 = cosdist_figure(vs["cosdist"], None, specs, step)
                         scalars["figs/cosdist_by_level"] = wandb.Image(f4)
                         open_figs.append(f4)
-                    wandb.log(scalars, step=step)
+                    wandb.log(scalars, step=step + step0)
                     for f in open_figs:
                         plt.close(f)
+                    # figure rows: the configured recon tuples, else the
+                    # canonical points (on the path when training is)
+                    rt = ([[int(x_) for x_ in t.split("-")]
+                           for t in cfg.eval.recon_tuples]
+                          if cfg.eval.recon_tuples
+                          else list(canon.values()))
                     if report.has_figure("recon") and (
                             step % cfg.train.fig_interval == 0
                             or step == cfg.train.steps):
-                        rt = ([[int(x_) for x_ in t.split("-")]
-                               for t in cfg.eval.recon_tuples]
-                              if cfg.eval.recon_tuples else None)
                         f3 = recon_figure(model, source, val_s, step,
                                           mins=mins, tuples=rt,
                                           val_loc=val_loc,
                                           preview=report.preview)
-                        wandb.log({"figs/recon": wandb.Image(f3)}, step=step)
+                        wandb.log({"figs/recon": wandb.Image(f3)},
+                                  step=step + step0)
                         plt.close(f3)
                     if report.has_figure("error_hist") and (
                             step % cfg.train.fig_interval == 0
@@ -715,10 +736,11 @@ def train(cfg: Config, gpu=0):
                         # signed error, in model space and -- where the
                         # source normalizes -- in its own physical unit
                         f5 = error_hist_figure(model, source, val_s, step,
-                                               mins=mins, val_loc=val_loc,
+                                               mins=mins, tuples=rt,
+                                               val_loc=val_loc,
                                                unit=report.units)
                         wandb.log({"figs/error_hist": wandb.Image(f5)},
-                                  step=step)
+                                  step=step + step0)
                         plt.close(f5)
 
             # Track the ceiling during warmup: cos_full would be the
