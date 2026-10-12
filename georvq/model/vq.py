@@ -33,6 +33,9 @@ class VectorQuantizer(nn.Module):
         self.decay = decay
         self.eps = eps
         self.kmeans_init = kmeans_init
+        # period, in trainer steps, of this level's dead-code resets; 0
+        # disables them. Read by the trainer's schedule (train.loop
+        # mark_resets), not by forward()
         self.reset_interval = reset_interval
         self.dead_threshold = dead_threshold
         self.bf16_scores = bf16_scores
@@ -44,16 +47,13 @@ class VectorQuantizer(nn.Module):
         self.register_buffer("ema_sum", torch.zeros(num_codes, dim))
         self.register_buffer("initialized", torch.tensor(not kmeans_init, dtype=torch.bool))
         self.register_buffer("step", torch.zeros((), dtype=torch.long))
-        # Reset-schedule anchor. None = the historical behaviour: fire when
-        # the private counter hits a multiple of reset_interval. That
-        # counter advances only on batches where depth sampling makes this
-        # level active, so counters desynchronise across levels and
-        # rarely-sampled levels reset far less often than the interval. A
-        # trainer that syncs `step` to its global step every iteration sets
-        # this to the first scheduled reset step instead; the level then
-        # fires at its first active batch at or past each schedule point,
-        # anchored to global time. Plain attribute: no state-dict impact.
-        self.next_reset = None
+        # Set by the trainer at each scheduled reset point; the level then
+        # resets at its next training forward that sees data (with
+        # skip_masked a level can sit out a batch) and clears it. The
+        # schedule belongs to the trainer: `step` counts this level's
+        # updates for the reset stats and decides nothing. Plain
+        # attribute, no state-dict impact.
+        self.reset_pending = False
         if reset_mode == "split":
             # EMA of each code's total squared error: the distortion
             # CONTRIBUTION (count x within-cell spread), which is what a
@@ -63,20 +63,6 @@ class VectorQuantizer(nn.Module):
             # within a few hundred steps after a resume.
             self.register_buffer("ema_sse", torch.zeros(num_codes),
                                  persistent=False)
-
-    def _reset_due(self):
-        """Whether a dead-code reset fires on this update. Advances the
-        schedule past every point at or behind the current step, so a
-        level that was inactive when a point passed fires once at its
-        next active batch, not once per missed point."""
-        if self.next_reset is None:
-            return self.step.item() % self.reset_interval == 0
-        s = int(self.step.item())
-        if s < self.next_reset:
-            return False
-        iv = self.reset_interval
-        self.next_reset += ((s - self.next_reset) // iv + 1) * iv
-        return True
 
     @torch.no_grad()
     def _sample_from(self, z_flat, k):
@@ -289,7 +275,8 @@ class VectorQuantizer(nn.Module):
                             0, indices, se), alpha=1 - self.decay)
 
                 self.step += 1
-                if self.reset_interval > 0 and self._reset_due():
+                if self.reset_pending:
+                    self.reset_pending = False
                     self._reset_dead(z_flat.detach(), indices,
                                      z_q.detach())
 
@@ -355,7 +342,8 @@ class VectorQuantizer(nn.Module):
                             0, indices, se), alpha=1 - self.decay)
 
                 self.step += 1
-                if self.reset_interval > 0 and self._reset_due():
+                if self.reset_pending:
+                    self.reset_pending = False
                     self._reset_dead(z_flat.detach(), indices,
                                      z_q.detach())
 

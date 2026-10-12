@@ -1,64 +1,81 @@
-"""Dead-code resets fire on the trainer's global-step schedule.
+"""Dead-code resets follow one trainer-owned schedule.
 
-Each level's private `step` counter advances only on batches where depth
-sampling makes it active, so counters drift apart across levels
-(observed on era5_t64: resets at 3000 / 3002 / 3003) and a
-rarely-sampled level resets far less often than the interval. The
-trainer now syncs every counter to its global step and anchors
-`next_reset`; these tests drive two levels with different activity
-rates and check the schedule holds for both.
+The trainer flags every level at first_reset + k*R (`mark_resets`); a
+flagged level resets at its next training forward that sees data and
+clears the flag. Levels do not schedule themselves: under skip_masked a
+level sits out some batches, so a private per-level counter drifted
+(observed on era5_t64: resets at 3000 / 3002 / 3003) and a rarely-used
+level reset far less often than configured.
 """
 import torch
 
 from georvq.model.vq import VectorQuantizer
+from georvq.train.loop import mark_resets
 
-INTERVAL, ANCHOR, STEPS = 100, 50, 700
+INTERVAL, FIRST, STEPS = 100, 50, 700
+
+
+def _model(*levels):
+    holder = torch.nn.Module()
+    holder.levels = torch.nn.ModuleList(levels)
+    m = torch.nn.Module()
+    m.rvqs = torch.nn.ModuleList([holder])
+    return m
 
 
 def _vq():
-    return VectorQuantizer(num_codes=8, dim=4, decay=0.9, kmeans_init=False,
-                           reset_interval=INTERVAL, dead_threshold=0.01)
+    vq = VectorQuantizer(num_codes=8, dim=4, decay=0.9, kmeans_init=False,
+                         reset_interval=INTERVAL, dead_threshold=0.01)
+    vq.train()
+    return vq
 
 
-def _drive(sync):
-    """Run a dense (every step) and a sparse (every 3rd step) level under
-    the trainer protocol; returns the global steps each fired at."""
+def _drive():
+    """A dense level (active every step) and a sparse one (every 3rd);
+    returns the global steps each reset at."""
     torch.manual_seed(0)
     dense, sparse = _vq(), _vq()
+    m = _model(dense, sparse)
     fired = {"dense": [], "sparse": []}
     for name, vq in (("dense", dense), ("sparse", sparse)):
-        if sync:
-            vq.next_reset = ANCHOR
-        vq.train()
         vq._reset_dead = (lambda n: lambda *a, **k:
                           fired[n].append(step))(name)
     x = torch.randn(64, 4)
     for step in range(1, STEPS + 1):
-        if sync:
-            dense.step.fill_(step)
-            sparse.step.fill_(step)
+        mark_resets(m, step, FIRST)
         dense(x)
         if step % 3 == 0:
             sparse(x)
     return fired
 
 
-def test_synced_levels_hold_the_global_schedule():
-    fired = _drive(sync=True)
+def test_levels_hold_the_global_schedule():
+    fired = _drive()
     d, s = fired["dense"], fired["sparse"]
-    # one firing per schedule point, at a fixed cadence
-    assert len(d) == len(s) == (STEPS - ANCHOR) // INTERVAL + 1
-    assert all(b - a == INTERVAL for a, b in zip(d, d[1:]))
-    # the sparse level fires at its first active batch after each point:
-    # at most its activity gap behind, and never drifting further
-    assert all(abs(a - b) <= 3 for a, b in zip(d, s))
+    assert d == list(range(FIRST, STEPS + 1, INTERVAL))
+    # the sparse level resets at its first active batch after each point:
+    # at most its activity gap late, never drifting, never doubled
+    assert len(s) == len(d)
+    assert all(0 <= b - a < 3 for a, b in zip(d, s))
 
 
-def test_unsynced_counters_reproduce_the_drift():
-    """The bug this guards against: private activity counters make a
-    1-in-3 level fire at one third of the intended cadence."""
-    fired = _drive(sync=False)
-    d, s = fired["dense"], fired["sparse"]
-    assert all(b - a == INTERVAL for a, b in zip(d, d[1:]))
-    assert len(s) < len(d) / 2
-    assert s and s[0] > 3 * d[0] - 10
+def test_a_level_never_resets_itself():
+    """Without the trainer's flag nothing fires, whatever reset_interval
+    says: the interval is the trainer's period, not a private clock."""
+    vq = _vq()
+    vq._reset_dead = lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError("reset without a schedule"))
+    for _ in range(3 * INTERVAL):
+        vq(torch.randn(64, 4))
+
+
+def test_disabled_levels_are_not_flagged():
+    a, b = _vq(), _vq()
+    b.reset_interval = 0
+    m = _model(a, b)
+    mark_resets(m, FIRST, FIRST)
+    assert a.reset_pending and not b.reset_pending
+    a.reset_pending = False
+    mark_resets(m, FIRST - 1, FIRST)          # before the first point
+    mark_resets(m, FIRST + 1, FIRST)          # between points
+    assert not a.reset_pending
