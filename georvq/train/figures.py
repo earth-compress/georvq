@@ -33,7 +33,7 @@ def rd_figure(q_by_tuple, vs, specs, tuples, step, spec, ref_fronts=(),
     sc = ax.scatter(bits, Y(vals), c=L0s, cmap="viridis", s=22, zorder=3)
     for label, front in ref_fronts:
         fb, fc = zip(*front)
-        ax.plot(fb, Y(fc), "--", lw=1.2, alpha=0.8, label=label)
+        ax.plot(fb, Y(fc), ":", lw=1.6, alpha=0.9, label=label)
     fig.colorbar(sc, label="L0 (coarse depth)")
     # Pareto front -- "better" is metric-dependent: an angle or an RMSE
     # improves DOWNWARD, so the frontier tracks the running min there.
