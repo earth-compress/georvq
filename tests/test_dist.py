@@ -112,11 +112,70 @@ def test_helpers_are_noops_without_a_process_group():
     assert D.setup.__call__ is not None
 
 
-def test_setup_rejects_live_ema_books_under_multi_gpu():
-    """EMA codebooks live in buffers, so a gradient all-reduce does not
-    touch them and the ranks' books would drift apart silently."""
-    from georvq.config import load_config
-    cfg = load_config("configs/smoke.yaml", ["model.vq={freeze_books: false}"])
-    assert cfg.model.vq.freeze_books is False
-    # the guard lives in setup(); assert the condition it keys on exists
-    assert hasattr(cfg.model.vq, "freeze_books")
+# ------------------------------------------------------ live EMA books
+def _books(seed=0, reset_interval=3):
+    from georvq.model.vq_quant import QuantizedResidualVQ
+    torch.manual_seed(seed)
+    rvq = QuantizedResidualVQ(num_levels=2, num_codes=16, dim=4,
+                              decay=0.9, reset_interval=reset_interval,
+                              dead_threshold=0.5, reset_mode="split")
+    m = torch.nn.Module()
+    m.rvqs = torch.nn.ModuleList([rvq])
+    m.train()
+    m.rvqs[0](_batch(-1))      # lazy data init on a batch every rank shares
+    return m
+
+
+def _batch(step):
+    g = torch.Generator().manual_seed(100 + step)
+    return torch.randn(64, 4, generator=g)
+
+
+def _ema_state(m):
+    return [torch.cat([lev.ema_count, lev.ema_sum.flatten(),
+                       lev.codebook.weight.data.flatten()]).tolist()
+            for lev in m.rvqs[0].levels]
+
+
+def _synced_books(rank, world, steps=2, reset_interval=100):
+    m = _books(reset_interval=reset_interval)
+    D.broadcast_state(m)
+    sync = D.BookSync(m)
+    n_bcast = 0
+    for step in range(steps):
+        x = _batch(step).chunk(world)[rank]
+        sync.snapshot()
+        m.rvqs[0](x)
+        n_bcast += sync.sync()
+    return _ema_state(m), D.state_checksum(m), n_bcast
+
+
+def test_book_sync_matches_one_process_on_the_global_batch():
+    """Two ranks on half a batch each must end with the books one process
+    gets from the whole batch. Summed, not averaged: dead_threshold is an
+    absolute count."""
+    ref = _books(reset_interval=100)
+    for step in range(2):
+        ref.rvqs[0](_batch(step))
+    want = _ema_state(ref)
+    out = _run(_synced_books)
+    for r in out:
+        got, drift, _ = out[r]
+        assert drift == 0.0
+        for g, w in zip(got, want):
+            assert g == pytest.approx(w, rel=1e-5, abs=1e-6)
+    assert out[0][0] == out[1][0], "ranks disagree after sync"
+
+
+def _synced_through_reset(rank, world):
+    # level step 3 (init batch + 2) is a reset step on every level
+    return _synced_books(rank, world, steps=4, reset_interval=3)
+
+
+def test_book_sync_ranks_agree_through_a_reset():
+    """Resets draw replacements from rank-local data; the ranks must still
+    hold identical books afterwards."""
+    out = _run(_synced_through_reset)
+    assert out[0][2] == 2, "no reset step was exercised"
+    assert out[0][1] == 0.0 and out[1][1] == 0.0
+    assert out[0][0] == out[1][0]

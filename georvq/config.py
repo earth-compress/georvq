@@ -471,6 +471,10 @@ class LogConfig(StrictModel):
     wandb: bool = True
     wandb_project: str = "georvq"
     out_dir: Path = Path("checkpoints")
+    # added to the step of every wandb log call, so a run continued from
+    # another run's checkpoint plots on the same x-axis; the schedule and
+    # stdout keep counting from 1
+    step_offset: int = 0
     report: ReportConfig = Field(default_factory=ReportConfig)
 
 
