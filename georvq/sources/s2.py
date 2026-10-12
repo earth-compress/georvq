@@ -20,6 +20,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from georvq.data.pool import GroupBatch
 from georvq.sources import Source
 
 BANDS_10M = ["B02", "B03", "B04", "B08"]
@@ -70,7 +71,10 @@ class S2MultiResHead(nn.Module):
             self.heads[name] = _PatchHead(in_dim, bands, pr, grid, head_feat)
 
     def forward(self, fine):                          # (B, g*g, in_dim)
-        return {name: h(fine) for name, h in self.heads.items()}
+        # GroupBatch, not a bare dict: the trainer calls .float() on the
+        # decoder output and validation slices it, and those have to mean
+        # the same thing for a multi-resolution source as for a plane.
+        return GroupBatch({name: h(fine) for name, h in self.heads.items()})
 
 
 class _PatchHead(nn.Module):
@@ -105,7 +109,7 @@ class S2Normalizer:
         nothing here and return None from `normalizer`.
         """
         stats = {}
-        out = {}
+        out = GroupBatch()
         for name, t in x.items():
             mu = t.mean((2, 3), keepdim=True)
             sd = t.std((2, 3), keepdim=True).clamp_min(1e-4)
@@ -114,8 +118,8 @@ class S2Normalizer:
         return out, stats
 
     def denormalize(self, x: dict, stats):
-        return {name: t * stats[name][1] + stats[name][0]
-                for name, t in x.items()}
+        return GroupBatch({name: t * stats[name][1] + stats[name][0]
+                           for name, t in x.items()})
 
     @staticmethod
     def stats_vector(stats):
@@ -138,7 +142,7 @@ class S2Source(Source):
 
     def prep(self, raw: dict, device):
         """Raw uint16 group dict -> normalized float dict + 10m validity."""
-        x = {}
+        x = GroupBatch()
         for name, t in raw.items():
             x[name] = t.to(device, non_blocking=True).float() / MAX_VALUE
         valid = x["10m"].sum(1) > 0
@@ -151,14 +155,77 @@ class S2Source(Source):
     def build_stem(self, model_cfg) -> nn.Module:
         return S2NativeStem(model_cfg.bands)
 
-    def build_head(self, model_cfg, in_dim) -> nn.Module:
-        fine = model_cfg.tiers[-1]
-        return S2MultiResHead(in_dim, grid=fine.grid,
-                              p=model_cfg.window // fine.grid,
+    def build_head(self, model_cfg, in_dim, n_tiers=None,
+                   out_px=None) -> nn.Module:
+        grid, p = self.head_geom(model_cfg, n_tiers, out_px)
+        return S2MultiResHead(in_dim, grid=grid, p=p,
                               head_feat=model_cfg.decoder.head_feat)
 
     def normalizer(self, model_cfg):
         return self._norm
+
+    #: Share of a rung's index bits the stats channel may take before a
+    #: cheaper encoding is chosen.
+    STATS_BUDGET = 0.02
+
+    def _stats_encodings(self, cfg):
+        """(name, bits) cheapest first.
+
+        The PCA cost is the MEASURED mean packed size recorded by
+        `scripts/fit_stats_pca_s2.py`, so a run's reported rate is
+        reproducible from the artifact rather than from a constant that
+        can drift away from the basis. The raw escapes are exact: a
+        1-byte code plus 26 values.
+        """
+        out = []
+        path = getattr(cfg, "stats_pca", None)
+        if path is not None:
+            out.append(("pca", _packed_bits(str(path))))
+        n = 2 * (len(BANDS_10M) + len(BANDS_20M) + len(BANDS_60M))
+        out.append(("f16", n * 16 + 8.0))
+        # No f32 tier. It was measured and buys nothing: at both 16-16-8
+        # and full depth, f16 stats reproduce the exact-stats per-band
+        # reflectance error to the digit (4.4e-3 and 4.3e-3), because
+        # f16's ~3e-4 resolution is already an order of magnitude below
+        # the model's own error. The extra 416 bits would be spent on
+        # precision nothing can see.
+        return out
+
+    def side_bits(self, cfg, depths=None) -> float:
+        """Per-window bits for the 26 mean/std values `prep` removes.
+
+        The right encoding DEPENDS ON THE RATE, because the two costs move
+        in opposite directions. Tolerance-coded PCA is ~78 bits but leaves
+        a reconstruction floor of ~5e-3 reflectance RMSE; sending the
+        vector verbatim removes the floor at 424 bits (f16) or 840 (f32).
+        At the cheapest rungs 78 bits is already a large share of the
+        bitstream and model error dwarfs the floor. At full depth the
+        floor EQUALS the entire model error -- measured 4.3e-3 with exact
+        stats against 6.5e-3 with fixed-tolerance packing -- while f16 is
+        0.8% of the rate and closes it completely.
+
+        So: the most precise encoding costing no more than `STATS_BUDGET`
+        of the rung's index bits, falling back to the cheapest when even
+        that does not fit. `depths=None` means "a whole packet", i.e. full
+        depth.
+        """
+        enc = self._stats_encodings(cfg)
+        if depths is None:
+            depths = [sp.depth for sp in cfg.tiers]
+        from georvq.model.codec import tuple_bits
+        budget = tuple_bits(cfg.tiers, list(depths)) * self.STATS_BUDGET
+        affordable = [b for _, b in enc if b <= budget]
+        return max(affordable) if affordable else enc[0][1]
+
+    def stats_tolerance(self, cfg, depths=None) -> float:
+        """The `StatsPacker` tolerance matching `side_bits`' choice: <= 0
+        means send the vector verbatim at f32, and a tolerance below what
+        PCA can reach drives the packer's f16 escape."""
+        enc = dict(self._stats_encodings(cfg))
+        bits = self.side_bits(cfg, depths)
+        if "f16" in enc and bits >= enc["f16"]:
+            return 1e-4          # tighter than PCA can hit -> f16 escape
+        return 0.01
 
     def recon_stats(self, out: dict, x: dict, valid):
         losses = {}
@@ -177,27 +244,77 @@ class S2Source(Source):
         """Reflectance, not an embedding field, so nothing here is
         inherited: quality is the spectral angle (it reads the band RATIOS
         that indices and classifiers use, which a per-band MSE averages
-        away), RMSE accompanies it in standardized units, and the preview
-        is true colour off the 10m group rather than a PCA projection.
-        There is no block-mean floor because the per-tile mean is already
-        transmitted as a side channel -- scoring against it would be
-        scoring against part of the bitstream.
+        away), RMSE accompanies it, and the preview is true colour off the
+        10m group rather than a PCA projection. There is no block-mean
+        floor because the per-tile mean is already transmitted as a side
+        channel -- scoring against it would be scoring against part of the
+        bitstream.
+
+        WHY R2 AND NOT THE SPECTRAL ANGLE. The angle is arccos of a
+        per-pixel cosine, so it is a DIRECTION-ONLY measure: it discards
+        how bright a pixel is relative to its window and reads only the
+        pattern across bands. `docs/SOURCE_ONBOARDING.md` makes magnitude
+        spread the deciding test -- AlphaEarth is exactly unit-norm so
+        cosine is unarguable there, Tessera spans 1.57x so an absolute
+        loss measures something real -- and S2 spans **6.6x**, the widest
+        of any source in that table. It is the strongest case for an
+        absolute metric, not the weakest.
+
+        It also has to agree with the objective: the loss is MSE, so
+        selecting `model_best.pt` on a direction metric would select on
+        something the run is not optimising. R2 here is
+        `1 - sum_g MSE_g / sum_g Var_g` over the three native grids,
+        weighted per group exactly as the loss weights them. On
+        standardized inputs the denominator is ~1 per band, so R2 reads as
+        one minus the loss -- the interpretable form of the same number.
+
+        The angle stays as a diagnostic, because band RATIOS are what
+        spectral indices read and a model can degrade them while its MSE
+        looks fine. Note it is computed on standardized ANOMALY vectors,
+        not reflectance spectra, so it is not the SAM a remote-sensing
+        reader expects (random anomalies sit at pi/2; random all-positive
+        reflectance sits far below); true-reflectance SAM needs
+        denormalizing through `last_stats()` first.
         """
-        from georvq.sources.report import (Metric, ReportSpec,
+        from georvq.sources.report import (FIGURES, Metric, ReportSpec,
                                            band_rgb_preview)
-        sam = Metric("sam", "spectral angle (rad)", _s2_sam,
+        r2 = Metric("r2", "R² (variance explained)", _s2_r2,
+                    higher_better=True, bounded=True)
+        sam = Metric("sam", "spectral angle, standardized (rad)", _s2_sam,
                      higher_better=False, bounded=False)
         rmse = Metric("rmse", "RMSE (standardized)", _s2_rmse,
                       higher_better=False, bounded=False)
         # R=B04, G=B03, B=B02 within the 10m group's band order; the
         # preview selects that group out of the model's dict output.
+        # no error_hist: it does tensor arithmetic on the whole batch to
+        # build one signed-error distribution, which has no single meaning
+        # across three native grids. A per-group version would be worth
+        # having; it is not this figure.
         return ReportSpec(
-            quality=sam, extra=(rmse,), baselines=(),
+            quality=r2, extra=(rmse, sam), baselines=(),
+            figures=tuple(f for f in FIGURES if f != "error_hist"),
             preview=band_rgb_preview(2, 1, 0, select=_s2_10m))
 
 
 def _s2_10m(t):
     return t["10m"] if isinstance(t, dict) else t
+
+
+def _s2_r2(out, x, valid):
+    """Variance explained across all three native grids.
+
+    Per-group MSE over per-group variance, summed with equal group weight
+    so the metric weights the grids the way `recon_stats` weights them.
+    Unmasked, for the same reason the loss is: S2 L1C is 99.5% valid and
+    the loss the model actually minimises does not mask either, so a
+    masked metric would report on a different quantity than the objective.
+    """
+    num, den = 0.0, 0.0
+    for name in GROUPS:
+        t = x[name]
+        num = num + (t - out[name]).pow(2).mean()
+        den = den + t.var()
+    return 1.0 - num / den.clamp_min(1e-8)
 
 
 def _s2_sam(out, x, valid):
@@ -208,3 +325,24 @@ def _s2_sam(out, x, valid):
 def _s2_rmse(out, x, valid):
     from georvq.metrics import masked_rmse
     return masked_rmse(_s2_10m(out), _s2_10m(x), valid)
+
+
+_PACKED_BITS: dict[str, float] = {}
+
+
+def _packed_bits(path: str) -> float:
+    """Mean packed bits/window recorded by the basis fit.
+
+    Cached: `side_bits` is read on every rate figure, and this would
+    otherwise re-open the npz each time.
+    """
+    if path not in _PACKED_BITS:
+        import numpy as np
+        z = np.load(path)
+        if "mean_bytes" not in z.files:
+            raise KeyError(
+                f"{path}: no 'mean_bytes' -- refit with "
+                f"scripts/fit_stats_pca_s2.py, which records the measured "
+                f"packed size that the rate figures charge.")
+        _PACKED_BITS[path] = float(z["mean_bytes"]) * 8.0
+    return _PACKED_BITS[path]

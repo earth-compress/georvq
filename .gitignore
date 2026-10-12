@@ -13,6 +13,8 @@ plots/
 *.npz
 !tests/golden/*.npz
 !tests/fixtures/*.npz
+# fitted transforms a preset loads (e.g. configs/s2 stats_pca)
+!artifacts/*.npz
 .venv/
 err.log
 .ipynb_checkpoints/

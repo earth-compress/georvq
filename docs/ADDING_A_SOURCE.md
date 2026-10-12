@@ -11,6 +11,30 @@ architecture parameters below, so that window size, tier grids, latent
 widths and codebook sizes are derived rather than inherited from
 whichever preset you copied.
 
+## 0. First ask whether you need a store at all
+
+A chip store exists to give the pool fixed-geometry chips it can read
+cheaply. If the source is *already* laid out that way, building one
+duplicates the corpus to gain nothing. Two live readers do without:
+
+| reader | source | why live |
+|---|---|---|
+| `live_dem` (`data/live_dem.py`) | GLO-30 COG mosaics | chips are windows on a continuous mosaic |
+| `live_s2` (`data/live_s2.py`) | Major-TOM Core-S2L1C | already 106k scene dirs on a regular 10 km grid |
+
+Both present the `ChipStore` surface — the same attributes, the
+`open_shard(sh, group)[slot]` contract and `split()` — so the pool, the
+trainer and the evals cannot tell the difference. `open_store` picks one;
+`data.reader` pins the choice.
+
+Write a live reader when the source's own layout already has fixed
+geometry and a usable index, and a store builder when it does not (chips
+must be cut, reprojected, or dequantized once). Note what the read
+granularity actually is before choosing: Major-TOM's rasters are LZW with
+1024 px blocks over a 1068 px image, so a windowed read decompresses the
+whole band anyway and `live_s2` reads whole scenes rather than pretending
+windows are cheap.
+
 ## 1. A store builder → chip-store v1
 
 Convert your source once into the standard on-disk format
@@ -22,7 +46,9 @@ you want), and a versioned `manifest.json` (geometry, dtype, nodata,
 handles shard allocation, atomic index checkpoints, and append/resume with
 dedup. See `scripts/build_store_ae.py` (dense embedding chips sampled from
 cloud COGs) and `scripts/build_store_s2.py` (multi-resolution store: one
-shard file per band group, shared index).
+shard file per band group, shared index — kept for anyone who wants S2 as
+shards, though the shipped S2 preset reads Major-TOM live instead; see
+section 0).
 
 Notes:
 - `grid_period`: if your pixels have periodic structure (e.g. a source
@@ -115,9 +141,25 @@ Single-plane sources (one `(bands, px, px)` array per chip) are fully
 wired: streaming `ChipPool` (coverage + cycle modes), the training loop,
 validation, figures, eval and inference all work out of the box.
 
-Multi-group sources (dict batches, e.g. S2) have model-level support
-(stems/heads/normalizer/quantization all tested) and a RAM-resident
-`GroupChipLoader`; wiring dict batches through the streaming pool and the
-standard train loop/validation is the designated next step — see
-`tests/test_s2.py::test_s2_toy_training` for the working training pattern
-in the meantime.
+Multi-group sources (dict batches, e.g. S2) are wired through the same
+path. `ChipPool` holds one resident tensor per group, all indexed by the
+same slot, and `sample_batch` returns a `GroupBatch` — a dict of per-group
+crops sharing one crop origin. Residency (coverage/cycle), the shuffled
+full-dataset cursor and the background refresh are group-agnostic and are
+not duplicated; only allocation, the shard read and the gather divide by
+each group's ratio.
+
+Two rules the geometry imposes, both asserted rather than assumed:
+
+- **Crop origins snap to the coarsest ratio.** One origin serves every
+  group, so on S2 it must be a multiple of 6 or a 20m/60m crop would begin
+  part-way into its own pixel and the groups would decode out of phase.
+  Multi-group `sample_batch` is therefore always aligned.
+- **`slot_rows` must divide by that period**, so each group's row-strip is
+  a whole number of its own rows.
+
+A source's `prep`, head output and normalizer should return `GroupBatch`
+rather than a bare dict: the shared stack slices batches, reads
+`.shape[0]` and calls `.to()`/`.float()` on them, and `GroupBatch`
+implements exactly those. `GroupChipLoader` remains for RAM-resident
+working sets.

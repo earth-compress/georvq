@@ -1,0 +1,184 @@
+# Sentinel-2 L1C: 13 bands at three native resolutions, read LIVE from the
+# Major-TOM Core-S2L1C GeoTIFFs. No chip store is built and no pixels are
+# copied -- Major-TOM is already a chip store on a regular 10 km grid, and
+# resharding its 1.2 TB would gain nothing. The only thing cached is a
+# scene catalogue (paths + grid position) under ~/.cache/georvq.
+#
+#   georvq-train -c configs/s2/s2_pyr96.yaml --gpu 0
+#
+# CLOUDS ARE KEPT. cloud_mask.tif sits beside the bands and is deliberately
+# not applied: cloud is part of the distribution the codec has to carry.
+#
+# UNVALIDATED. Unlike every other preset here this one reproduces no run --
+# no S2 model has been trained. The geometry is derived from
+# docs/SOURCE_ONBOARDING.md (the S2 column), not copied from a preset, and
+# the derivation is written out so the first run can argue with it.
+
+data:
+  source: s2
+  store_dir: /data/Major-TOM/Core-S2L1C
+  reader: live_s2        # pinned, so startup never depends on autodetection
+  val_frac: 0.02
+  pool:
+    # Measured on this corpus: 64 ms and 12.1 MB per scene (13 bands,
+    # 15.6 scenes/s/thread). 10,240 resident scenes is ~124 GB of host RAM
+    # (box has 503 GB). Pool size buys INSTANTANEOUS DIVERSITY -- how many
+    # distinct scenes one batch can draw from -- while refresh_per_s sets
+    # how often each is replaced. At 1024 a batch of 1024 windows was
+    # hitting the same scenes repeatedly.
+    size: 10240
+    workers: 8
+    # Whole scenes: the rasters are LZW with 1024 px blocks over a 1068 px
+    # image, so a partial read decompresses the band anyway -- taking half
+    # the rows would double the read cost per resident pixel, not halve it.
+    slot_rows: 1068
+    # Reuse per scene is windows/s / refresh_per_s, INDEPENDENT of pool
+    # size: at ~630 win/s and 32 scenes/s each scene is drawn ~20 times
+    # before eviction, and the corpus sweeps in ~55 min.
+    #
+    # workers/refresh are capped by the GIL, not by disk. 24 workers at 64
+    # scenes/s measured 243 win/s with GPU utilisation oscillating 29-99%
+    # (disk was 27% busy, so not the constraint): the reader threads
+    # contend with the training thread for the interpreter. 8 workers ran
+    # at 653 win/s. More readers is not more data.
+    refresh_per_s: 32.0
+    device: cpu
+    cycle: true            # sweep the corpus; never resample a resident subset
+    align_crops: true
+
+model:
+  # W=96, not the habitual 64: the fine-token patch (window / finest grid)
+  # must divide by 6 for all three native grids to decode exactly, and 96
+  # is the smallest such window that keeps a 1/4/16 pyramid. It also makes
+  # the fine cell 6 px = one 60 m pixel exactly. S2 autocorrelation only
+  # falls below 0.5 at 32 px, so a 96 px window is not over-large.
+  window: 96
+  bands: 13
+  # K 64/512/4096 is the SOURCE_ONBOARDING table's row for S2. Depth is
+  # 16 rather than that table's 8, and the latent dims are 1.5x its
+  # 32/64/64: at depth 8 the quantizer gap widened with training (ceiling
+  # pulling away from full decode, 0.0023 -> 0.0040 between steps 10k and
+  # 20k), which says the codebooks rather than the model were becoming
+  # the binding constraint.
+  #
+  # Depth does not enter the sample-budget rule -- every level sees every
+  # vector -- so at batch 1024 the per-codeword counts are unchanged and
+  # healthy: 1600 / 3200 / 6400 against the ~450 crossover.
+  #
+  # Full depth now costs 5.60 b/px against 2.81. Whether levels 9-16 earn
+  # that is the question this run asks; at depth 8, 8-8-4 -> 8-8-8 bought
+  # +0.017 R2 for double the rate, so the honest prior is "not much".
+  # K raised 64/512/4096 -> 256/1024/4096: 2 more bits on the coarse
+  # tier and 1 on the mid, the fine tier unchanged. Full depth costs
+  # 5.73 b/px against 5.60, and the codebooks grow 7.13M -> 8.13M.
+  #
+  # The coarse tier sees `batch` vectors per step (one cell per
+  # window), so K=256 puts it at 400 vectors per codeword against the
+  # ~450 in lab/findings/codebook-sample-budget.md, down from 1600.
+  # Marginal rather than broken, and the deepest tier-0 levels see
+  # fewer rows still under path sampling. Watch the tier-0 reset
+  # counts: a jump there is the symptom of underfitting a codebook
+  # that is too large for the data reaching it.
+  tiers: ["1:48:256:16", "4:96:1024:16", "16:96:4096:16"]
+  # Fitted basis for the 26 per-band mean/std floats the normalizer
+  # removes: 9.73 B/window measured (77.8 bits, 0.0084 b/px) against 416
+  # bits raw. The method is ported from the ring-space beta releases,
+  # which measured ~11 B/tile on the same 26-value layout; the basis
+  # itself is refitted on OUR windows.
+  stats_pca: artifacts/s2_stats_pca.npz
+  # [4,0,0], not pyr64's [6,1,0]: with a tier-1 minimum of 1, the coarse
+  # tier is NEVER the sole source of a reconstruction, so nothing ever
+  # pressures it to be informative on its own -- it can sit redundant with
+  # tier 1 and the encoder pays nothing. Measured consequence at step
+  # 8000 with [6,1,0]: tier-0 latent varied by 0.0033 across windows
+  # against a norm squared of ~99, and its first RVQ level collapsed to
+  # one code of 64. Both currently-validated presets (DEM, released
+  # Tessera) use [4,0,0] with path sampling; only the oldest one does not.
+  min_depths: [4, 0, 0]
+  # Sample along the truncation path, not nested. Nested sampling makes
+  # deep fine-tier levels vanishingly rare in training, by a factor
+  # FINDINGS measures directly (see "Depth must be sampled along the
+  # truncation path"). The schema default is "nested", which is why this
+  # has to be stated explicitly.
+  depth_sampling: path
+  full_frac: 0.15
+  ff_ratio: 2.0
+  # One conv pyramid feeds every tier, replacing the per-tier patch
+  # embeds and the CLS parameter. The coarse tier was the only tier
+  # with no convolutional read of the image, and three separate
+  # probes put its limit at what it represents rather than how it is
+  # coded: a tier-0 refinement at unbounded precision buys 4.4%, and
+  # low-passing the coarse decode shows it carries about an 8x8
+  # image.
+  tokenizer: {dim: 256, depth: 9, stem_pyramid: true}
+  decoder: {dim: 384, depth: 12, heads: 8, head_feat: 64, cls_bridge: true}
+  # Resolution-matched decoders, one per tier prefix. Decoding a
+  # coarse-only rung through 273 tokens to 96 px costs the same as
+  # the full pyramid today; these cost ~0.01% and ~1.3% of that.
+  # Grids come from the low-pass sweep on the d16 checkpoint: the
+  # truth restricted to 12 px scores 0.0234 and to 48 px 0.0100,
+  # against the current rungs' 0.0279 and 0.0145, so each member has
+  # room to improve before its output grid is what limits it.
+  decoder_bank:
+    - {tiers: 1, out_px: 12, dim: 128, depth: 2, heads: 4, head_feat: 32}
+    - {tiers: 2, out_px: 48, dim: 256, depth: 6, heads: 8, head_feat: 48}
+    - {tiers: 3, out_px: 96, dim: 384, depth: 12, heads: 8, head_feat: 64}
+  vq:
+    commit_weight: 0.25
+    dead_threshold: 0.000625
+    ema_decay: 0.99
+    bf16_scores: true
+    skip_masked: true
+    warmup_steps: 500     # VQ-free warmup, then residual k-means codebook init
+    warmup_truncate: true
+    kmeans_sample: 32768
+
+train:
+  # 80k at batch 1024 = the released Tessera recipe, the closest validated
+  # precedent for this architecture. Throughput saturates from batch 768
+  # upward on this pyramid, so past that a larger batch buys codebook
+  # sampling and gradient quality rather than speed (FINDINGS, "Past the
+  # throughput knee"); doubling RVQ depth and widening the latents moved
+  # neither the knee nor the plateau, because skip_masked means unsampled
+  # levels cost nothing and the trunks dominate. 1024 peaks at ~26 GiB of
+  # 80 and gives the coarse tier 1600 vectors per codeword, well clear of
+  # the ~450 crossover.
+  steps: 80000
+  batch_windows: 1024
+  # Early training is easy: more parameter updates beat better gradients.
+  # Quarter batch for the first 5k steps. lr is NOT rescaled -- ~2x the
+  # gradient noise, benign this early.
+  batch_ramp: {until: 5000, divisor: 4}
+  amp: true
+  grad_ckpt: true
+  tf32: true
+  # lr 1.5e-4 at batch 1024 is the released Tessera setting for this
+  # geometry. The ring-space S2 run used 5e-4 at batch 2048 (with a 1e-4
+  # polish for its last 2k steps), so this sits between the two under
+  # sqrt-scaling rather than being inherited from either.
+  optim: {lr: 1.5e-4, wd: 0.01, warmup: 1000}
+  val_interval: 1000
+  fig_interval: 2000
+  save_interval: 2500
+
+log:
+  run_tag: s2_pyr96
+  wandb: true
+  wandb_project: georvq
+
+eval:
+  # A NESTED ladder for the reconstruction panels. The default canonical
+  # points are four independently-named samples, not a chain: `half`
+  # clamps its coarse component up to min_depths[0]=6 while `coarse_only`
+  # uses the full 8, so tier-0 depth reads 6, 8, 6, 8 down the figure and
+  # the rows look like a refinement they are not.
+  #
+  # This ladder is monotone in every component AND follows the efficient
+  # front FINDINGS describes -- saturate coarse, then mid, then add fine
+  # levels one at a time, because cells dominate rate (one tier-2 level
+  # costs 3,072 bits against tier-1's 144 and tier-0's 6).
+  # 4-0-0 and 8-0-0 are now TRAINED operating points, so the ladder can
+  # start where the coarse tier stands alone -- which is the rung that
+  # says whether it learned to do anything by itself.
+  recon_tuples: ["4-0-0", "16-0-0", "16-16-0", "16-16-1", "16-16-2",
+                 "16-16-4", "16-16-8", "16-16-16"]

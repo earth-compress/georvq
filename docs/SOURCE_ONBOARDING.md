@@ -141,6 +141,23 @@ temporal structure, and none are in the suite. Adding a fine-spatial or
 temporal benchmark is the highest-value addition to this axis; the
 use-case entry in `lab/TODO.md` depends on the same addition.
 
+### A quality target for Sentinel-2, from practice
+
+Reconstruction cosine and R2 are training signals, not acceptance
+criteria. For S2 the criterion a remote-sensing user applies is
+**absolute reflectance error per band, relative to that band's mean**:
+
+- **< 1% on the 10 m bands** is the rough goal.
+- **1-2% is borderline** -- about the level of Landsat/Sentinel
+  harmonization differences, so a codec sitting there is adding error
+  comparable to a known cross-sensor bias.
+
+This is the number to report alongside R2 for any S2 model, because the
+two can move apart: R2 is computed in per-window standardized space,
+where a band's error is measured in units of its own spread, while the
+practitioner reads error against the band's absolute level. See
+`docs/FINDINGS.md` on uniform losses allocating error by dynamic range.
+
 ## The five-source measurement table
 
 `analysis/data_probe.py` and `analysis/pyramid_sizing.py`, W=64, grids

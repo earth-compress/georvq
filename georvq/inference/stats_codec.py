@@ -38,23 +38,42 @@ class StatsPacker:
             dequantized[i] = (quantized[i] / 255.0) * rng + self.comp_min[i]
         return quantized, dequantized
 
-    def pack(self, stats: np.ndarray) -> bytes:
-        """Compress a (D,) stats vector to bytes."""
+    def pack(self, stats: np.ndarray, tolerance=None) -> bytes:
+        """Compress a (D,) stats vector to bytes.
+
+        `tolerance` overrides the packer's default for this call; <= 0
+        means send the vector verbatim at float32. Rate-dependent policy
+        lives in the source (see `S2Source.side_bits`), not here.
+        """
+        tol = self.tolerance if tolerance is None else tolerance
+        if tol <= 0:
+            return self.pack_raw(stats, np.float32)
         centered = stats - self.mean
         projected = centered @ self.components.T           # (N_max,)
         # minimum components for tolerance, checking error AFTER quantization
         for n in range(1, self.n_max + 1):
             _, dequantized = self._quantize_components(projected, n)
             recon = dequantized @ self.components[:n] + self.mean
-            if np.abs(stats - recon).max() < self.tolerance:
+            if np.abs(stats - recon).max() < tol:
                 break
         else:
             return self.pack_raw(stats)     # PCA can't hit tolerance
         quantized, _ = self._quantize_components(projected, n)
         return struct.pack("B", n) + quantized.tobytes()
 
-    def pack_raw(self, stats: np.ndarray) -> bytes:
-        return struct.pack("B", 255) + stats.astype(np.float16).tobytes()
+    def pack_raw(self, stats: np.ndarray, dtype=np.float16) -> bytes:
+        """Uncompressed escape. `255` = float16, `254` = float32.
+
+        float32 is not overkill for this payload. Each entry is a mean or
+        std over a whole window -- 9,216 pixels here -- so it is known far
+        more precisely than any single uint16 DN of the source, and
+        rounding it to the source's quantum would inject an error the data
+        does not contain. At high rates the extra 416 bits is a rounding
+        error against the index stream, and it removes the reconstruction
+        floor that tolerance coding otherwise imposes.
+        """
+        code = 254 if np.dtype(dtype) == np.float32 else 255
+        return struct.pack("B", code) + stats.astype(dtype).tobytes()
 
     def unpack(self, data: bytes) -> np.ndarray:
         """Packed stats bytes -> the (dim,) stats vector.
@@ -65,6 +84,9 @@ class StatsPacker:
         Inverse of `pack`.
         """
         n = struct.unpack("B", data[:1])[0]
+        if n == 254:
+            return np.frombuffer(data[1:1 + 4 * self.dim],
+                                 dtype=np.float32).copy()
         if n == 255:
             return np.frombuffer(data[1:1 + 2 * self.dim],
                                  dtype=np.float16).astype(np.float32)
