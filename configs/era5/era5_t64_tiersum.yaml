@@ -1,0 +1,20 @@
+# Tier-sum decoder on the 128-D three-tier model: per-tier map heads
+# (coarse 8x8, mid 8x8, fine 64x64), bilinear upsample and sum, absent
+# tiers contribute no tokens, coarse-only rows decode through a
+# transformer-free MLP with its own projection weights. Built to
+# remove the empty-relay penalty the attention decoder pays at low
+# rates: at 20-0-0 it must move everything through 256
+# informationally-absent fine tokens, while the two-tier probe (which
+# has no such tokens) reached coarse-only R2 0.991 against 0.974 here.
+inherit: era5_t64_statscond_std.yaml
+
+model:
+  decoder:
+    kind: tiersum
+    dim: 256
+    depth: 8
+    heads: 8
+    map_px: [8, 8, 64]
+
+log:
+  run_tag: era5_t64_tiersum

@@ -1,0 +1,11 @@
+checkpoints/era5_t64_scstd/model_43k_analysis.pt
+  512 val windows, rungs ['0-0-0', '20-0-0', '20-20-0', '20-20-20']
+
+ tier    bits    b/px   energy   align       r1     r2     r4     r8    r16
+    0     180   0.044   1.2903  0.8568    0.989  0.975  0.941  0.851  0.612
+    1    3200   0.781   0.1341  0.8703    0.989  0.965  0.896  0.693  0.291
+    2   56320  13.750   0.0374  0.9160    0.952  0.836  0.528  0.075  0.011
+
+energy = this tier's increment as a fraction of the SOURCE's spatial energy
+align  = cosine between the increment and the error it was correcting
+r(d)   = autocorrelation of the increment: the scale this tier works at

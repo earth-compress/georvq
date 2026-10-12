@@ -30,6 +30,14 @@ def ancestor_map(g_child: int, g_parent: int) -> torch.Tensor:
     return torch.tensor(idx, dtype=torch.long)
 
 
+def child_slot_map(g_child: int, g_parent: int) -> torch.Tensor:
+    """Child-cell index -> its slot (0..f*f-1) within its parent's cell."""
+    f = g_child // g_parent
+    idx = [(r % f) * f + (c % f)
+           for r in range(g_child) for c in range(g_child)]
+    return torch.tensor(idx, dtype=torch.long)
+
+
 def _mlp(i, o, h=512, layers=3):
     seq = [nn.Linear(i, h), nn.GELU()]
     for _ in range(layers - 1):
@@ -47,20 +55,26 @@ class TierPredictor(nn.Module):
     embedding, and the coarser tiers' depth thermometers."""
 
     def __init__(self, specs, loc_dim=0, coarse_prior=None, hidden=512,
-                 layers=3):
+                 layers=3, child_pos=False):
         super().__init__()
         self.specs = specs
         self.loc_dim = loc_dim
+        self.child_pos = child_pos
         self.coarse_prior = coarse_prior          # frozen loc -> z0, or None
         self.predictors = nn.ModuleList()
         for i, sp in enumerate(specs[1:], start=1):
+            f2 = (sp.grid // specs[i - 1].grid) ** 2 if child_pos else 0
             d_in = (sum(specs[j].dim for j in range(i)) + loc_dim
-                    + sum(specs[j].depth for j in range(i)))
+                    + sum(specs[j].depth for j in range(i)) + f2)
             self.predictors.append(_mlp(d_in, sp.dim, h=hidden, layers=layers))
         for i, sp in enumerate(specs[1:], start=1):
             for j in range(i):
                 self.register_buffer(
                     f"anc_{i}_{j}", ancestor_map(sp.grid, specs[j].grid),
+                    persistent=False)
+            if child_pos:
+                self.register_buffer(
+                    f"slot_{i}", child_slot_map(sp.grid, specs[i - 1].grid),
                     persistent=False)
 
     def _predict(self, i, recons, depths, loc, B):
@@ -78,6 +92,11 @@ class TierPredictor(nn.Module):
         for j in range(i):
             th = thermometer(depths[j], self.specs[j].depth, parts[0].device)
             parts.append(th[:, None].expand(B, cells, self.specs[j].depth))
+        if self.child_pos:
+            slot = getattr(self, f"slot_{i}")
+            f2 = (sp.grid // self.specs[i - 1].grid) ** 2
+            oh = torch.nn.functional.one_hot(slot, f2).to(parts[0].dtype)
+            parts.append(oh[None].expand(B, cells, f2))
         return self.predictors[i - 1](torch.cat(parts, -1))
 
     def quantize(self, rvqs, specs, zs, loc, Ls, cumulative=False,
@@ -257,4 +276,5 @@ def build_conditioning(codec, cond_cfg):
                                                codec.specs[0].dim, "cpu")
         codec.conditioner = TierPredictor(
             codec.specs, loc_dim=loc_dim, coarse_prior=prior,
-            hidden=cond_cfg.hidden, layers=cond_cfg.layers)
+            hidden=cond_cfg.hidden, layers=cond_cfg.layers,
+            child_pos=cond_cfg.child_pos)

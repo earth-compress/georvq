@@ -156,14 +156,55 @@ def test_forward_train_end_to_end():
     assert m.stats_enc.mlp[0].weight.grad is not None
 
 
-def test_disabled_by_default_and_use_std_rejected():
+def test_disabled_by_default_and_bad_std_combo_rejected():
     cfg, m = _model(stats="null")
     assert m.stats_cond is None and m.stats_enc is None
     x, v = _batch(cfg)
     m.encode_levels(x)               # no stats needed when off
+    # dividing an un-centred field would scale its offset
     with pytest.raises(Exception, match="use_std"):
-        load_config("configs/smoke.yaml",
-                    [TIERS, "model.stats_cond={use_std: true}"])
+        load_config("configs/smoke.yaml", [
+            TIERS,
+            "model.stats_cond={use_std: true, subtract_mean: false}"])
+
+
+def test_use_std_standardizes_and_round_trips():
+    cfg, m = _model(stats="{use_std: true}")
+    x, v = _batch(cfg)
+    st = m.patch_stats(x, v)
+    C = cfg.model.bands
+    assert st.shape[1] == 2 * C
+    xc = center(x, st, v)
+    # valid pixels of each window land at zero mean, unit std per band
+    # (sample 0's std is over its valid half only)
+    for b in range(x.shape[0]):
+        sel = xc[b][:, v[b]]
+        assert sel.mean(dim=1).abs().max() < 1e-4
+        assert (sel.std(dim=1, unbiased=False) - 1).abs().max() < 1e-3
+    back = uncenter(xc, st, v)
+    mask = v.unsqueeze(1).expand_as(x)
+    assert torch.allclose(back[mask], x[mask], atol=1e-4)
+
+
+def test_use_std_floor_bounds_amplification():
+    cfg, m = _model(stats="{use_std: true, std_floor: 0.5}")
+    x, v = _batch(cfg, nodata=False)
+    x[0] = 5.0                       # a perfectly uniform window
+    st = m.patch_stats(x, v)
+    C = cfg.model.bands
+    assert (st[:, C:] >= 0.5 - 1e-6).all()
+    assert float(center(x, st, v)[0].abs().max()) == 0.0
+
+
+def test_use_std_model_runs_and_charges_double():
+    cfg, m = _model(stats="{use_std: true}")
+    m_mean = _model()[1]
+    assert m.side_bits() == 2 * m_mean.side_bits()
+    x, v = _batch(cfg)
+    st = m.patch_stats(x, v)
+    Ls = torch.tensor([[3, 3]] * x.shape[0])
+    out, commit, _ = m.forward_train(x, Ls, stats=st, valid=v)
+    assert out.shape == x.shape and torch.isfinite(out).all()
 
 
 def test_recon_figure_never_runs_the_model_in_train_mode():

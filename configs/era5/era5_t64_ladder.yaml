@@ -1,0 +1,27 @@
+# Ladder decoder on the 128-D three-tier model: staged decoding with
+# one exit per rate-ladder prefix. Coarse-only rows decode through a
+# 3-layer FiLM MLP stem + learned-upsampling head (no attention);
+# coarse+mid runs 8 blocks over 17 tokens; full runs a further 8 over
+# 273. Every licensed exit is supervised 1:1:1 -- the coarse exit
+# trains on every row, which is the direct low-frequency gradient the
+# joint objective otherwise withholds. All exits share one head
+# architecture (PSHead: token tiles at map_px, pixel-shuffle up, conv
+# render); conditioning is per tier (own thermometer + stats).
+inherit: era5_t64_statscond_std.yaml
+
+model:
+  vq:
+    # deep supervision already trains every prefix exit on every row, so
+    # warmup tier truncation would only rob stages 1-2 of warmup traffic
+    warmup_truncate: false
+  decoder:
+    kind: ladder
+    dim: 256
+    depth: 8          # blocks PER attention stage (8 + 8)
+    heads: 8
+    head_feat: 64
+    map_px: [8, 16, 64]
+    solo_layers: 3    # coarse stem depth
+
+log:
+  run_tag: era5_t64_ladder

@@ -1,0 +1,24 @@
+2026-09-02T15:33:32Z builder started pid 3995136
+2026-09-03T04:13:34Z log stale 1930s, killing 3995136
+watchdog_train.sh: line 23: 3995136 Killed                  $PY build_store_era5.py --split train --n-windows 200 --cubes-per-window 16 --workers 24 --verify >> build_train.log 2>&1
+2026-09-03T04:13:41Z builder exited rc=137, restarting in 60s
+2026-09-03T04:14:41Z builder started pid 21246
+watchdog_train.sh: line 30: 21246 Killed                  $PY build_store_era5.py --split train --n-windows 200 --cubes-per-window 16 --workers 24 --verify >> build_train.log 2>&1
+2026-09-03T07:04:41Z builder exited rc=137, restarting in 60s
+2026-09-03T07:05:41Z builder started pid 64237
+2026-09-04T02:15:44Z log stale 1858s, killing 64237
+watchdog_train.sh: line 23: 64237 Killed                  $PY build_store_era5.py --split train --n-windows 200 --cubes-per-window 16 --workers 24 --verify >> build_train.log 2>&1
+2026-09-04T02:15:54Z builder exited rc=137, restarting in 60s
+2026-09-04T02:16:54Z builder started pid 1150131
+2026-09-04T21:36:56Z log stale 1987s, killing 1150131
+watchdog_train.sh: line 23: 1150131 Killed                  $PY build_store_era5.py --split train --n-windows 200 --cubes-per-window 16 --workers 24 --verify >> build_train.log 2>&1
+2026-09-04T21:37:04Z builder exited rc=137, restarting in 60s
+2026-09-04T21:38:04Z builder started pid 1924383
+2026-09-05T13:38:06Z log stale 1965s, killing 1924383
+watchdog_train.sh: line 30: 1924383 Killed                  $PY build_store_era5.py --split train --n-windows 200 --cubes-per-window 16 --workers 24 --verify >> build_train.log 2>&1
+2026-09-05T13:38:11Z builder exited rc=137, restarting in 60s
+2026-09-05T13:39:11Z builder started pid 2320523
+watchdog_train.sh: line 30: 2320523 Killed                  $PY build_store_era5.py --split train --n-windows 200 --cubes-per-window 16 --workers 24 --verify >> build_train.log 2>&1
+2026-09-05T22:24:12Z builder exited rc=137, restarting in 60s
+2026-09-05T22:25:12Z builder started pid 2573961
+2026-09-05T22:30:12Z builder finished, rc=0

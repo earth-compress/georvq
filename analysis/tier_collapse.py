@@ -30,7 +30,7 @@ import torch
 import torch.nn.functional as F
 
 from georvq.data.pool import fixed_val_tokens
-from georvq.data.store import ChipStore
+from georvq.data.store import open_store
 from georvq.factory import from_checkpoint
 
 
@@ -53,7 +53,7 @@ def main():
     dev = torch.device(f"cuda:{args.gpu}")
     m = from_checkpoint(args.ckpt, dev)
     cfg = m.full_config
-    store = ChipStore(cfg.data.store_dir)
+    store = open_store(cfg.data.store_dir)
     _, va = store.split(cfg.data.val_frac, cfg.data.split_seed)
     val = fixed_val_tokens(store, va, token=cfg.model.window,
                            max_tokens=args.tokens)

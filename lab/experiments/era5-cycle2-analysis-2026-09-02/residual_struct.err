@@ -1,0 +1,2 @@
+/home/ali/projects/georvq/.claude/worktrees/era5-model/georvq/model/tokenizer.py:47: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  self.vit = nn.TransformerEncoder(layer, depth)

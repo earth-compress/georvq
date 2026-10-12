@@ -1,0 +1,23 @@
+# Two-tier sanity check: drop the fine tier, widen coarse and mid to
+# 128-D, keep K at 512/1024, and see whether the same codebook bits
+# carry more than the 16/32-D versions did. Motivated by the 43k
+# analysis of era5_t64_scstd: tier 0's ladder was informative for ~2
+# levels and tier 1's for ~5 (conditional entropy ~0 beyond that), so
+# the question is whether wider latents let the cheap tiers absorb
+# what the narrow ones could not. Full depth is 3,380 index bits
+# (0.83 b/px) + the 444-bit stats channel -- compare against the
+# 3-tier run's 20-20-0 rung at matched bits.
+#
+# The 192-D tokenizer and 256-D decoder stay: no point on the encode
+# path is narrower than the 128-D latent bottleneck.
+inherit: era5_t64_statscond_std.yaml
+
+model:
+  tiers: ["1:128:512:20", "4:128:1024:20"]
+  min_depths: [15, 0]   # the fill path starts at 15-0
+
+eval:
+  recon_tuples: ["20-0", "20-5", "20-10", "20-20"]
+
+log:
+  run_tag: era5_t64_2t128

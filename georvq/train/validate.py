@@ -81,7 +81,7 @@ def canonical_tuples(specs, mins=None, sampling="nested"):
 
 @torch.no_grad()
 def validate(model, source, val_s, tuples, canon_names=(), val_loc=None,
-             quantized=True, spec=None):
+             quantized=True, spec=None, prep=None):
     """val_s: raw val tokens resident on the eval device (converted per
     chunk). val_loc: per-token location embeddings when the model carries a
     conditioner/selector. `spec`: the run's resolved `ReportSpec`, which
@@ -95,16 +95,45 @@ def validate(model, source, val_s, tuples, canon_names=(), val_loc=None,
     """
     if spec is None:        # ad-hoc callers (tests, scripts): unnarrowed
         spec = source.report(getattr(model, "cfg", None))
+    if prep is None:        # ad-hoc callers: the source's default prep
+        from georvq.sources.prep import SourcePrep
+        prep = SourcePrep(source, getattr(model, "cfg", None))
     q = spec.quality
+
+    def scorer(cx):
+        """Route metrics by declared space: model-space metrics see
+        (o, cx) as the network does; physical ones see prep.inverse of
+        both, inverted once per (chunk, output) rather than per metric."""
+        cache = {"cx": None}
+
+        def score(m, o, cv, po_cache):
+            if m.space != "physical":
+                return m(o, cx, cv)
+            if cache["cx"] is None:
+                cache["cx"] = prep.inverse(cx, {})
+            if po_cache.get("o") is None:
+                po_cache["o"] = prep.inverse(o, {})
+            return m(po_cache["o"], cache["cx"], cv)
+        return score
+
+    for m in list(spec.metrics) + list(spec.extra):
+        if m.space == "physical" and not prep.invertible:
+            raise RuntimeError(
+                f"metric {m.key!r} is declared physical but prep "
+                f"{type(prep).__name__} has no inverse")
     was_training = model.training
     model.eval()
+    # sources with sampled prep (era5 @single draws a level per chip)
+    # must serve the same slices every validation, or the val metric
+    # jitters with the draw; the flag is a no-op for other sources
+    source._prep_deterministic = True
     specs = model.specs
     out, q_by_tuple = {}, {}
     extra_by_tuple = {m.key: {} for m in spec.extra}
     vchunk = max(64, 65536 // specs[-1].cells)
     chunks = []
     for i in range(0, val_s.shape[0], vchunk):
-        x, v = source.prep(val_s[i:i + vchunk], val_s.device)
+        x, v, _ = prep(val_s[i:i + vchunk], {}, val_s.device)
         chunks.append((x, v, val_loc[i:i + vchunk] if val_loc is not None else None))
 
     def _baselines():
@@ -126,10 +155,12 @@ def validate(model, source, val_s, tuples, canon_names=(), val_loc=None,
         # until the books are fitted.
         ceil = {m.key: [0.0, 0] for m in spec.metrics}
         for cx, cv, _ in chunks:
+            score = scorer(cx)
             o = model.eval_ceiling(cx, valid=cv)
             n = int(cv.sum())
+            oc = {}
             for m in spec.metrics:
-                ceil[m.key][0] += float(m(o, cx, cv)) * n
+                ceil[m.key][0] += float(score(m, o, cv, oc)) * n
                 ceil[m.key][1] += n
         for k, (tot, n) in ceil.items():
             out[f"{k}_ceiling"] = tot / max(n, 1)
@@ -137,6 +168,7 @@ def validate(model, source, val_s, tuples, canon_names=(), val_loc=None,
         out["_extra"] = {}
         if was_training:
             model.train()
+        source._prep_deterministic = False
         return out, {}
 
     sums = {tname(t): [0.0, 0] for t in tuples}
@@ -146,6 +178,7 @@ def validate(model, source, val_s, tuples, canon_names=(), val_loc=None,
     cd_sum = [np.zeros(sp.depth + 1) for sp in specs] if track_cd else None
     cd_n = 0
     for cx, cv, cloc in chunks:
+        score = scorer(cx)
         zs, cums = model.level_cumsums(cx, loc=cloc, valid=cv)
         if track_cd:       # per-tier cos-dist by cumulative level (0 = prior)
             for ti, sp in enumerate(specs):
@@ -161,12 +194,14 @@ def validate(model, source, val_s, tuples, canon_names=(), val_loc=None,
             # the extras are the expensive ones and only the canonical
             # operating points are ever read, so skip the rest
             if tname(t) in canon_names:
+                oc = {}
                 for m in spec.extra:
                     e = esums[m.key][tname(t)]
-                    e[0] += float(m(o, cx, cv)) * n; e[1] += n
+                    e[0] += float(score(m, o, cv, oc)) * n; e[1] += n
         o = model.eval_ceiling(cx, valid=cv)
+        oc = {}
         for m in spec.metrics:
-            ceil[m.key][0] += float(m(o, cx, cv)) * n
+            ceil[m.key][0] += float(score(m, o, cv, oc)) * n
             ceil[m.key][1] += n
     for t in tuples:
         s = sums[tname(t)]
@@ -191,6 +226,7 @@ def validate(model, source, val_s, tuples, canon_names=(), val_loc=None,
                           for ti in range(len(specs))]
     if was_training:
         model.train()
+    source._prep_deterministic = False
     return out, q_by_tuple
 
 

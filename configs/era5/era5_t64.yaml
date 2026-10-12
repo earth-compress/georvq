@@ -1,0 +1,85 @@
+# ERA5 temperature on 37 pressure levels: the standard 64px 3-tier
+# pyramid on single hourly slices, levels as bands (0.25deg posting,
+# 64px window = 16deg). Slices are per-level standardized in
+# Era5Source.prep with the fixed moments in georvq/sources/era5_stats.json.
+#
+# Sizing from the onboarding probes (val store, 2026-08-31):
+# per-level-standardized tier energies 88.1/10.4/1.4% with 0.15% below
+# 4px, so grids 1/4/16 reach 99.85% of the energy; tier d95 = 5/12/21
+# sets the latent floors for dims 16/32/32. Depth 20 per tier and
+# K = 512/1024/2048 are the maintainer's call (2026-09-01): K capped
+# well below the AE/tessera 16384 fine tier to keep the shipped
+# codebooks small. At batch 1024 the coarse tier sees 1024 vectors per
+# step; the ema_decay ramp to 0.998 (window 500) puts K=512 at ~1000
+# vectors per code, with split resets covering the faster early decay.
+#
+# depth_sampling "path": tiers fill strictly coarse-to-fine, one book
+# at a time (the maintainer's rate-ladder semantics, 2026-09-01) --
+# training, validation and the R-D front all live on that path, so no
+# operating point with an unsaturated coarse tier ever appears.
+data:
+  source: "era5:t"
+  store_dir: /data/ERA5-samples/train/store_t
+  val_frac: 0.04     # split by draw window (Era5Store.split)
+  pool:
+    size: 32000      # the full 32000-slice train split resident (~76 GiB)
+    workers: 12
+    slot_rows: 128
+    refresh_per_s: 16.0
+    device: cpu
+    cycle: true
+
+model:
+  window: 64
+  bands: 37
+  # 128-D everywhere (2026-09-02): the two-tier probe showed the same
+  # 180 coarse codebook bits carrying R2 0.979 at 128-D against 0.936
+  # at 16-D -- the d95-derived widths undersold what a decoder can use
+  # from a cell, so width is no longer tied to the data's linear rank.
+  tiers: ["1:128:512:20", "4:128:1024:20", "16:128:2048:20"]
+  depth_sampling: path
+  min_depths: [15, 0, 0]   # the path starts at 15-0-0
+  full_frac: 0.005
+  ff_ratio: 2.0
+  tokenizer: {dim: 192, depth: 6}
+  decoder: {dim: 256, depth: 8, heads: 8, head_feat: 64, cls_bridge: true}
+  vq:
+    commit_weight: 0.25
+    dead_threshold: 0.000625
+    ema_decay: 0.99
+    ema_decay_final: 0.998
+    bf16_scores: true
+    skip_masked: true
+    reset_mode: split
+    # 3k unquantized with matryoshka truncation before the codebook
+    # init, so the wider latents settle before the books are fitted
+    warmup_steps: 3000
+    # tree init cannot seed an empty leaf; per-code budget decouples the
+    # tiers (32768 shared samples would give the 2048-code fine tier 16
+    # vectors per centroid)
+    init_mode: tree
+    init_per_code: 1024
+    # keep the continuous path trained so the ceiling stays a real
+    # headroom diagnostic instead of sagging onto the quantized path
+    passthrough_frac: 0.15
+
+train:
+  steps: 60000
+  batch_windows: 1024
+  amp: true
+  grad_ckpt: true
+  tf32: true
+  # 2e-4: the from-scratch value (tessera from-scratch ran 1.5e-4);
+  # 5e-5 was a warm-start rate carried in from the AE preset
+  optim: {lr: 2.0e-4, wd: 0.01, warmup: 3000}
+  val_interval: 1000
+  fig_interval: 2000
+  save_interval: 2500
+  val_tuples: 16
+
+eval:
+  recon_tuples: ["20-0-0", "20-20-0", "20-20-1", "20-20-20"]
+
+log:
+  run_tag: era5_t64
+  wandb_project: georvq

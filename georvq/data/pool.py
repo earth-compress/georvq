@@ -29,8 +29,9 @@ class GroupBatch(dict):
 
     Sources see a plain dict (it IS one, so `.items()` and `x["10m"]` work
     as before). The shared stack, though, handles batches generically --
-    it slices them into chunks, reads `.shape[0]`, moves them to a device.
-    Implementing just those four operations here means validation,
+    it slices them into chunks, reads `.shape[0]`, moves them to a device
+    or to the host.
+    Implementing just those operations here means validation,
     figures and the train loop need no `isinstance` branch to carry a
     multi-group source, and a group dict can never be silently sliced as
     if it were one plane.
@@ -57,6 +58,9 @@ class GroupBatch(dict):
 
     def float(self):
         return GroupBatch({n: t.float() for n, t in self.items()})
+
+    def cpu(self):
+        return GroupBatch({n: t.cpu() for n, t in self.items()})
 
 
 class ChipPool:

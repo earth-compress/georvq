@@ -1,0 +1,2865 @@
+split=train years=1979..2023 target=200 windows x 16 cubes (0.55 GiB/cube pre-compression) -> /data/ERA5-samples/train
+window 0/200: t0=1999-07-04T18 centers=[(-18.2, 210.4), (-5.6, 181.1), (-3.3, 156.0), (11.8, 288.7), (-52.9, 354.6), (2.0, 43.0), (41.4, 299.4), (47.0, 10.3), (-42.0, 167.2), (17.8, 128.3), (-19.0, 21.7), (-21.0, 103.0), (20.4, 0.0), (-64.0, 189.1), (25.0, 156.1), (5.9, 244.0)]
+  t: fetched+quantized (   262s elapsed)
+  z: fetched+quantized (   426s elapsed)
+  u: fetched+quantized (   650s elapsed)
+  v: fetched+quantized (   896s elapsed)
+  q: fetched+quantized (  1088s elapsed)
+  msl: fetched+quantized (  1105s elapsed)
+  t2m: fetched+quantized (  1124s elapsed)
+  u10: fetched+quantized (  1142s elapsed)
+  v10: fetched+quantized (  1160s elapsed)
+  verify cube 12 u10 h=11: max|err|=1.630e-04 max scale/2=1.639e-04 -> ok
+  window done in 1161s (16 cubes, ~64.2h remaining)
+window 1/200: t0=1991-02-28T02 centers=[(4.1, 329.1), (9.2, 197.0), (-39.5, 345.8), (-38.6, 267.6), (-42.4, 205.0), (-32.3, 37.9), (14.6, 92.8), (-64.7, 8.6), (-7.7, 259.2), (-3.1, 60.8), (39.1, 288.2), (52.7, 64.3), (12.9, 17.9), (-30.8, 103.5), (26.6, 238.2), (-18.7, 164.9)]
+  t: fetched+quantized (   162s elapsed)
+  z: fetched+quantized (   346s elapsed)
+  u: fetched+quantized (   582s elapsed)
+  v: fetched+quantized (   816s elapsed)
+  q: fetched+quantized (  1017s elapsed)
+  msl: fetched+quantized (  1035s elapsed)
+  t2m: fetched+quantized (  1052s elapsed)
+  u10: fetched+quantized (  1070s elapsed)
+  v10: fetched+quantized (  1088s elapsed)
+  verify cube 25 t h=27: max|err|=2.320e-04 max scale/2=2.335e-04 -> ok
+  window done in 1091s (32 cubes, ~61.9h remaining)
+window 2/200: t0=1986-04-21T10 centers=[(-3.5, 194.5), (-24.3, 144.6), (31.8, 172.0), (44.6, 322.7), (-31.3, 195.4), (-62.7, 110.7), (-31.6, 36.6), (-11.6, 245.1), (-6.0, 295.7), (14.9, 220.0), (-47.9, 11.1), (-34.3, 289.9), (44.9, 2.8), (54.4, 280.9), (54.4, 100.2), (-16.6, 77.9)]
+  t: fetched+quantized (   164s elapsed)
+  z: fetched+quantized (   319s elapsed)
+  u: fetched+quantized (   549s elapsed)
+  v: fetched+quantized (   773s elapsed)
+  q: fetched+quantized (   976s elapsed)
+  msl: fetched+quantized (   994s elapsed)
+  t2m: fetched+quantized (  1012s elapsed)
+  u10: fetched+quantized (  1031s elapsed)
+  v10: fetched+quantized (  1049s elapsed)
+  verify cube 39 t h=56: max|err|=2.524e-04 max scale/2=2.540e-04 -> ok
+  window done in 1052s (48 cubes, ~60.3h remaining)
+window 3/200: t0=2003-03-07T17 centers=[(2.9, 299.3), (-15.7, 245.2), (-37.8, 36.5), (55.1, 86.8), (-44.6, 163.3), (-35.7, 69.9), (-14.6, 129.5), (42.6, 238.6), (19.7, 184.3), (-65.1, 265.6), (4.0, 341.7), (27.7, 310.3), (6.5, 263.3), (12.3, 235.0), (15.2, 14.9), (34.8, 160.6)]
+  t: fetched+quantized (   170s elapsed)
+  z: fetched+quantized (   329s elapsed)
+  u: fetched+quantized (   553s elapsed)
+  v: fetched+quantized (   796s elapsed)
+  q: fetched+quantized (   995s elapsed)
+  msl: fetched+quantized (  1013s elapsed)
+  t2m: fetched+quantized (  1030s elapsed)
+  u10: fetched+quantized (  1048s elapsed)
+  v10: fetched+quantized (  1066s elapsed)
+  verify cube 63 v10 h=57: max|err|=2.738e-04 max scale/2=2.754e-04 -> ok
+  window done in 1067s (64 cubes, ~59.5h remaining)
+window 4/200: t0=2016-05-13T14 centers=[(19.7, 177.7), (-43.5, 126.0), (-59.4, 33.5), (-0.7, 33.6), (-46.1, 177.0), (-30.6, 336.4), (6.5, 113.4), (34.1, 119.8), (14.1, 275.8), (-24.6, 150.5), (-38.7, 227.8), (-13.5, 183.9), (-13.4, 58.1), (13.6, 303.6), (47.7, 42.6), (19.1, 76.7)]
+  t: fetched+quantized (   166s elapsed)
+  z: fetched+quantized (   336s elapsed)
+  u: fetched+quantized (   560s elapsed)
+  v: fetched+quantized (   789s elapsed)
+  q: fetched+quantized (   996s elapsed)
+  msl: fetched+quantized (  1015s elapsed)
+  t2m: fetched+quantized (  1035s elapsed)
+  u10: fetched+quantized (  1056s elapsed)
+  v10: fetched+quantized (  1076s elapsed)
+  verify cube 70 u10 h=88: max|err|=2.066e-04 max scale/2=2.075e-04 -> ok
+  window done in 1078s (80 cubes, ~59.0h remaining)
+window 5/200: t0=2013-02-15T10 centers=[(-18.1, 77.3), (-19.2, 355.7), (-34.9, 118.0), (36.5, 220.7), (51.5, 65.6), (39.2, 178.2), (-66.0, 99.3), (-9.0, 279.8), (1.4, 10.1), (-54.9, 181.5), (4.3, 175.4), (-34.5, 286.7), (63.1, 297.3), (-26.9, 157.1), (39.6, 0.3), (-45.7, 334.7)]
+  t: fetched+quantized (   164s elapsed)
+  z: fetched+quantized (   316s elapsed)
+  u: fetched+quantized (   545s elapsed)
+  v: fetched+quantized (   786s elapsed)
+  q: fetched+quantized (   984s elapsed)
+  msl: fetched+quantized (  1002s elapsed)
+  t2m: fetched+quantized (  1020s elapsed)
+  u10: fetched+quantized (  1039s elapsed)
+  v10: fetched+quantized (  1059s elapsed)
+  verify cube 94 t h=66: max|err|=3.818e-04 max scale/2=3.841e-04 -> ok
+  window done in 1065s (96 cubes, ~58.5h remaining)
+window 6/200: t0=1990-12-18T08 centers=[(46.7, 339.0), (-11.2, 98.8), (5.7, 337.9), (19.3, 40.0), (-10.9, 195.2), (23.8, 215.1), (-41.7, 189.0), (-60.2, 243.4), (-6.0, 24.3), (56.6, 71.6), (-53.9, 135.6), (8.1, 146.3), (54.9, 194.0), (7.4, 278.9), (-16.9, 298.1), (-31.7, 270.2)]
+  t: fetched+quantized (   158s elapsed)
+  z: fetched+quantized (   311s elapsed)
+  u: fetched+quantized (   549s elapsed)
+  v: fetched+quantized (   797s elapsed)
+  q: fetched+quantized (  1011s elapsed)
+  msl: fetched+quantized (  1028s elapsed)
+  t2m: fetched+quantized (  1045s elapsed)
+  u10: fetched+quantized (  1063s elapsed)
+  v10: fetched+quantized (  1080s elapsed)
+  verify cube 107 z h=48: max|err|=4.868e-02 max scale/2=4.898e-02 -> ok
+  window done in 1082s (112 cubes, ~58.2h remaining)
+window 7/200: t0=2016-05-20T20 centers=[(35.1, 113.5), (12.9, 11.7), (-6.3, 93.7), (-8.9, 338.9), (23.3, 300.9), (-62.1, 113.0), (28.5, 144.2), (11.0, 226.6), (-27.7, 5.0), (25.4, 81.6), (-35.3, 288.3), (-16.5, 185.1), (64.8, 232.9), (-61.1, 227.5), (32.1, 173.7), (-10.8, 65.2)]
+  t: fetched+quantized (   158s elapsed)
+  z: fetched+quantized (   324s elapsed)
+  u: fetched+quantized (   548s elapsed)
+  v: fetched+quantized (   779s elapsed)
+  q: fetched+quantized (   990s elapsed)
+  msl: fetched+quantized (  1007s elapsed)
+  t2m: fetched+quantized (  1025s elapsed)
+  u10: fetched+quantized (  1044s elapsed)
+  v10: fetched+quantized (  1062s elapsed)
+  verify cube 127 t2m h=27: max|err|=1.275e-04 max scale/2=1.284e-04 -> ok
+  window done in 1063s (128 cubes, ~57.7h remaining)
+window 8/200: t0=2005-04-30T18 centers=[(43.1, 282.0), (-33.1, 202.6), (-47.1, 58.4), (-17.5, 44.4), (20.2, 100.1), (54.1, 202.6), (-2.0, 130.4), (3.3, 177.9), (7.2, 352.3), (-4.8, 293.2), (-31.5, 125.9), (-63.3, 300.3), (58.4, 331.5), (-18.9, 264.4), (-19.4, 161.0), (-38.2, 306.3)]
+  t: fetched+quantized (   161s elapsed)
+  z: fetched+quantized (   313s elapsed)
+  u: fetched+quantized (   531s elapsed)
+  v: fetched+quantized (   768s elapsed)
+  q: fetched+quantized (   972s elapsed)
+  msl: fetched+quantized (   991s elapsed)
+  t2m: fetched+quantized (  1009s elapsed)
+  u10: fetched+quantized (  1028s elapsed)
+  v10: fetched+quantized (  1047s elapsed)
+  verify cube 133 msl h=13: max|err|=3.053e-02 max scale/2=3.073e-02 -> ok
+  window done in 1048s (144 cubes, ~57.2h remaining)
+window 9/200: t0=2010-08-02T18 centers=[(24.7, 17.1), (-14.0, 14.0), (-10.8, 117.0), (22.1, 229.1), (-65.8, 22.9), (15.0, 262.6), (-32.2, 219.0), (-6.7, 232.0), (-7.5, 151.7), (48.7, 54.5), (-45.6, 101.9), (-19.7, 49.9), (-7.6, 191.1), (58.5, 266.1), (25.4, 328.9), (-46.5, 139.6)]
+  t: fetched+quantized (   165s elapsed)
+  z: fetched+quantized (   347s elapsed)
+  u: fetched+quantized (   587s elapsed)
+  v: fetched+quantized (   826s elapsed)
+  q: fetched+quantized (  1042s elapsed)
+  msl: fetched+quantized (  1059s elapsed)
+  t2m: fetched+quantized (  1077s elapsed)
+  u10: fetched+quantized (  1095s elapsed)
+  v10: fetched+quantized (  1113s elapsed)
+  verify cube 153 msl h=57: max|err|=2.338e-02 max scale/2=2.352e-02 -> ok
+  window done in 1114s (160 cubes, ~57.1h remaining)
+window 10/200: t0=2003-10-19T04 centers=[(-2.4, 243.1), (-44.3, 250.6), (36.1, 127.7), (0.6, 144.4), (-32.0, 105.4), (8.0, 202.7), (-43.3, 302.2), (8.7, 284.5), (4.1, 112.0), (7.4, 16.7), (-16.9, 24.2), (3.3, 61.2), (-56.4, 77.3), (-16.1, 174.3), (53.7, 192.1), (36.2, 355.1)]
+  t: fetched+quantized (   162s elapsed)
+  z: fetched+quantized (   323s elapsed)
+  u: fetched+quantized (   541s elapsed)
+  v: fetched+quantized (   771s elapsed)
+  q: fetched+quantized (   982s elapsed)
+  msl: fetched+quantized (   999s elapsed)
+  t2m: fetched+quantized (  1016s elapsed)
+  u10: fetched+quantized (  1033s elapsed)
+  v10: fetched+quantized (  1050s elapsed)
+  verify cube 172 q h=69: max|err|=7.150e-08 max scale/2=7.308e-08 -> ok
+  window done in 1054s (176 cubes, ~56.7h remaining)
+window 11/200: t0=2004-05-24T14 centers=[(35.0, 218.6), (4.4, 318.6), (59.4, 359.3), (20.9, 1.4), (-43.8, 138.9), (-50.7, 17.8), (-4.1, 241.4), (-46.3, 336.9), (-13.5, 144.2), (0.8, 117.1), (-22.4, 325.4), (30.5, 82.8), (12.3, 268.0), (16.9, 151.6), (-2.3, 292.8), (-41.2, 245.0)]
+  t: fetched+quantized (   173s elapsed)
+  z: fetched+quantized (   345s elapsed)
+  u: fetched+quantized (   563s elapsed)
+  v: fetched+quantized (   802s elapsed)
+  q: fetched+quantized (   990s elapsed)
+  msl: fetched+quantized (  1007s elapsed)
+  t2m: fetched+quantized (  1024s elapsed)
+  u10: fetched+quantized (  1042s elapsed)
+  v10: fetched+quantized (  1060s elapsed)
+  verify cube 191 z h=48: max|err|=3.029e-01 max scale/2=3.048e-01 -> ok
+  window done in 1066s (192 cubes, ~56.3h remaining)
+window 12/200: t0=1980-09-29T04 centers=[(48.3, 262.9), (-29.8, 28.3), (-16.8, 210.9), (61.2, 37.7), (19.3, 338.9), (-39.0, 240.2), (-10.6, 273.8), (32.0, 180.8), (35.7, 36.7), (3.8, 187.0), (-25.7, 73.0), (-18.3, 171.1), (24.6, 145.1), (-12.3, 109.6), (-15.5, 351.8), (48.5, 331.2)]
+  t: fetched+quantized (   187s elapsed)
+  z: fetched+quantized (   355s elapsed)
+  u: fetched+quantized (   576s elapsed)
+  v: fetched+quantized (   813s elapsed)
+  q: fetched+quantized (  1006s elapsed)
+  msl: fetched+quantized (  1024s elapsed)
+  t2m: fetched+quantized (  1041s elapsed)
+  u10: fetched+quantized (  1061s elapsed)
+  v10: fetched+quantized (  1080s elapsed)
+  verify cube 194 t2m h=13: max|err|=1.135e-04 max scale/2=1.141e-04 -> ok
+  window done in 1081s (208 cubes, ~56.0h remaining)
+window 13/200: t0=2016-04-30T01 centers=[(17.1, 4.6), (36.8, 162.5), (-57.8, 159.7), (-41.6, 226.6), (10.1, 126.4), (-29.6, 23.2), (13.5, 194.6), (61.5, 201.0), (-48.4, 342.0), (-31.7, 171.9), (42.5, 270.0), (46.1, 9.2), (31.4, 109.0), (27.5, 337.1), (17.6, 75.0), (-8.8, 100.9)]
+  t: fetched+quantized (   162s elapsed)
+  z: fetched+quantized (   332s elapsed)
+  u: fetched+quantized (   552s elapsed)
+  v: fetched+quantized (   776s elapsed)
+  q: fetched+quantized (   971s elapsed)
+  msl: fetched+quantized (   988s elapsed)
+  t2m: fetched+quantized (  1005s elapsed)
+  u10: fetched+quantized (  1023s elapsed)
+  v10: fetched+quantized (  1042s elapsed)
+  verify cube 215 u h=95: max|err|=7.471e-04 max scale/2=7.542e-04 -> ok
+  window done in 1045s (224 cubes, ~55.6h remaining)
+window 14/200: t0=2017-11-05T17 centers=[(18.3, 215.2), (39.5, 53.9), (29.5, 169.7), (3.5, 182.2), (-22.3, 259.1), (49.5, 8.9), (-29.4, 225.6), (5.8, 335.3), (25.1, 291.2), (42.1, 248.6), (41.0, 98.1), (-36.0, 120.5), (-25.7, 1.2), (-59.4, 343.8), (42.2, 197.2), (55.4, 141.6)]
+  t: fetched+quantized (   155s elapsed)
+  z: fetched+quantized (   323s elapsed)
+  u: fetched+quantized (   553s elapsed)
+  v: fetched+quantized (   782s elapsed)
+  q: fetched+quantized (   983s elapsed)
+  msl: fetched+quantized (  1000s elapsed)
+  t2m: fetched+quantized (  1017s elapsed)
+  u10: fetched+quantized (  1035s elapsed)
+  v10: fetched+quantized (  1054s elapsed)
+  verify cube 230 v10 h=84: max|err|=2.403e-04 max scale/2=2.414e-04 -> ok
+  window done in 1055s (240 cubes, ~55.2h remaining)
+window 15/200: t0=2014-11-01T04 centers=[(-8.3, 223.4), (13.0, 170.3), (-39.3, 208.3), (-41.8, 52.8), (12.5, 277.4), (4.0, 309.7), (-22.8, 4.9), (22.3, 27.5), (-35.5, 129.6), (-10.1, 88.3), (-63.5, 95.0), (11.4, 197.4), (58.6, 181.9), (-8.7, 52.4), (-15.9, 249.0), (49.8, 315.8)]
+  t: fetched+quantized (   155s elapsed)
+  z: fetched+quantized (   313s elapsed)
+  u: fetched+quantized (   558s elapsed)
+  v: fetched+quantized (   790s elapsed)
+  q: fetched+quantized (   990s elapsed)
+  msl: fetched+quantized (  1007s elapsed)
+  t2m: fetched+quantized (  1024s elapsed)
+  u10: fetched+quantized (  1041s elapsed)
+  v10: fetched+quantized (  1059s elapsed)
+  verify cube 246 q h=30: max|err|=1.554e-07 max scale/2=1.574e-07 -> ok
+  window done in 1062s (256 cubes, ~54.9h remaining)
+window 16/200: t0=2020-08-21T19 centers=[(-10.8, 273.6), (-65.1, 47.7), (-32.5, 150.3), (36.3, 93.3), (48.3, 30.3), (-39.6, 43.4), (26.5, 262.1), (-25.8, 318.3), (-20.5, 5.7), (24.9, 152.5), (23.3, 62.3), (-22.8, 233.6), (-18.0, 177.9), (-10.9, 97.5), (-56.7, 165.5), (5.9, 188.3)]
+  t: fetched+quantized (   168s elapsed)
+  z: fetched+quantized (   324s elapsed)
+  u: fetched+quantized (   537s elapsed)
+  v: fetched+quantized (   763s elapsed)
+  q: fetched+quantized (   958s elapsed)
+  msl: fetched+quantized (   975s elapsed)
+  t2m: fetched+quantized (   992s elapsed)
+  u10: fetched+quantized (  1010s elapsed)
+  v10: fetched+quantized (  1028s elapsed)
+  verify cube 268 u10 h=46: max|err|=2.521e-04 max scale/2=2.529e-04 -> ok
+  window done in 1029s (272 cubes, ~54.5h remaining)
+window 17/200: t0=1998-09-20T09 centers=[(62.4, 197.8), (39.3, 242.2), (-65.5, 146.4), (-10.0, 53.9), (-19.5, 249.3), (-50.4, 91.6), (-60.8, 44.7), (-2.6, 335.4), (15.2, 14.4), (-53.0, 276.9), (-26.8, 137.4), (-53.1, 205.7), (31.2, 52.1), (-10.6, 108.9), (41.8, 170.5), (5.9, 235.6)]
+  t: fetched+quantized (   170s elapsed)
+  z: fetched+quantized (   340s elapsed)
+  u: fetched+quantized (   589s elapsed)
+  v: fetched+quantized (   824s elapsed)
+  q: fetched+quantized (  1023s elapsed)
+  msl: fetched+quantized (  1039s elapsed)
+  t2m: fetched+quantized (  1056s elapsed)
+  u10: fetched+quantized (  1073s elapsed)
+  v10: fetched+quantized (  1089s elapsed)
+  verify cube 284 v10 h=66: max|err|=1.720e-04 max scale/2=1.728e-04 -> ok
+  window done in 1089s (288 cubes, ~54.2h remaining)
+window 18/200: t0=1998-01-08T17 centers=[(34.2, 0.2), (16.0, 47.7), (-32.6, 226.7), (7.9, 190.0), (-52.5, 135.0), (63.5, 32.8), (-28.2, 162.8), (-60.9, 31.0), (65.7, 152.9), (-10.6, 240.1), (21.4, 310.0), (-56.0, 307.5), (-7.7, 302.3), (-25.9, 56.7), (-13.4, 109.6), (8.2, 151.9)]
+  t: fetched+quantized (   170s elapsed)
+  z: fetched+quantized (   346s elapsed)
+  u: fetched+quantized (   581s elapsed)
+  v: fetched+quantized (   813s elapsed)
+  q: fetched+quantized (  1009s elapsed)
+  msl: fetched+quantized (  1025s elapsed)
+  t2m: fetched+quantized (  1042s elapsed)
+  u10: fetched+quantized (  1060s elapsed)
+  v10: fetched+quantized (  1078s elapsed)
+  verify cube 299 v h=92: max|err|=8.161e-04 max scale/2=8.192e-04 -> ok
+  window done in 1085s (304 cubes, ~53.9h remaining)
+window 19/200: t0=2023-05-09T21 centers=[(62.3, 317.7), (-8.4, 20.4), (39.1, 241.4), (9.8, 318.4), (24.3, 268.8), (-1.3, 191.6), (0.3, 106.8), (32.6, 332.6), (-44.7, 78.8), (-6.3, 160.8), (-23.0, 272.7), (-14.2, 135.8), (-35.7, 2.1), (39.7, 61.3), (-20.9, 330.8), (30.4, 19.7)]
+  t: fetched+quantized (   157s elapsed)
+  z: fetched+quantized (   307s elapsed)
+  u: fetched+quantized (   524s elapsed)
+  v: fetched+quantized (   761s elapsed)
+  q: fetched+quantized (   975s elapsed)
+  msl: fetched+quantized (   992s elapsed)
+  t2m: fetched+quantized (  1008s elapsed)
+  u10: fetched+quantized (  1025s elapsed)
+  v10: fetched+quantized (  1044s elapsed)
+  verify cube 310 msl h=12: max|err|=1.326e-02 max scale/2=1.337e-02 -> ok
+  window done in 1045s (320 cubes, ~53.6h remaining)
+window 20/200: t0=1988-05-25T05 centers=[(-46.1, 335.5), (0.4, 0.7), (35.2, 173.0), (22.6, 210.6), (0.4, 306.8), (64.3, 272.4), (31.4, 26.8), (-21.4, 173.6), (-5.5, 150.0), (-26.0, 289.9), (7.4, 111.0), (46.2, 108.7), (-59.3, 102.1), (-18.4, 40.3), (-53.3, 200.7), (27.5, 353.8)]
+  t: fetched+quantized (    97s elapsed)
+  z: fetched+quantized (   187s elapsed)
+  u: fetched+quantized (   312s elapsed)
+  v: fetched+quantized (   442s elapsed)
+  q: fetched+quantized (   550s elapsed)
+  msl: fetched+quantized (   566s elapsed)
+  t2m: fetched+quantized (   583s elapsed)
+  u10: fetched+quantized (   601s elapsed)
+  v10: fetched+quantized (   618s elapsed)
+  verify cube 330 msl h=17: max|err|=1.520e-02 max scale/2=1.529e-02 -> ok
+  window done in 619s (336 cubes, ~52.2h remaining)
+window 21/200: t0=2012-02-22T20 centers=[(18.8, 28.1), (-17.3, 38.6), (-49.5, 104.1), (-2.0, 123.1), (1.8, 283.4), (63.7, 238.1), (9.3, 213.6), (34.2, 152.6), (-16.7, 333.0), (52.5, 71.3), (-7.4, 68.2), (-17.5, 212.8), (-65.4, 208.5), (30.4, 343.5), (55.7, 288.0), (5.5, 95.8)]
+  t: fetched+quantized (    90s elapsed)
+  z: fetched+quantized (   175s elapsed)
+  u: fetched+quantized (   303s elapsed)
+  v: fetched+quantized (   431s elapsed)
+  q: fetched+quantized (   541s elapsed)
+  msl: fetched+quantized (   557s elapsed)
+  t2m: fetched+quantized (   573s elapsed)
+  u10: fetched+quantized (   591s elapsed)
+  v10: fetched+quantized (   608s elapsed)
+  verify cube 337 u10 h=26: max|err|=3.178e-04 max scale/2=3.194e-04 -> ok
+  window done in 609s (352 cubes, ~50.9h remaining)
+window 22/200: t0=1992-10-09T04 centers=[(6.4, 254.7), (17.6, 347.3), (-51.4, 249.4), (61.6, 297.6), (36.3, 163.5), (-47.8, 109.1), (-51.5, 198.2), (-23.4, 297.8), (-13.2, 27.9), (-3.2, 184.2), (-39.3, 35.8), (27.0, 298.4), (-51.5, 342.7), (-19.4, 213.7), (-1.2, 70.9), (48.1, 117.7)]
+  t: fetched+quantized (    90s elapsed)
+  z: fetched+quantized (   183s elapsed)
+  u: fetched+quantized (   308s elapsed)
+  v: fetched+quantized (   434s elapsed)
+  q: fetched+quantized (   549s elapsed)
+  msl: fetched+quantized (   565s elapsed)
+  t2m: fetched+quantized (   582s elapsed)
+  u10: fetched+quantized (   598s elapsed)
+  v10: fetched+quantized (   616s elapsed)
+  verify cube 365 msl h=10: max|err|=2.370e-02 max scale/2=2.389e-02 -> ok
+  window done in 617s (368 cubes, ~49.8h remaining)
+window 23/200: t0=2014-09-23T08 centers=[(-48.7, 65.2), (15.4, 73.7), (-8.3, 19.3), (14.4, 186.9), (-6.0, 148.3), (13.8, 301.7), (49.2, 230.3), (-13.1, 244.8), (60.0, 162.3), (-1.9, 108.1), (-12.5, 55.0), (-30.5, 310.1), (-39.7, 243.0), (-23.4, 128.4), (35.4, 12.2), (17.5, 254.8)]
+  t: fetched+quantized (    89s elapsed)
+  z: fetched+quantized (   194s elapsed)
+  u: fetched+quantized (   328s elapsed)
+  v: fetched+quantized (   451s elapsed)
+  q: fetched+quantized (   558s elapsed)
+  msl: fetched+quantized (   574s elapsed)
+  t2m: fetched+quantized (   589s elapsed)
+  u10: fetched+quantized (   606s elapsed)
+  v10: fetched+quantized (   623s elapsed)
+  verify cube 368 z h=80: max|err|=2.258e-01 max scale/2=2.272e-01 -> ok
+  window done in 625s (384 cubes, ~48.7h remaining)
+window 24/200: t0=1979-03-07T17 centers=[(17.4, 353.7), (50.2, 94.3), (-54.2, 163.2), (-43.3, 346.3), (-26.7, 22.0), (7.3, 238.4), (-11.4, 219.8), (37.9, 149.5), (19.5, 112.3), (44.1, 36.0), (-23.2, 155.0), (25.1, 327.6), (-4.4, 131.2), (-7.9, 315.4), (-10.0, 103.9), (48.2, 279.2)]
+  t: fetched+quantized (    89s elapsed)
+  z: fetched+quantized (   173s elapsed)
+  u: fetched+quantized (   294s elapsed)
+  v: fetched+quantized (   423s elapsed)
+  q: fetched+quantized (   527s elapsed)
+  msl: fetched+quantized (   545s elapsed)
+  t2m: fetched+quantized (   563s elapsed)
+  u10: fetched+quantized (   582s elapsed)
+  v10: fetched+quantized (   600s elapsed)
+  verify cube 391 t h=22: max|err|=3.704e-04 max scale/2=3.729e-04 -> ok
+  window done in 602s (400 cubes, ~47.6h remaining)
+window 25/200: t0=2008-09-08T19 centers=[(47.4, 304.1), (54.9, 20.3), (-24.5, 158.2), (-3.5, 247.8), (-7.3, 26.3), (-53.0, 116.1), (1.3, 117.7), (24.4, 338.1), (-4.9, 67.9), (-2.2, 191.7), (-24.4, 296.5), (30.7, 220.0), (1.0, 320.4), (-38.2, 221.5), (56.9, 253.8), (51.8, 86.3)]
+  t: fetched+quantized (    95s elapsed)
+  z: fetched+quantized (   200s elapsed)
+  u: fetched+quantized (   323s elapsed)
+  v: fetched+quantized (   444s elapsed)
+  q: fetched+quantized (   548s elapsed)
+  msl: fetched+quantized (   564s elapsed)
+  t2m: fetched+quantized (   581s elapsed)
+  u10: fetched+quantized (   597s elapsed)
+  v10: fetched+quantized (   614s elapsed)
+  verify cube 408 u10 h=52: max|err|=2.201e-04 max scale/2=2.206e-04 -> ok
+  window done in 615s (416 cubes, ~46.7h remaining)
+window 26/200: t0=2005-08-26T09 centers=[(20.9, 316.6), (2.4, 147.3), (-27.6, 199.8), (-43.2, 272.9), (-9.7, 256.5), (36.2, 123.5), (30.7, 30.4), (12.2, 186.7), (51.7, 245.4), (-27.5, 133.7), (-54.8, 356.7), (-18.1, 163.8), (-5.6, 294.8), (-52.2, 225.7), (-12.6, 109.1), (0.0, 341.6)]
+  t: fetched+quantized (    88s elapsed)
+  z: fetched+quantized (   190s elapsed)
+  u: fetched+quantized (   321s elapsed)
+  v: fetched+quantized (   455s elapsed)
+  q: fetched+quantized (   561s elapsed)
+  msl: fetched+quantized (   577s elapsed)
+  t2m: fetched+quantized (   594s elapsed)
+  u10: fetched+quantized (   611s elapsed)
+  v10: fetched+quantized (   629s elapsed)
+  verify cube 426 u h=78: max|err|=1.234e-03 max scale/2=1.238e-03 -> ok
+  window done in 632s (432 cubes, ~45.8h remaining)
+window 27/200: t0=2006-09-21T06 centers=[(-2.4, 16.1), (-19.0, 341.4), (39.4, 210.1), (-51.2, 151.8), (-29.3, 104.5), (-3.4, 160.7), (44.2, 162.7), (-34.8, 56.5), (-59.1, 250.7), (-54.7, 201.2), (65.5, 282.6), (44.4, 349.7), (11.0, 93.1), (-14.3, 234.3), (37.6, 273.9), (-8.7, 41.4)]
+  t: fetched+quantized (   119s elapsed)
+  z: fetched+quantized (   203s elapsed)
+  u: fetched+quantized (   321s elapsed)
+  v: fetched+quantized (   445s elapsed)
+  q: fetched+quantized (   551s elapsed)
+  msl: fetched+quantized (   567s elapsed)
+  t2m: fetched+quantized (   583s elapsed)
+  u10: fetched+quantized (   600s elapsed)
+  v10: fetched+quantized (   617s elapsed)
+  verify cube 447 v h=32: max|err|=3.556e-04 max scale/2=3.570e-04 -> ok
+  window done in 620s (448 cubes, ~45.0h remaining)
+window 28/200: t0=1997-02-21T20 centers=[(5.5, 164.4), (47.7, 86.9), (-60.6, 224.9), (29.7, 49.3), (-25.1, 112.2), (0.1, 340.9), (48.0, 254.0), (-50.9, 101.6), (4.5, 232.1), (9.2, 194.2), (30.7, 112.0), (42.4, 164.5), (17.5, 255.4), (56.1, 214.6), (-45.7, 265.5), (-3.1, 89.4)]
+  t: fetched+quantized (    89s elapsed)
+  z: fetched+quantized (   184s elapsed)
+  u: fetched+quantized (   304s elapsed)
+  v: fetched+quantized (   425s elapsed)
+  q: fetched+quantized (   540s elapsed)
+  msl: fetched+quantized (   556s elapsed)
+  t2m: fetched+quantized (   572s elapsed)
+  u10: fetched+quantized (   589s elapsed)
+  v10: fetched+quantized (   607s elapsed)
+  verify cube 462 q h=66: max|err|=1.623e-07 max scale/2=1.646e-07 -> ok
+  window done in 610s (464 cubes, ~44.2h remaining)
+window 29/200: t0=2020-06-13T11 centers=[(-46.6, 255.3), (-45.3, 158.1), (8.7, 182.0), (18.4, 61.2), (36.1, 100.7), (30.3, 162.4), (28.8, 340.6), (-5.0, 320.2), (-52.4, 302.4), (0.6, 101.6), (-59.5, 63.2), (9.4, 210.5), (18.2, 269.1), (-14.5, 353.8), (7.3, 139.6), (-17.0, 72.8)]
+  t: fetched+quantized (    92s elapsed)
+  z: fetched+quantized (   187s elapsed)
+  u: fetched+quantized (   310s elapsed)
+  v: fetched+quantized (   439s elapsed)
+  q: fetched+quantized (   550s elapsed)
+  msl: fetched+quantized (   566s elapsed)
+  t2m: fetched+quantized (   581s elapsed)
+  u10: fetched+quantized (   597s elapsed)
+  v10: fetched+quantized (   614s elapsed)
+  verify cube 477 v h=63: max|err|=4.706e-04 max scale/2=4.724e-04 -> ok
+  window done in 617s (480 cubes, ~43.4h remaining)
+window 30/200: t0=2016-11-26T03 centers=[(19.8, 7.7), (20.3, 83.3), (-56.1, 4.4), (-19.5, 268.4), (54.8, 27.9), (-58.9, 147.7), (-45.9, 236.3), (-63.7, 299.6), (13.9, 169.1), (11.9, 217.2), (-7.1, 241.3), (60.7, 243.5), (32.9, 129.3), (-8.1, 134.9), (56.7, 337.0), (-7.0, 45.6)]
+  t: fetched+quantized (    91s elapsed)
+  z: fetched+quantized (   180s elapsed)
+  u: fetched+quantized (   298s elapsed)
+  v: fetched+quantized (   420s elapsed)
+  q: fetched+quantized (   554s elapsed)
+  msl: fetched+quantized (   571s elapsed)
+  t2m: fetched+quantized (   588s elapsed)
+  u10: fetched+quantized (   606s elapsed)
+  v10: fetched+quantized (   623s elapsed)
+  verify cube 489 v h=26: max|err|=5.903e-04 max scale/2=5.920e-04 -> ok
+  window done in 626s (496 cubes, ~42.7h remaining)
+window 31/200: t0=1981-10-07T06 centers=[(-5.2, 220.3), (35.4, 93.0), (-51.4, 297.1), (10.2, 13.1), (-12.8, 269.5), (-25.7, 172.3), (-21.7, 137.4), (50.2, 199.2), (-4.9, 302.1), (-22.3, 354.6), (-9.8, 50.8), (38.1, 320.3), (-3.0, 187.3), (-15.9, 99.7), (28.8, 137.6), (-44.4, 119.8)]
+  t: fetched+quantized (   105s elapsed)
+  z: fetched+quantized (   217s elapsed)
+  u: fetched+quantized (   364s elapsed)
+  v: fetched+quantized (   502s elapsed)
+  q: fetched+quantized (   628s elapsed)
+  msl: fetched+quantized (   646s elapsed)
+  t2m: fetched+quantized (   663s elapsed)
+  u10: fetched+quantized (   681s elapsed)
+  v10: fetched+quantized (   699s elapsed)
+  verify cube 497 z h=91: max|err|=8.126e-02 max scale/2=8.176e-02 -> ok
+  window done in 702s (512 cubes, ~42.2h remaining)
+window 32/200: t0=2020-03-18T10 centers=[(-28.4, 186.5), (-45.7, 352.5), (17.2, 53.7), (19.4, 353.0), (-32.1, 36.4), (-46.9, 222.3), (41.3, 228.4), (-19.2, 129.3), (2.4, 106.5), (-57.8, 296.0), (17.6, 173.2), (63.7, 103.5), (-12.3, 316.1), (-15.2, 2.8), (17.3, 131.2), (3.5, 260.4)]
+  t: fetched+quantized (    89s elapsed)
+  z: fetched+quantized (   190s elapsed)
+  u: fetched+quantized (   320s elapsed)
+  v: fetched+quantized (   451s elapsed)
+  q: fetched+quantized (   564s elapsed)
+  msl: fetched+quantized (   580s elapsed)
+  t2m: fetched+quantized (   597s elapsed)
+  u10: fetched+quantized (   613s elapsed)
+  v10: fetched+quantized (   631s elapsed)
+  verify cube 527 msl h=3: max|err|=1.801e-02 max scale/2=1.814e-02 -> ok
+  window done in 632s (528 cubes, ~41.5h remaining)
+window 33/200: t0=2004-08-20T02 centers=[(-36.4, 171.8), (-12.7, 144.4), (41.3, 123.7), (-6.0, 28.1), (60.0, 66.0), (-43.0, 93.9), (30.6, 161.3), (28.2, 261.0), (7.5, 124.4), (43.1, 351.1), (16.0, 8.9), (-64.4, 204.4), (-0.1, 94.5), (35.6, 41.5), (-54.6, 302.2), (2.5, 284.9)]
+  t: fetched+quantized (    89s elapsed)
+  z: fetched+quantized (   176s elapsed)
+  u: fetched+quantized (   294s elapsed)
+  v: fetched+quantized (   417s elapsed)
+  q: fetched+quantized (   523s elapsed)
+  msl: fetched+quantized (   539s elapsed)
+  t2m: fetched+quantized (   555s elapsed)
+  u10: fetched+quantized (   572s elapsed)
+  v10: fetched+quantized (   590s elapsed)
+  verify cube 537 v h=57: max|err|=8.181e-04 max scale/2=8.217e-04 -> ok
+  window done in 592s (544 cubes, ~40.9h remaining)
+window 34/200: t0=1995-01-13T15 centers=[(62.3, 321.7), (10.5, 347.7), (-21.9, 312.7), (54.9, 52.2), (28.7, 70.4), (-2.2, 118.2), (12.9, 162.0), (-13.6, 248.6), (-53.3, 164.2), (54.2, 182.6), (-45.5, 15.6), (55.1, 120.5), (39.3, 279.2), (-18.7, 176.9), (-34.0, 113.7), (26.4, 203.3)]
+  t: fetched+quantized (    88s elapsed)
+  z: fetched+quantized (   171s elapsed)
+  u: fetched+quantized (   290s elapsed)
+  v: fetched+quantized (   414s elapsed)
+  q: fetched+quantized (   521s elapsed)
+  msl: fetched+quantized (   538s elapsed)
+  t2m: fetched+quantized (   554s elapsed)
+  u10: fetched+quantized (   571s elapsed)
+  v10: fetched+quantized (   589s elapsed)
+  verify cube 553 z h=69: max|err|=1.723e-01 max scale/2=1.734e-01 -> ok
+  window done in 591s (560 cubes, ~40.3h remaining)
+window 35/200: t0=1992-01-27T08 centers=[(-34.8, 267.0), (-48.1, 179.5), (-10.1, 153.7), (24.4, 244.8), (18.9, 181.7), (-21.4, 75.6), (1.1, 89.3), (27.3, 331.3), (-26.3, 302.7), (13.7, 47.7), (-55.0, 10.5), (38.4, 210.6), (-59.0, 320.2), (-53.0, 231.2), (12.4, 18.6), (-18.7, 213.7)]
+  t: fetched+quantized (    89s elapsed)
+  z: fetched+quantized (   176s elapsed)
+  u: fetched+quantized (   297s elapsed)
+  v: fetched+quantized (   423s elapsed)
+  q: fetched+quantized (   532s elapsed)
+  msl: fetched+quantized (   548s elapsed)
+  t2m: fetched+quantized (   564s elapsed)
+  u10: fetched+quantized (   581s elapsed)
+  v10: fetched+quantized (   597s elapsed)
+  verify cube 568 v10 h=54: max|err|=1.982e-04 max scale/2=1.992e-04 -> ok
+  window done in 598s (576 cubes, ~39.7h remaining)
+window 36/200: t0=1991-03-05T00 centers=[(4.0, 64.3), (-20.8, 317.3), (18.8, 98.4), (37.7, 299.6), (-34.3, 243.0), (30.9, 229.3), (65.8, 339.6), (25.5, 199.3), (-24.7, 140.0), (-35.5, 9.3), (21.6, 154.8), (-14.9, 31.0), (-65.0, 24.1), (-35.0, 58.7), (22.4, 11.9), (-1.0, 348.1)]
+  t: fetched+quantized (    90s elapsed)
+  z: fetched+quantized (   174s elapsed)
+  u: fetched+quantized (   292s elapsed)
+  v: fetched+quantized (   415s elapsed)
+  q: fetched+quantized (   523s elapsed)
+  msl: fetched+quantized (   539s elapsed)
+  t2m: fetched+quantized (   554s elapsed)
+  u10: fetched+quantized (   572s elapsed)
+  v10: fetched+quantized (   589s elapsed)
+  verify cube 586 msl h=30: max|err|=2.340e-02 max scale/2=2.356e-02 -> ok
+  window done in 590s (592 cubes, ~39.1h remaining)
+window 37/200: t0=1998-08-09T14 centers=[(34.8, 97.2), (-31.6, 7.3), (36.7, 339.6), (-1.1, 50.8), (48.6, 68.7), (-38.4, 204.6), (-27.5, 38.1), (54.9, 5.5), (12.2, 318.8), (-63.4, 327.6), (2.5, 138.2), (-23.1, 302.6), (64.8, 300.7), (-0.4, 217.2), (-54.2, 138.0), (3.7, 270.9)]
+  t: fetched+quantized (    90s elapsed)
+  z: fetched+quantized (   174s elapsed)
+  u: fetched+quantized (   316s elapsed)
+  v: fetched+quantized (   452s elapsed)
+  q: fetched+quantized (   563s elapsed)
+  msl: fetched+quantized (   579s elapsed)
+  t2m: fetched+quantized (   595s elapsed)
+  u10: fetched+quantized (   611s elapsed)
+  v10: fetched+quantized (   628s elapsed)
+  verify cube 594 q h=68: max|err|=1.504e-07 max scale/2=1.523e-07 -> ok
+  window done in 631s (608 cubes, ~38.6h remaining)
+window 38/200: t0=2021-07-15T23 centers=[(-22.2, 170.9), (26.1, 79.5), (39.8, 299.0), (13.4, 137.6), (43.3, 255.2), (34.7, 155.3), (-40.0, 141.5), (40.6, 188.2), (46.6, 49.2), (-37.0, 55.5), (22.5, 236.9), (-25.7, 270.3), (-38.6, 9.6), (7.2, 195.6), (29.9, 113.6), (-13.3, 338.8)]
+  t: fetched+quantized (    89s elapsed)
+  z: fetched+quantized (   179s elapsed)
+  u: fetched+quantized (   305s elapsed)
+  v: fetched+quantized (   444s elapsed)
+  q: fetched+quantized (   562s elapsed)
+  msl: fetched+quantized (   577s elapsed)
+  t2m: fetched+quantized (   592s elapsed)
+  u10: fetched+quantized (   608s elapsed)
+  v10: fetched+quantized (   624s elapsed)
+  verify cube 610 t h=87: max|err|=2.115e-04 max scale/2=2.128e-04 -> ok
+  window done in 626s (624 cubes, ~38.1h remaining)
+window 39/200: t0=2017-06-28T02 centers=[(39.3, 108.7), (-4.5, 49.0), (25.5, 65.5), (-3.6, 204.3), (-49.7, 126.9), (64.9, 123.1), (9.9, 318.5), (-53.0, 311.1), (-5.4, 231.9), (-34.0, 89.8), (45.1, 224.6), (-0.6, 89.0), (-37.9, 259.6), (63.7, 256.6), (27.5, 18.8), (-23.4, 118.6)]
+  t: fetched+quantized (    90s elapsed)
+  z: fetched+quantized (   187s elapsed)
+  u: fetched+quantized (   948s elapsed)
+  v: fetched+quantized (  2084s elapsed)
+  q: fetched+quantized (  3006s elapsed)
+  msl: fetched+quantized (  3075s elapsed)
+  t2m: fetched+quantized (  3156s elapsed)
+  u10: fetched+quantized (  3276s elapsed)
+  v10: fetched+quantized (  3382s elapsed)
+  verify cube 629 t2m h=10: max|err|=2.804e-04 max scale/2=2.823e-04 -> ok
+  window done in 3386s (640 cubes, ~40.6h remaining)
+window 40/200: t0=1989-11-25T05 centers=[(2.6, 17.9), (29.4, 160.4), (-53.5, 66.6), (-42.0, 346.0), (8.1, 43.0), (16.3, 350.8), (-47.8, 305.1), (-1.3, 274.9), (-59.8, 124.7), (-10.2, 132.0), (-53.9, 222.6), (13.9, 117.4), (-4.3, 234.9), (-52.3, 172.7), (-46.8, 267.2), (-9.9, 327.8)]
+  t: fetched+quantized (   742s elapsed)
+  z: fetched+quantized (  1496s elapsed)
+  u: fetched+quantized (  2472s elapsed)
+  v: fetched+quantized (  3804s elapsed)
+  q: fetched+quantized (  5021s elapsed)
+  msl: fetched+quantized (  5122s elapsed)
+  t2m: fetched+quantized (  5213s elapsed)
+  u10: fetched+quantized (  5306s elapsed)
+  v10: fetched+quantized (  5402s elapsed)
+  verify cube 640 t2m h=14: max|err|=2.738e-04 max scale/2=2.755e-04 -> ok
+  window done in 5407s (656 cubes, ~45.2h remaining)
+window 41/200: t0=1992-05-20T18 centers=[(-33.7, 61.2), (-9.3, 310.0), (44.7, 178.0), (30.9, 312.4), (11.6, 53.9), (12.7, 171.1), (-47.8, 169.3), (-10.2, 248.3), (-1.7, 94.1), (5.9, 207.7), (-4.4, 282.6), (-21.0, 173.3), (-9.3, 69.5), (-59.2, 264.5), (13.5, 334.6), (-36.8, 133.3)]
+  t: fetched+quantized (  1170s elapsed)
+  z: fetched+quantized (  1975s elapsed)
+  u: fetched+quantized (  3296s elapsed)
+  v: fetched+quantized (  4458s elapsed)
+  q: fetched+quantized (  5626s elapsed)
+  msl: fetched+quantized (  5723s elapsed)
+  t2m: fetched+quantized (  5831s elapsed)
+  u10: fetched+quantized (  6006s elapsed)
+  v10: fetched+quantized (  6155s elapsed)
+  verify cube 664 v10 h=44: max|err|=1.431e-04 max scale/2=1.435e-04 -> ok
+  window done in 6166s (672 cubes, ~50.3h remaining)
+window 42/200: t0=2021-10-09T13 centers=[(46.2, 310.4), (6.4, 343.6), (-57.9, 272.1), (-13.4, 173.2), (46.1, 16.0), (-26.2, 39.5), (-54.7, 112.0), (-31.4, 270.5), (-51.9, 169.3), (21.3, 51.1), (-23.2, 117.3), (8.7, 11.5), (-25.6, 239.3), (-38.5, 77.2), (22.4, 192.8), (42.8, 212.5)]
+  t: fetched+quantized (   957s elapsed)
+  z: fetched+quantized (  1797s elapsed)
+  u: fetched+quantized (  3339s elapsed)
+  v: fetched+quantized (  4842s elapsed)
+  q: fetched+quantized (  6125s elapsed)
+  msl: fetched+quantized (  6189s elapsed)
+  t2m: fetched+quantized (  6260s elapsed)
+  u10: fetched+quantized (  6354s elapsed)
+  v10: fetched+quantized (  6450s elapsed)
+  verify cube 686 t h=13: max|err|=2.037e-04 max scale/2=2.049e-04 -> ok
+  window done in 6488s (688 cubes, ~55.4h remaining)
+window 43/200: t0=2020-09-09T16 centers=[(-11.4, 320.4), (34.7, 315.3), (-1.5, 158.2), (-0.9, 87.8), (62.2, 216.6), (-57.2, 36.4), (17.7, 284.1), (3.4, 193.1), (-38.3, 225.6), (60.0, 299.3), (-58.3, 335.1), (31.2, 120.3), (29.7, 160.6), (38.8, 245.3), (-33.5, 262.5), (0.6, 50.0)]
+  t: fetched+quantized (   939s elapsed)
+  z: fetched+quantized (  1761s elapsed)
+  u: fetched+quantized (  3135s elapsed)
+  v: fetched+quantized (  4712s elapsed)
+  q: fetched+quantized (  5801s elapsed)
+  msl: fetched+quantized (  5888s elapsed)
+  t2m: fetched+quantized (  6001s elapsed)
+  u10: fetched+quantized (  6158s elapsed)
+  v10: fetched+quantized (  6305s elapsed)
+  verify cube 695 v h=21: max|err|=4.005e-04 max scale/2=4.018e-04 -> ok
+  window done in 6419s (704 cubes, ~60.1h remaining)
+window 44/200: t0=2005-06-06T07 centers=[(18.2, 93.7), (-6.4, 331.3), (-43.9, 103.8), (-51.8, 355.3), (11.1, 156.1), (-26.4, 298.0), (-48.4, 175.0), (-12.8, 33.1), (2.0, 283.7), (38.3, 320.9), (28.3, 225.5), (36.3, 47.0), (-19.2, 109.3), (56.6, 183.5), (-48.3, 256.8), (28.7, 11.5)]
+  t: fetched+quantized (   873s elapsed)
+  z: fetched+quantized (  1764s elapsed)
+  u: fetched+quantized (  3287s elapsed)
+  v: fetched+quantized (  4768s elapsed)
+  q: fetched+quantized (  6086s elapsed)
+  msl: fetched+quantized (  6155s elapsed)
+  t2m: fetched+quantized (  6234s elapsed)
+  u10: fetched+quantized (  6334s elapsed)
+  v10: fetched+quantized (  6428s elapsed)
+  verify cube 708 u h=70: max|err|=7.344e-04 max scale/2=7.380e-04 -> ok
+  window done in 6478s (720 cubes, ~64.6h remaining)
+window 45/200: t0=2008-06-03T12 centers=[(5.5, 359.7), (-32.5, 340.0), (-13.1, 257.6), (57.2, 161.1), (-10.3, 55.8), (30.1, 208.4), (42.6, 356.3), (17.8, 314.1), (-51.0, 168.8), (-22.7, 108.0), (-38.1, 287.4), (-50.9, 220.6), (53.2, 88.6), (11.7, 81.5), (-12.0, 287.7), (62.5, 220.4)]
+  t: fetched+quantized (   944s elapsed)
+  z: fetched+quantized (  1774s elapsed)
+  u: fetched+quantized (  2922s elapsed)
+  v: fetched+quantized (  4264s elapsed)
+  q: fetched+quantized (  5585s elapsed)
+  msl: fetched+quantized (  5685s elapsed)
+  t2m: fetched+quantized (  5805s elapsed)
+  u10: fetched+quantized (  5962s elapsed)
+  v10: fetched+quantized (  6126s elapsed)
+  verify cube 726 t2m h=67: max|err|=3.406e-04 max scale/2=3.428e-04 -> ok
+  window done in 6133s (736 cubes, ~68.5h remaining)
+window 46/200: t0=2002-04-22T14 centers=[(8.3, 24.9), (4.9, 162.2), (-65.3, 184.8), (41.1, 228.9), (-29.6, 37.3), (52.3, 120.1), (-22.0, 199.7), (-32.9, 152.0), (-16.0, 119.2), (20.9, 74.8), (-46.4, 244.3), (-30.0, 345.0), (-57.6, 72.9), (3.9, 96.8), (61.9, 267.7), (7.5, 355.3)]
+  t: fetched+quantized (   892s elapsed)
+  z: fetched+quantized (  1730s elapsed)
+  u: fetched+quantized (  2479s elapsed)
+  v: fetched+quantized (  4651s elapsed)
+  q: fetched+quantized (  6856s elapsed)
+  msl: fetched+quantized (  7008s elapsed)
+  t2m: fetched+quantized (  7168s elapsed)
+  u10: fetched+quantized (  7388s elapsed)
+  v10: fetched+quantized (  7581s elapsed)
+  verify cube 739 u10 h=20: max|err|=2.010e-04 max scale/2=2.021e-04 -> ok
+  window done in 7588s (752 cubes, ~73.5h remaining)
+window 47/200: t0=2013-05-14T15 centers=[(-27.4, 257.0), (-35.8, 304.8), (37.9, 105.5), (36.7, 245.3), (-47.5, 84.3), (-18.2, 6.3), (33.3, 292.5), (-25.6, 181.1), (-54.1, 243.5), (28.8, 189.6), (23.0, 158.2), (-63.5, 335.7), (7.2, 354.6), (-14.6, 117.6), (39.0, 12.4), (7.2, 131.4)]
+  t: fetched+quantized (  1842s elapsed)
+  z: fetched+quantized (  3506s elapsed)
+  u: fetched+quantized (  5964s elapsed)
+  v: fetched+quantized (  8181s elapsed)
+  q: fetched+quantized ( 10408s elapsed)
+  msl: fetched+quantized ( 10566s elapsed)
+  t2m: fetched+quantized ( 10719s elapsed)
+  u10: fetched+quantized ( 10960s elapsed)
+  v10: fetched+quantized ( 11184s elapsed)
+  verify cube 757 z h=64: max|err|=8.008e-02 max scale/2=8.065e-02 -> ok
+  window done in 11290s (768 cubes, ~81.4h remaining)
+window 48/200: t0=1999-12-07T12 centers=[(-23.8, 72.6), (-25.9, 33.6), (-28.4, 274.5), (-46.1, 225.1), (8.7, 336.7), (-54.4, 138.6), (40.9, 170.1), (-39.3, 178.2), (2.8, 67.2), (-29.3, 119.4), (-52.6, 30.7), (8.7, 249.2), (63.5, 94.7), (11.0, 29.3), (-10.6, 185.1), (42.1, 258.3)]
+  t: fetched+quantized (  1694s elapsed)
+  z: fetched+quantized (  3160s elapsed)
+  u: fetched+quantized (  5091s elapsed)
+  v: fetched+quantized (  7273s elapsed)
+  q: fetched+quantized (  9152s elapsed)
+  msl: fetched+quantized (  9275s elapsed)
+  t2m: fetched+quantized (  9417s elapsed)
+  u10: fetched+quantized (  9657s elapsed)
+  v10: fetched+quantized (  9909s elapsed)
+  verify cube 782 q h=67: max|err|=1.214e-07 max scale/2=1.231e-07 -> ok
+  window done in 10032s (784 cubes, ~87.8h remaining)
+window 49/200: t0=2011-10-22T14 centers=[(-37.0, 48.7), (22.0, 344.6), (8.1, 293.3), (-18.9, 248.5), (-60.6, 26.9), (-21.7, 119.7), (11.9, 136.7), (-10.7, 332.7), (-33.5, 86.1), (39.6, 23.0), (-1.4, 93.8), (-38.1, 273.2), (45.6, 219.8), (28.8, 267.5), (5.0, 58.2), (-0.0, 219.9)]
+  t: fetched+quantized (  1424s elapsed)
+  z: fetched+quantized (  3041s elapsed)
+  u: fetched+quantized (  5312s elapsed)
+  v: fetched+quantized (  7070s elapsed)
+  q: fetched+quantized (  9067s elapsed)
+  msl: fetched+quantized (  9174s elapsed)
+  t2m: fetched+quantized (  9330s elapsed)
+  u10: fetched+quantized (  9499s elapsed)
+  v10: fetched+quantized (  9732s elapsed)
+  verify cube 794 u h=31: max|err|=4.924e-04 max scale/2=4.944e-04 -> ok
+  window done in 9852s (800 cubes, ~93.7h remaining)
+window 50/200: t0=1986-06-04T18 centers=[(25.1, 156.5), (-59.9, 262.1), (-41.2, 308.2), (64.4, 305.0), (16.0, 118.0), (-30.0, 0.6), (38.3, 285.8), (-6.5, 83.6), (-43.8, 176.4), (42.5, 78.9), (65.8, 42.9), (1.8, 267.9), (10.0, 238.8), (50.1, 147.0), (4.7, 183.6), (53.0, 226.9)]
+  t: fetched+quantized (  1669s elapsed)
+  z: fetched+quantized (  2855s elapsed)
+  u: fetched+quantized (  5152s elapsed)
+  v: fetched+quantized (  7301s elapsed)
+  q: fetched+quantized (  9426s elapsed)
+  msl: fetched+quantized (  9572s elapsed)
+  t2m: fetched+quantized (  9732s elapsed)
+  u10: fetched+quantized (  9953s elapsed)
+  v10: fetched+quantized ( 10124s elapsed)
+  verify cube 805 v10 h=54: max|err|=2.557e-04 max scale/2=2.568e-04 -> ok
+  window done in 10128s (816 cubes, ~99.5h remaining)
+window 51/200: t0=1999-04-08T08 centers=[(-25.2, 131.8), (45.9, 355.9), (-55.7, 263.4), (-16.6, 261.8), (37.5, 189.8), (48.4, 227.0), (7.2, 87.7), (-0.6, 45.1), (43.9, 307.9), (-6.8, 154.4), (65.3, 74.4), (-10.8, 355.5), (-47.6, 357.8), (5.3, 210.7), (-26.4, 34.6), (-20.9, 204.3)]
+  t: fetched+quantized (  1904s elapsed)
+  z: fetched+quantized (  3688s elapsed)
+  u: fetched+quantized (  6208s elapsed)
+  v: fetched+quantized (  8629s elapsed)
+  q: fetched+quantized ( 10810s elapsed)
+  msl: fetched+quantized ( 10947s elapsed)
+  t2m: fetched+quantized ( 11113s elapsed)
+  u10: fetched+quantized ( 11304s elapsed)
+  v10: fetched+quantized ( 11505s elapsed)
+  verify cube 826 u10 h=18: max|err|=1.981e-04 max scale/2=1.989e-04 -> ok
+  window done in 11533s (832 cubes, ~106.0h remaining)
+window 52/200: t0=2020-12-08T02 centers=[(-7.6, 84.9), (34.8, 257.3), (-21.5, 210.4), (-15.5, 339.7), (39.5, 66.8), (-4.3, 37.0), (57.2, 172.9), (-13.8, 304.4), (-38.1, 70.5), (-61.7, 88.7), (-3.8, 8.4), (19.9, 142.2), (15.4, 188.5), (-46.6, 259.3), (-33.4, 145.8), (-39.7, 5.3)]
+  t: fetched+quantized (  1440s elapsed)
+  z: fetched+quantized (  3107s elapsed)
+  u: fetched+quantized (  5431s elapsed)
+  v: fetched+quantized (  7467s elapsed)
+  q: fetched+quantized (  9738s elapsed)
+  msl: fetched+quantized (  9912s elapsed)
+  t2m: fetched+quantized ( 10082s elapsed)
+  u10: fetched+quantized ( 10301s elapsed)
+  v10: fetched+quantized ( 10534s elapsed)
+  verify cube 841 msl h=88: max|err|=6.055e-02 max scale/2=6.093e-02 -> ok
+  window done in 10544s (848 cubes, ~111.4h remaining)
+window 53/200: t0=2001-03-10T14 centers=[(18.1, 75.7), (22.6, 163.1), (-22.3, 18.3), (16.1, 201.0), (13.5, 105.8), (-20.0, 104.6), (-17.9, 285.2), (-41.8, 63.9), (-2.4, 330.7), (36.7, 27.9), (-18.2, 176.6), (-28.9, 146.2), (3.8, 234.6), (-44.6, 355.7), (54.1, 357.4), (-24.6, 233.2)]
+  t: fetched+quantized (  1899s elapsed)
+  z: fetched+quantized (  3589s elapsed)
+  u: fetched+quantized (  6036s elapsed)
+  v: fetched+quantized (  8415s elapsed)
+  q: fetched+quantized ( 10251s elapsed)
+  msl: fetched+quantized ( 10387s elapsed)
+  t2m: fetched+quantized ( 10561s elapsed)
+  u10: fetched+quantized ( 10782s elapsed)
+resume: 848 cubes, next window 53
+split=train years=1979..2023 target=200 windows x 16 cubes (0.55 GiB/cube pre-compression) -> /data/ERA5-samples/train
+window 53/200: t0=2001-03-10T14 centers=[(18.1, 75.7), (22.6, 163.1), (-22.3, 18.3), (16.1, 201.0), (13.5, 105.8), (-20.0, 104.6), (-17.9, 285.2), (-41.8, 63.9), (-2.4, 330.7), (36.7, 27.9), (-18.2, 176.6), (-28.9, 146.2), (3.8, 234.6), (-44.6, 355.7), (54.1, 357.4), (-24.6, 233.2)]
+  t: fetched+quantized (   488s elapsed)
+  z: fetched+quantized (  1040s elapsed)
+  u: fetched+quantized (  1757s elapsed)
+  v: fetched+quantized (  2306s elapsed)
+  q: fetched+quantized (  2651s elapsed)
+  msl: fetched+quantized (  2673s elapsed)
+  t2m: fetched+quantized (  2700s elapsed)
+  u10: fetched+quantized (  2735s elapsed)
+  v10: fetched+quantized (  2771s elapsed)
+  verify cube 860 u10 h=11: max|err|=1.426e-04 max scale/2=1.432e-04 -> ok
+  window done in 2779s (864 cubes, ~112.7h remaining)
+window 54/200: t0=1981-11-01T11 centers=[(-25.6, 136.0), (-61.5, 151.0), (-46.1, 71.1), (-15.6, 216.7), (-17.0, 94.3), (-42.0, 4.4), (31.3, 103.3), (17.9, 173.1), (-21.0, 33.2), (34.1, 319.2), (-6.0, 335.6), (65.0, 182.8), (-12.3, 68.8), (47.9, 217.5), (-40.9, 276.3), (44.5, 51.1)]
+  t: fetched+quantized (   250s elapsed)
+  z: fetched+quantized (   699s elapsed)
+  u: fetched+quantized (  1495s elapsed)
+  v: fetched+quantized (  2213s elapsed)
+  q: fetched+quantized (  2829s elapsed)
+  msl: fetched+quantized (  2869s elapsed)
+  t2m: fetched+quantized (  2909s elapsed)
+  u10: fetched+quantized (  2967s elapsed)
+  v10: fetched+quantized (  3045s elapsed)
+  verify cube 873 t h=27: max|err|=3.504e-04 max scale/2=3.525e-04 -> ok
+  window done in 3142s (880 cubes, ~119.2h remaining)
+window 55/200: t0=2015-05-24T23 centers=[(31.8, 2.9), (-53.7, 75.1), (-65.8, 145.5), (-31.2, 122.1), (-57.1, 14.5), (-64.6, 257.0), (0.6, 185.3), (-9.3, 341.5), (-24.0, 285.3), (3.9, 117.1), (20.9, 234.6), (-1.6, 51.2), (20.4, 288.9), (41.7, 211.9), (62.0, 261.0), (-18.9, 209.7)]
+  t: fetched+quantized (   617s elapsed)
+  z: fetched+quantized (  1111s elapsed)
+  u: fetched+quantized (  1814s elapsed)
+  v: fetched+quantized (  2507s elapsed)
+  q: fetched+quantized (  3359s elapsed)
+  msl: fetched+quantized (  3405s elapsed)
+  t2m: fetched+quantized (  3455s elapsed)
+  u10: fetched+quantized (  3535s elapsed)
+  v10: fetched+quantized (  3590s elapsed)
+  verify cube 887 t h=56: max|err|=1.985e-04 max scale/2=1.998e-04 -> ok
+  window done in 3701s (896 cubes, ~128.3h remaining)
+window 56/200: t0=2018-03-06T19 centers=[(-63.9, 156.4), (-35.1, 62.1), (20.5, 263.3), (-9.4, 134.8), (-16.6, 38.9), (-30.9, 159.5), (9.0, 99.3), (-13.1, 248.0), (-35.0, 272.5), (56.6, 85.5), (-23.4, 99.8), (-4.9, 331.0), (41.1, 294.7), (-56.9, 290.7), (-51.8, 1.2), (21.0, 136.3)]
+  t: fetched+quantized (   659s elapsed)
+  z: fetched+quantized (  1219s elapsed)
+  u: fetched+quantized (  1722s elapsed)
+  v: fetched+quantized (  2416s elapsed)
+  q: fetched+quantized (  2986s elapsed)
+  msl: fetched+quantized (  3033s elapsed)
+  t2m: fetched+quantized (  3081s elapsed)
+  u10: fetched+quantized (  3155s elapsed)
+  v10: fetched+quantized (  3229s elapsed)
+  verify cube 911 v10 h=57: max|err|=2.781e-04 max scale/2=2.789e-04 -> ok
+  window done in 3245s (912 cubes, ~127.8h remaining)
+window 57/200: t0=1992-03-04T08 centers=[(-24.9, 275.7), (28.5, 137.9), (-38.1, 72.6), (-4.3, 31.8), (-59.3, 6.9), (23.2, 266.1), (-58.5, 273.3), (-20.9, 312.7), (47.5, 359.1), (48.8, 168.3), (1.2, 211.0), (-47.8, 217.1), (-2.1, 5.2), (41.8, 53.6), (26.9, 232.1), (-0.4, 101.4)]
+  t: fetched+quantized (   512s elapsed)
+  z: fetched+quantized (   827s elapsed)
+  u: fetched+quantized (  1487s elapsed)
+  v: fetched+quantized (  2292s elapsed)
+  q: fetched+quantized (  3005s elapsed)
+  msl: fetched+quantized (  3043s elapsed)
+  t2m: fetched+quantized (  3093s elapsed)
+  u10: fetched+quantized (  3157s elapsed)
+  v10: fetched+quantized (  3221s elapsed)
+  verify cube 918 u10 h=88: max|err|=3.066e-04 max scale/2=3.078e-04 -> ok
+  window done in 3232s (928 cubes, ~127.0h remaining)
+window 58/200: t0=2012-08-15T08 centers=[(-43.1, 295.6), (25.9, 16.4), (-8.8, 187.8), (21.7, 52.9), (1.8, 284.9), (-52.3, 235.9), (33.9, 156.3), (21.2, 334.4), (0.2, 114.5), (-65.6, 56.2), (-16.8, 139.5), (-11.3, 324.5), (-12.2, 65.2), (-26.5, 357.4), (64.8, 170.7), (-52.6, 12.7)]
+  t: fetched+quantized (   511s elapsed)
+  z: fetched+quantized (  1061s elapsed)
+  u: fetched+quantized (  1920s elapsed)
+  v: fetched+quantized (  2735s elapsed)
+  q: fetched+quantized (  3305s elapsed)
+  msl: fetched+quantized (  3344s elapsed)
+  t2m: fetched+quantized (  3387s elapsed)
+  u10: fetched+quantized (  3458s elapsed)
+  v10: fetched+quantized (  3533s elapsed)
+  verify cube 942 t h=66: max|err|=2.030e-04 max scale/2=2.042e-04 -> ok
+  window done in 3673s (944 cubes, ~129.1h remaining)
+window 59/200: t0=2020-04-26T17 centers=[(30.5, 188.0), (-21.7, 322.3), (-45.0, 350.4), (-6.0, 25.7), (-11.6, 227.8), (-28.9, 176.9), (-36.8, 148.1), (35.8, 16.8), (8.1, 134.6), (19.0, 88.7), (-5.2, 195.5), (-28.4, 258.4), (55.9, 348.0), (19.1, 266.9), (-17.6, 118.9), (57.4, 196.9)]
+  t: fetched+quantized (   421s elapsed)
+  z: fetched+quantized (   697s elapsed)
+  u: fetched+quantized (  1247s elapsed)
+  v: fetched+quantized (  1718s elapsed)
+  q: fetched+quantized (  2294s elapsed)
+  msl: fetched+quantized (  2334s elapsed)
+  t2m: fetched+quantized (  2379s elapsed)
+  u10: fetched+quantized (  2439s elapsed)
+  v10: fetched+quantized (  2503s elapsed)
+  verify cube 955 z h=48: max|err|=1.543e-01 max scale/2=1.552e-01 -> ok
+  window done in 2616s (960 cubes, ~124.4h remaining)
+window 60/200: t0=2005-11-24T16 centers=[(-45.8, 237.9), (16.7, 196.5), (10.6, 141.8), (16.7, 9.2), (-45.4, 34.1), (21.2, 270.0), (-23.0, 164.5), (30.6, 59.8), (42.0, 117.5), (-8.9, 55.4), (-10.2, 244.1), (48.9, 345.2), (-9.9, 330.5), (27.3, 308.1), (-16.5, 98.6), (20.0, 98.0)]
+  t: fetched+quantized (   585s elapsed)
+  z: fetched+quantized (   759s elapsed)
+  u: fetched+quantized (   987s elapsed)
+  v: fetched+quantized (  1216s elapsed)
+  q: fetched+quantized (  1406s elapsed)
+  msl: fetched+quantized (  1415s elapsed)
+  t2m: fetched+quantized (  1424s elapsed)
+  u10: fetched+quantized (  1432s elapsed)
+  v10: fetched+quantized (  1439s elapsed)
+  verify cube 975 t2m h=27: max|err|=5.494e-04 max scale/2=5.528e-04 -> ok
+  window done in 1440s (976 cubes, ~115.0h remaining)
+window 61/200: t0=2002-10-28T10 centers=[(63.4, 354.0), (-45.1, 237.0), (7.7, 261.7), (54.8, 251.5), (12.1, 292.3), (-24.1, 168.5), (-18.0, 203.4), (31.8, 146.3), (32.0, 57.8), (27.2, 323.2), (24.3, 13.3), (-24.6, 47.4), (-56.0, 117.8), (-3.6, 224.5), (21.3, 208.1), (13.2, 108.0)]
+  t: fetched+quantized (   131s elapsed)
+  z: fetched+quantized (   273s elapsed)
+  u: fetched+quantized (   489s elapsed)
+  v: fetched+quantized (   729s elapsed)
+  q: fetched+quantized (   933s elapsed)
+  msl: fetched+quantized (   944s elapsed)
+  t2m: fetched+quantized (   952s elapsed)
+  u10: fetched+quantized (   962s elapsed)
+  v10: fetched+quantized (   974s elapsed)
+  verify cube 981 msl h=13: max|err|=2.167e-02 max scale/2=2.184e-02 -> ok
+  window done in 975s (992 cubes, ~105.6h remaining)
+window 62/200: t0=2014-08-30T13 centers=[(24.8, 124.0), (11.2, 264.5), (-11.2, 68.3), (54.3, 46.7), (29.6, 288.1), (18.9, 220.1), (15.6, 74.9), (-3.2, 136.7), (-7.5, 165.7), (-9.2, 16.4), (46.1, 105.9), (29.5, 353.7), (34.5, 155.7), (-33.4, 277.0), (34.0, 194.9), (27.8, 38.5)]
+  t: fetched+quantized (   158s elapsed)
+  z: fetched+quantized (   311s elapsed)
+  u: fetched+quantized (   521s elapsed)
+  v: fetched+quantized (   739s elapsed)
+  q: fetched+quantized (   929s elapsed)
+  msl: fetched+quantized (   936s elapsed)
+  t2m: fetched+quantized (   947s elapsed)
+  u10: fetched+quantized (   961s elapsed)
+  v10: fetched+quantized (   975s elapsed)
+  verify cube 1001 msl h=57: max|err|=1.988e-02 max scale/2=2.004e-02 -> ok
+  window done in 977s (1008 cubes, ~98.1h remaining)
+window 63/200: t0=1982-09-24T21 centers=[(29.4, 227.5), (-27.2, 342.6), (-7.7, 189.4), (-31.0, 17.7), (57.4, 309.0), (48.6, 131.8), (34.5, 274.6), (65.9, 50.0), (-48.4, 62.1), (-5.4, 115.4), (1.3, 227.1), (63.7, 253.5), (2.2, 140.5), (36.5, 9.1), (35.6, 334.1), (-44.3, 263.1)]
+  t: fetched+quantized (   151s elapsed)
+  z: fetched+quantized (   299s elapsed)
+  u: fetched+quantized (   511s elapsed)
+  v: fetched+quantized (   722s elapsed)
+  q: fetched+quantized (   911s elapsed)
+  msl: fetched+quantized (   919s elapsed)
+  t2m: fetched+quantized (   929s elapsed)
+  u10: fetched+quantized (   944s elapsed)
+  v10: fetched+quantized (   956s elapsed)
+  verify cube 1020 q h=69: max|err|=1.306e-07 max scale/2=1.324e-07 -> ok
+  window done in 970s (1024 cubes, ~91.9h remaining)
+window 64/200: t0=2000-01-03T14 centers=[(-43.3, 42.4), (2.7, 267.2), (41.0, 138.7), (-60.1, 106.6), (-61.9, 343.8), (-37.5, 180.6), (-30.4, 130.0), (18.6, 158.1), (41.9, 52.0), (15.9, 29.9), (6.1, 125.7), (-32.8, 316.7), (17.2, 62.0), (30.5, 296.3), (-18.2, 95.2), (-32.4, 276.4)]
+  t: fetched+quantized (   144s elapsed)
+  z: fetched+quantized (   293s elapsed)
+  u: fetched+quantized (   504s elapsed)
+  v: fetched+quantized (   710s elapsed)
+  q: fetched+quantized (   883s elapsed)
+  msl: fetched+quantized (   893s elapsed)
+  t2m: fetched+quantized (   904s elapsed)
+  u10: fetched+quantized (   916s elapsed)
+  v10: fetched+quantized (   929s elapsed)
+  verify cube 1039 z h=48: max|err|=1.298e-01 max scale/2=1.307e-01 -> ok
+  window done in 941s (1040 cubes, ~86.5h remaining)
+window 65/200: t0=2017-10-03T04 centers=[(-25.7, 43.6), (-8.4, 110.8), (24.6, 241.9), (-6.6, 257.5), (16.7, 58.6), (30.4, 1.5), (41.3, 38.6), (-53.6, 202.8), (3.1, 353.5), (-23.8, 181.4), (58.5, 127.7), (-53.2, 152.8), (56.6, 256.7), (12.5, 213.3), (36.8, 95.0), (-54.7, 80.4)]
+  t: fetched+quantized (   134s elapsed)
+  z: fetched+quantized (   283s elapsed)
+  u: fetched+quantized (   491s elapsed)
+  v: fetched+quantized (   713s elapsed)
+  q: fetched+quantized (   899s elapsed)
+  msl: fetched+quantized (   910s elapsed)
+  t2m: fetched+quantized (   920s elapsed)
+  u10: fetched+quantized (   933s elapsed)
+  v10: fetched+quantized (   946s elapsed)
+  verify cube 1042 t2m h=13: max|err|=4.305e-04 max scale/2=4.331e-04 -> ok
+  window done in 948s (1056 cubes, ~82.0h remaining)
+window 66/200: t0=1985-08-23T18 centers=[(-41.4, 290.6), (60.9, 199.3), (22.5, 276.5), (-34.5, 62.6), (8.0, 95.2), (4.9, 140.2), (9.1, 181.2), (-56.6, 199.5), (52.4, 36.2), (53.9, 288.6), (-15.5, 201.2), (5.3, 340.1), (-32.2, 345.9), (39.3, 349.1), (31.8, 80.0), (-38.5, 106.3)]
+  t: fetched+quantized (   143s elapsed)
+  z: fetched+quantized (   286s elapsed)
+  u: fetched+quantized (   504s elapsed)
+  v: fetched+quantized (   725s elapsed)
+  q: fetched+quantized (   921s elapsed)
+  msl: fetched+quantized (   932s elapsed)
+  t2m: fetched+quantized (   943s elapsed)
+  u10: fetched+quantized (   956s elapsed)
+  v10: fetched+quantized (   969s elapsed)
+  verify cube 1063 u h=95: max|err|=9.677e-04 max scale/2=9.698e-04 -> ok
+  window done in 981s (1072 cubes, ~78.2h remaining)
+window 67/200: t0=1984-10-14T20 centers=[(-3.7, 96.0), (63.6, 115.3), (-48.9, 277.3), (-4.0, 206.5), (-36.2, 59.1), (21.1, 151.9), (7.5, 177.8), (12.0, 47.7), (24.3, 277.2), (-49.4, 111.7), (11.4, 331.1), (-26.2, 18.8), (58.1, 300.7), (34.8, 224.2), (-7.3, 297.6), (40.3, 344.4)]
+  t: fetched+quantized (   148s elapsed)
+  z: fetched+quantized (   299s elapsed)
+  u: fetched+quantized (   512s elapsed)
+  v: fetched+quantized (   747s elapsed)
+  q: fetched+quantized (   931s elapsed)
+  msl: fetched+quantized (   942s elapsed)
+  t2m: fetched+quantized (   952s elapsed)
+  u10: fetched+quantized (   965s elapsed)
+  v10: fetched+quantized (   978s elapsed)
+  verify cube 1078 v10 h=84: max|err|=1.184e-04 max scale/2=1.187e-04 -> ok
+  window done in 979s (1088 cubes, ~74.8h remaining)
+window 68/200: t0=1996-01-28T10 centers=[(39.3, 42.9), (-30.6, 131.8), (-14.9, 258.0), (5.6, 97.6), (56.4, 93.2), (31.9, 336.4), (-5.0, 311.8), (4.1, 169.9), (-51.5, 160.0), (-22.6, 70.5), (-6.7, 202.1), (-7.3, 0.8), (-57.8, 353.3), (20.9, 6.9), (-51.1, 306.5), (27.0, 129.5)]
+  t: fetched+quantized (   155s elapsed)
+  z: fetched+quantized (   307s elapsed)
+  u: fetched+quantized (   526s elapsed)
+  v: fetched+quantized (   758s elapsed)
+  q: fetched+quantized (   961s elapsed)
+  msl: fetched+quantized (   973s elapsed)
+  t2m: fetched+quantized (   984s elapsed)
+  u10: fetched+quantized (   995s elapsed)
+  v10: fetched+quantized (  1009s elapsed)
+  verify cube 1094 q h=30: max|err|=1.096e-07 max scale/2=1.112e-07 -> ok
+  window done in 1021s (1104 cubes, ~71.9h remaining)
+window 69/200: t0=2010-12-26T04 centers=[(-52.4, 128.5), (2.8, 63.2), (49.5, 60.8), (-47.9, 9.7), (30.2, 120.3), (38.1, 310.5), (-10.1, 247.4), (-65.0, 231.9), (-19.9, 130.2), (15.2, 333.7), (-22.3, 2.7), (13.1, 39.3), (33.4, 228.2), (-30.8, 163.0), (-26.2, 219.6), (-6.0, 192.6)]
+  t: fetched+quantized (   156s elapsed)
+  z: fetched+quantized (   308s elapsed)
+  u: fetched+quantized (   532s elapsed)
+  v: fetched+quantized (   753s elapsed)
+  q: fetched+quantized (   946s elapsed)
+  msl: fetched+quantized (   956s elapsed)
+  t2m: fetched+quantized (   967s elapsed)
+  u10: fetched+quantized (   980s elapsed)
+  v10: fetched+quantized (   993s elapsed)
+  verify cube 1116 u10 h=46: max|err|=2.255e-04 max scale/2=2.261e-04 -> ok
+  window done in 994s (1120 cubes, ~69.3h remaining)
+window 70/200: t0=2022-08-23T03 centers=[(-4.6, 279.7), (-29.0, 179.2), (51.1, 176.0), (13.0, 176.3), (2.7, 120.8), (-11.4, 210.5), (30.7, 129.2), (17.9, 0.2), (34.7, 29.3), (52.8, 237.6), (62.3, 47.7), (-17.1, 3.9), (-58.6, 328.9), (-33.2, 333.7), (22.7, 276.0), (6.5, 310.4)]
+  t: fetched+quantized (   150s elapsed)
+  z: fetched+quantized (   303s elapsed)
+  u: fetched+quantized (   518s elapsed)
+  v: fetched+quantized (   748s elapsed)
+  q: fetched+quantized (   947s elapsed)
+  msl: fetched+quantized (   956s elapsed)
+  t2m: fetched+quantized (   967s elapsed)
+  u10: fetched+quantized (   980s elapsed)
+  v10: fetched+quantized (   992s elapsed)
+  verify cube 1132 v10 h=66: max|err|=2.573e-04 max scale/2=2.580e-04 -> ok
+  window done in 994s (1136 cubes, ~66.9h remaining)
+window 71/200: t0=2015-01-14T08 centers=[(31.0, 162.3), (-13.4, 282.4), (-38.6, 78.1), (-22.8, 346.6), (27.1, 55.1), (34.0, 205.0), (10.9, 296.5), (12.8, 8.7), (2.0, 179.7), (-28.1, 43.4), (5.5, 103.6), (43.8, 339.9), (-59.7, 237.9), (-5.0, 318.3), (-47.3, 145.1), (-61.5, 55.1)]
+  t: fetched+quantized (   153s elapsed)
+  z: fetched+quantized (   308s elapsed)
+  u: fetched+quantized (   529s elapsed)
+  v: fetched+quantized (   757s elapsed)
+  q: fetched+quantized (   957s elapsed)
+  msl: fetched+quantized (   968s elapsed)
+  t2m: fetched+quantized (   980s elapsed)
+  u10: fetched+quantized (   996s elapsed)
+  v10: fetched+quantized (  1011s elapsed)
+  verify cube 1147 v h=92: max|err|=9.762e-04 max scale/2=9.795e-04 -> ok
+  window done in 1024s (1152 cubes, ~64.8h remaining)
+window 72/200: t0=1993-01-20T04 centers=[(35.8, 7.3), (8.2, 100.2), (43.0, 39.1), (-53.5, 359.6), (-63.4, 272.0), (0.0, 304.6), (-51.5, 103.7), (17.0, 279.9), (-32.9, 58.0), (-19.0, 242.6), (23.1, 249.1), (0.1, 196.7), (-30.1, 155.5), (6.8, 7.6), (-28.8, 285.1), (-25.8, 355.1)]
+  t: fetched+quantized (   165s elapsed)
+  z: fetched+quantized (   319s elapsed)
+  u: fetched+quantized (   539s elapsed)
+  v: fetched+quantized (   748s elapsed)
+  q: fetched+quantized (   940s elapsed)
+  msl: fetched+quantized (   952s elapsed)
+  t2m: fetched+quantized (   963s elapsed)
+  u10: fetched+quantized (   978s elapsed)
+  v10: fetched+quantized (   992s elapsed)
+  verify cube 1158 msl h=12: max|err|=5.156e-02 max scale/2=5.187e-02 -> ok
+  window done in 993s (1168 cubes, ~62.8h remaining)
+window 73/200: t0=1987-12-26T20 centers=[(1.8, 149.0), (40.2, 171.5), (-30.2, 78.2), (-22.8, 253.2), (-58.7, 253.8), (-33.9, 46.7), (-31.1, 172.4), (-1.3, 56.6), (-46.1, 333.8), (12.3, 30.2), (63.6, 244.6), (-62.7, 200.2), (15.7, 247.2), (12.7, 324.5), (45.9, 102.2), (-58.0, 19.7)]
+  t: fetched+quantized (   157s elapsed)
+  z: fetched+quantized (   311s elapsed)
+  u: fetched+quantized (   530s elapsed)
+  v: fetched+quantized (   763s elapsed)
+  q: fetched+quantized (   962s elapsed)
+  msl: fetched+quantized (   973s elapsed)
+  t2m: fetched+quantized (   986s elapsed)
+  u10: fetched+quantized (  1001s elapsed)
+  v10: fetched+quantized (  1019s elapsed)
+  verify cube 1178 msl h=17: max|err|=3.122e-02 max scale/2=3.144e-02 -> ok
+  window done in 1020s (1184 cubes, ~61.1h remaining)
+window 74/200: t0=2009-09-25T05 centers=[(-6.2, 79.5), (40.9, 93.6), (40.1, 266.5), (15.8, 223.8), (-49.7, 322.2), (-8.2, 10.1), (-29.3, 151.5), (-32.8, 187.8), (-19.1, 327.2), (30.9, 176.0), (8.7, 57.8), (-6.4, 36.1), (42.3, 338.6), (15.0, 285.2), (-10.5, 250.7), (10.8, 347.7)]
+  t: fetched+quantized (   153s elapsed)
+  z: fetched+quantized (   307s elapsed)
+  u: fetched+quantized (   516s elapsed)
+  v: fetched+quantized (   733s elapsed)
+  q: fetched+quantized (   911s elapsed)
+  msl: fetched+quantized (   920s elapsed)
+  t2m: fetched+quantized (   929s elapsed)
+  u10: fetched+quantized (   941s elapsed)
+  v10: fetched+quantized (   950s elapsed)
+  verify cube 1185 u10 h=26: max|err|=2.039e-04 max scale/2=2.048e-04 -> ok
+  window done in 951s (1200 cubes, ~59.3h remaining)
+window 75/200: t0=2003-12-14T10 centers=[(40.4, 268.1), (30.2, 125.6), (-38.7, 31.5), (3.4, 90.2), (47.8, 194.3), (37.4, 33.5), (-29.8, 76.4), (22.6, 65.1), (2.2, 178.1), (-15.1, 334.9), (1.4, 135.4), (-39.3, 277.3), (-20.2, 205.4), (52.5, 75.4), (-37.4, 134.2), (-63.1, 170.7)]
+  t: fetched+quantized (   130s elapsed)
+  z: fetched+quantized (   217s elapsed)
+  u: fetched+quantized (   333s elapsed)
+  v: fetched+quantized (   452s elapsed)
+  q: fetched+quantized (   555s elapsed)
+  msl: fetched+quantized (   560s elapsed)
+  t2m: fetched+quantized (   565s elapsed)
+  u10: fetched+quantized (   570s elapsed)
+  v10: fetched+quantized (   575s elapsed)
+  verify cube 1213 msl h=10: max|err|=5.643e-02 max scale/2=5.682e-02 -> ok
+  window done in 576s (1216 cubes, ~57.2h remaining)
+window 76/200: t0=2010-07-21T07 centers=[(5.8, 252.4), (-8.0, 172.5), (-12.3, 324.3), (-0.9, 355.3), (41.8, 117.3), (29.4, 41.4), (0.0, 32.6), (8.7, 215.5), (-0.7, 85.5), (39.0, 318.7), (24.7, 353.1), (-37.3, 79.8), (-10.9, 134.8), (-16.1, 212.2), (-34.5, 182.3), (-46.7, 16.4)]
+  t: fetched+quantized (    80s elapsed)
+  z: fetched+quantized (   162s elapsed)
+  u: fetched+quantized (   277s elapsed)
+  v: fetched+quantized (   397s elapsed)
+  q: fetched+quantized (   499s elapsed)
+  msl: fetched+quantized (   504s elapsed)
+  t2m: fetched+quantized (   509s elapsed)
+  u10: fetched+quantized (   514s elapsed)
+  v10: fetched+quantized (   519s elapsed)
+  verify cube 1216 z h=80: max|err|=6.460e-02 max scale/2=6.503e-02 -> ok
+  window done in 521s (1232 cubes, ~55.1h remaining)
+window 77/200: t0=1988-10-25T08 centers=[(18.8, 329.2), (39.2, 298.5), (2.8, 35.9), (59.8, 37.4), (-14.0, 264.4), (14.6, 0.8), (-62.7, 337.7), (6.4, 68.1), (-38.6, 17.1), (-29.5, 321.8), (28.3, 39.4), (23.6, 92.3), (-57.2, 250.2), (-15.0, 354.7), (-49.7, 50.7), (-41.1, 192.1)]
+  t: fetched+quantized (    81s elapsed)
+  z: fetched+quantized (   163s elapsed)
+  u: fetched+quantized (   279s elapsed)
+  v: fetched+quantized (   397s elapsed)
+  q: fetched+quantized (   501s elapsed)
+  msl: fetched+quantized (   506s elapsed)
+  t2m: fetched+quantized (   511s elapsed)
+  u10: fetched+quantized (   516s elapsed)
+  v10: fetched+quantized (   521s elapsed)
+  verify cube 1239 t h=22: max|err|=1.785e-04 max scale/2=1.798e-04 -> ok
+  window done in 523s (1248 cubes, ~53.2h remaining)
+window 78/200: t0=2016-01-06T23 centers=[(-37.4, 178.9), (15.7, 320.4), (34.0, 253.8), (-41.2, 126.1), (-5.4, 247.3), (-26.1, 71.2), (-4.7, 178.7), (22.0, 29.1), (60.5, 86.5), (-25.3, 151.9), (-34.3, 335.9), (-47.9, 19.6), (-58.6, 213.1), (22.7, 354.6), (-8.9, 24.3), (50.0, 13.7)]
+  t: fetched+quantized (    81s elapsed)
+  z: fetched+quantized (   163s elapsed)
+  u: fetched+quantized (   278s elapsed)
+  v: fetched+quantized (   396s elapsed)
+  q: fetched+quantized (   501s elapsed)
+  msl: fetched+quantized (   505s elapsed)
+  t2m: fetched+quantized (   510s elapsed)
+  u10: fetched+quantized (   515s elapsed)
+  v10: fetched+quantized (   520s elapsed)
+  verify cube 1256 u10 h=52: max|err|=1.862e-04 max scale/2=1.873e-04 -> ok
+  window done in 521s (1264 cubes, ~51.4h remaining)
+window 79/200: t0=1980-05-25T06 centers=[(-41.0, 173.7), (12.8, 58.0), (-39.8, 272.1), (64.9, 236.3), (41.8, 217.1), (4.2, 224.9), (20.0, 313.7), (-9.3, 170.6), (-21.2, 20.0), (40.2, 353.8), (-0.9, 290.9), (-6.5, 339.5), (-61.2, 30.5), (-62.4, 198.7), (-38.6, 349.6), (-29.0, 144.1)]
+  t: fetched+quantized (    81s elapsed)
+  z: fetched+quantized (   163s elapsed)
+  u: fetched+quantized (   278s elapsed)
+  v: fetched+quantized (   397s elapsed)
+  q: fetched+quantized (   501s elapsed)
+  msl: fetched+quantized (   506s elapsed)
+  t2m: fetched+quantized (   510s elapsed)
+  u10: fetched+quantized (   516s elapsed)
+  v10: fetched+quantized (   521s elapsed)
+  verify cube 1274 u h=78: max|err|=6.927e-04 max scale/2=6.974e-04 -> ok
+  window done in 524s (1280 cubes, ~49.7h remaining)
+window 80/200: t0=1982-12-25T22 centers=[(9.4, 52.9), (-41.4, 100.1), (8.0, 95.9), (-28.7, 263.6), (29.1, 228.1), (-33.6, 302.1), (-58.5, 223.3), (-6.1, 244.3), (-4.0, 184.5), (3.0, 20.7), (38.8, 175.1), (-23.2, 202.3), (-25.2, 69.1), (29.5, 129.2), (51.6, 212.9), (-4.1, 136.8)]
+  t: fetched+quantized (    81s elapsed)
+  z: fetched+quantized (   167s elapsed)
+  u: fetched+quantized (   286s elapsed)
+  v: fetched+quantized (   410s elapsed)
+  q: fetched+quantized (   519s elapsed)
+  msl: fetched+quantized (   523s elapsed)
+  t2m: fetched+quantized (   528s elapsed)
+  u10: fetched+quantized (   533s elapsed)
+  v10: fetched+quantized (   538s elapsed)
+  verify cube 1295 v h=32: max|err|=4.509e-04 max scale/2=4.544e-04 -> ok
+  window done in 541s (1296 cubes, ~48.2h remaining)
+window 81/200: t0=1986-09-01T10 centers=[(2.6, 226.1), (16.3, 306.4), (-17.1, 176.7), (-43.8, 134.8), (5.5, 195.6), (5.7, 151.3), (28.9, 48.6), (62.8, 302.2), (-17.7, 298.1), (1.7, 70.3), (44.5, 170.1), (-41.5, 202.3), (-33.3, 276.0), (18.6, 6.6), (-24.8, 104.2), (35.7, 246.8)]
+  t: fetched+quantized (    88s elapsed)
+  z: fetched+quantized (   176s elapsed)
+  u: fetched+quantized (   296s elapsed)
+  v: fetched+quantized (   420s elapsed)
+  q: fetched+quantized (   528s elapsed)
+  msl: fetched+quantized (   533s elapsed)
+  t2m: fetched+quantized (   537s elapsed)
+  u10: fetched+quantized (   542s elapsed)
+  v10: fetched+quantized (   547s elapsed)
+  verify cube 1310 q h=66: max|err|=1.265e-07 max scale/2=1.284e-07 -> ok
+  window done in 550s (1312 cubes, ~46.7h remaining)
+window 82/200: t0=2004-03-10T15 centers=[(41.3, 227.1), (38.0, 321.9), (44.5, 69.3), (-43.2, 346.2), (-56.2, 152.5), (-15.9, 322.3), (-18.7, 172.6), (-22.1, 22.1), (4.9, 7.2), (-35.7, 68.5), (5.0, 32.8), (-33.5, 227.5), (8.2, 314.5), (-59.8, 203.8), (63.6, 160.2), (39.4, 287.0)]
+  t: fetched+quantized (    81s elapsed)
+  z: fetched+quantized (   168s elapsed)
+  u: fetched+quantized (   295s elapsed)
+  v: fetched+quantized (   430s elapsed)
+  q: fetched+quantized (   543s elapsed)
+  msl: fetched+quantized (   547s elapsed)
+  t2m: fetched+quantized (   552s elapsed)
+  u10: fetched+quantized (   557s elapsed)
+  v10: fetched+quantized (   562s elapsed)
+  verify cube 1325 v h=63: max|err|=8.529e-04 max scale/2=8.560e-04 -> ok
+  window done in 565s (1328 cubes, ~45.4h remaining)
+window 83/200: t0=1985-12-05T09 centers=[(38.7, 146.9), (-19.3, 199.8), (-21.8, 98.7), (19.6, 99.1), (-30.0, 260.6), (11.4, 198.5), (31.7, 296.0), (7.1, 147.3), (14.8, 43.1), (41.7, 257.3), (-57.1, 298.4), (64.0, 142.7), (-22.8, 323.7), (-55.6, 359.6), (-1.8, 301.5), (-25.9, 150.1)]
+  t: fetched+quantized (    81s elapsed)
+  z: fetched+quantized (   169s elapsed)
+  u: fetched+quantized (   303s elapsed)
+  v: fetched+quantized (   437s elapsed)
+  q: fetched+quantized (   562s elapsed)
+  msl: fetched+quantized (   566s elapsed)
+  t2m: fetched+quantized (   571s elapsed)
+  u10: fetched+quantized (   576s elapsed)
+  v10: fetched+quantized (   581s elapsed)
+  verify cube 1337 v h=26: max|err|=8.208e-04 max scale/2=8.245e-04 -> ok
+  window done in 584s (1344 cubes, ~44.2h remaining)
+window 84/200: t0=2003-03-15T05 centers=[(-18.3, 173.8), (16.4, 308.0), (-62.6, 333.0), (23.0, 121.7), (38.9, 211.9), (37.3, 24.2), (-0.7, 359.6), (18.2, 229.7), (-63.3, 116.6), (-27.5, 355.2), (63.6, 8.0), (-30.3, 68.7), (-3.4, 276.9), (47.9, 170.0), (63.5, 233.2), (-30.3, 199.2)]
+  t: fetched+quantized (   100s elapsed)
+  z: fetched+quantized (   201s elapsed)
+  u: fetched+quantized (   337s elapsed)
+  v: fetched+quantized (   473s elapsed)
+  q: fetched+quantized (   592s elapsed)
+  msl: fetched+quantized (   596s elapsed)
+  t2m: fetched+quantized (   601s elapsed)
+  u10: fetched+quantized (   606s elapsed)
+  v10: fetched+quantized (   612s elapsed)
+  verify cube 1345 z h=91: max|err|=7.894e-02 max scale/2=7.947e-02 -> ok
+  window done in 614s (1360 cubes, ~43.0h remaining)
+window 85/200: t0=1991-05-04T06 centers=[(24.5, 236.7), (9.3, 168.9), (18.5, 349.9), (38.9, 196.2), (-35.2, 232.6), (11.6, 68.0), (12.9, 300.2), (-7.5, 35.4), (-22.6, 201.5), (0.1, 226.8), (-62.4, 30.7), (-28.4, 4.0), (51.4, 24.5), (-62.5, 242.6), (-61.3, 133.9), (-44.5, 73.7)]
+  t: fetched+quantized (    82s elapsed)
+  z: fetched+quantized (   169s elapsed)
+  u: fetched+quantized (   288s elapsed)
+  v: fetched+quantized (   409s elapsed)
+  q: fetched+quantized (   515s elapsed)
+  msl: fetched+quantized (   522s elapsed)
+  t2m: fetched+quantized (   527s elapsed)
+  u10: fetched+quantized (   533s elapsed)
+  v10: fetched+quantized (   538s elapsed)
+  verify cube 1375 msl h=3: max|err|=5.483e-02 max scale/2=5.522e-02 -> ok
+  window done in 539s (1376 cubes, ~41.9h remaining)
+window 86/200: t0=2000-06-11T05 centers=[(30.5, 202.0), (-5.7, 253.0), (9.3, 9.5), (-32.1, 24.0), (-0.5, 225.7), (-37.9, 90.1), (-34.8, 195.4), (19.7, 290.2), (19.6, 176.1), (5.8, 316.9), (-6.2, 184.0), (-48.3, 282.6), (47.3, 62.8), (20.3, 70.6), (8.8, 344.2), (63.7, 285.6)]
+  t: fetched+quantized (    81s elapsed)
+  z: fetched+quantized (   165s elapsed)
+  u: fetched+quantized (   282s elapsed)
+  v: fetched+quantized (   403s elapsed)
+  q: fetched+quantized (   507s elapsed)
+  msl: fetched+quantized (   512s elapsed)
+  t2m: fetched+quantized (   517s elapsed)
+  u10: fetched+quantized (   522s elapsed)
+  v10: fetched+quantized (   527s elapsed)
+  verify cube 1385 v h=57: max|err|=3.625e-04 max scale/2=3.640e-04 -> ok
+  window done in 530s (1392 cubes, ~40.8h remaining)
+window 87/200: t0=1991-01-26T10 centers=[(-46.2, 318.1), (-43.2, 84.8), (-10.6, 110.4), (39.3, 34.7), (-41.4, 177.9), (7.5, 130.5), (-23.9, 345.1), (57.4, 297.3), (10.2, 352.3), (-13.0, 31.0), (26.6, 268.6), (29.5, 74.3), (5.4, 301.1), (-43.3, 9.6), (-1.3, 78.5), (28.3, 327.2)]
+  t: fetched+quantized (    81s elapsed)
+  z: fetched+quantized (   161s elapsed)
+  u: fetched+quantized (   271s elapsed)
+  v: fetched+quantized (   385s elapsed)
+  q: fetched+quantized (   483s elapsed)
+  msl: fetched+quantized (   488s elapsed)
+  t2m: fetched+quantized (   492s elapsed)
+  u10: fetched+quantized (   497s elapsed)
+  v10: fetched+quantized (   503s elapsed)
+  verify cube 1401 z h=69: max|err|=8.446e-02 max scale/2=8.500e-02 -> ok
+  window done in 505s (1408 cubes, ~39.7h remaining)
+window 88/200: t0=1996-02-06T10 centers=[(38.0, 90.8), (3.1, 70.1), (27.5, 260.0), (-1.1, 17.9), (46.9, 342.6), (-21.0, 132.1), (-61.1, 246.4), (-14.4, 231.9), (54.4, 264.1), (30.4, 60.8), (3.2, 157.1), (13.0, 233.8), (-37.4, 31.3), (-8.5, 319.6), (0.4, 272.0), (-23.8, 347.0)]
+  t: fetched+quantized (    80s elapsed)
+  z: fetched+quantized (   157s elapsed)
+  u: fetched+quantized (   267s elapsed)
+  v: fetched+quantized (   381s elapsed)
+  q: fetched+quantized (   480s elapsed)
+  msl: fetched+quantized (   485s elapsed)
+  t2m: fetched+quantized (   490s elapsed)
+  u10: fetched+quantized (   495s elapsed)
+  v10: fetched+quantized (   500s elapsed)
+  verify cube 1416 v10 h=54: max|err|=2.237e-04 max scale/2=2.249e-04 -> ok
+  window done in 501s (1424 cubes, ~38.7h remaining)
+window 89/200: t0=2010-05-29T23 centers=[(54.1, 213.3), (10.2, 325.8), (11.9, 148.8), (-35.7, 298.3), (-14.9, 133.5), (-11.1, 182.1), (21.3, 300.1), (-35.9, 22.2), (-29.8, 58.6), (12.5, 38.2), (10.0, 357.0), (-17.5, 271.9), (-62.0, 162.6), (-45.6, 256.8), (13.4, 230.3), (-57.1, 215.0)]
+  t: fetched+quantized (    80s elapsed)
+  z: fetched+quantized (   175s elapsed)
+  u: fetched+quantized (   305s elapsed)
+  v: fetched+quantized (   437s elapsed)
+  q: fetched+quantized (   552s elapsed)
+  msl: fetched+quantized (   557s elapsed)
+  t2m: fetched+quantized (   562s elapsed)
+  u10: fetched+quantized (   567s elapsed)
+  v10: fetched+quantized (   572s elapsed)
+  verify cube 1434 msl h=30: max|err|=1.576e-02 max scale/2=1.586e-02 -> ok
+  window done in 573s (1440 cubes, ~37.8h remaining)
+window 90/200: t0=1986-09-21T05 centers=[(15.8, 313.9), (-41.5, 258.5), (27.9, 222.9), (42.7, 180.1), (-62.7, 25.2), (-18.4, 69.4), (41.1, 330.3), (-12.7, 268.9), (3.2, 194.9), (17.5, 47.9), (9.5, 247.0), (56.7, 132.9), (-64.6, 222.9), (27.1, 281.5), (4.8, 104.2), (-22.5, 153.7)]
+  t: fetched+quantized (    82s elapsed)
+  z: fetched+quantized (   172s elapsed)
+  u: fetched+quantized (   296s elapsed)
+  v: fetched+quantized (   420s elapsed)
+  q: fetched+quantized (   529s elapsed)
+  msl: fetched+quantized (   534s elapsed)
+  t2m: fetched+quantized (   539s elapsed)
+  u10: fetched+quantized (   544s elapsed)
+  v10: fetched+quantized (   550s elapsed)
+  verify cube 1442 q h=68: max|err|=1.772e-07 max scale/2=1.795e-07 -> ok
+  window done in 553s (1456 cubes, ~36.9h remaining)
+window 91/200: t0=1988-12-07T11 centers=[(-28.0, 254.6), (-3.8, 185.9), (-30.3, 294.2), (34.5, 233.7), (17.6, 74.9), (-7.7, 19.9), (-32.5, 71.8), (-51.5, 164.3), (31.2, 267.8), (41.6, 107.1), (51.5, 351.9), (22.7, 10.3), (13.0, 156.7), (54.3, 150.8), (1.2, 260.0), (-44.6, 224.3)]
+  t: fetched+quantized (    81s elapsed)
+  z: fetched+quantized (   168s elapsed)
+  u: fetched+quantized (   288s elapsed)
+  v: fetched+quantized (   410s elapsed)
+  q: fetched+quantized (   518s elapsed)
+  msl: fetched+quantized (   523s elapsed)
+  t2m: fetched+quantized (   527s elapsed)
+  u10: fetched+quantized (   532s elapsed)
+  v10: fetched+quantized (   538s elapsed)
+  verify cube 1458 t h=87: max|err|=2.888e-04 max scale/2=2.905e-04 -> ok
+  window done in 540s (1472 cubes, ~36.0h remaining)
+window 92/200: t0=1984-01-10T04 centers=[(-7.6, 224.2), (2.9, 179.7), (43.3, 37.7), (39.0, 250.6), (-62.4, 258.4), (40.0, 142.4), (-50.7, 175.6), (-4.2, 144.1), (33.6, 345.3), (-10.2, 117.0), (19.4, 275.2), (-31.3, 74.3), (-29.1, 289.8), (49.4, 177.9), (64.8, 347.1), (-44.7, 341.9)]
+  t: fetched+quantized (    81s elapsed)
+  z: fetched+quantized (   167s elapsed)
+  u: fetched+quantized (   285s elapsed)
+  v: fetched+quantized (   408s elapsed)
+  q: fetched+quantized (   515s elapsed)
+  msl: fetched+quantized (   520s elapsed)
+  t2m: fetched+quantized (   525s elapsed)
+  u10: fetched+quantized (   530s elapsed)
+  v10: fetched+quantized (   535s elapsed)
+  verify cube 1477 t2m h=10: max|err|=4.643e-04 max scale/2=4.671e-04 -> ok
+  window done in 536s (1488 cubes, ~35.2h remaining)
+window 93/200: t0=1980-10-18T03 centers=[(-21.7, 280.4), (-22.6, 226.1), (-46.0, 66.8), (49.9, 14.3), (-59.9, 332.4), (63.4, 267.2), (-41.5, 2.6), (-57.6, 230.8), (43.7, 99.2), (-41.9, 183.3), (21.1, 323.5), (27.8, 249.3), (-10.2, 141.9), (10.2, 9.3), (-11.5, 36.1), (-40.3, 131.3)]
+  t: fetched+quantized (    81s elapsed)
+  z: fetched+quantized (   166s elapsed)
+  u: fetched+quantized (   285s elapsed)
+  v: fetched+quantized (   407s elapsed)
+  q: fetched+quantized (   515s elapsed)
+  msl: fetched+quantized (   520s elapsed)
+  t2m: fetched+quantized (   525s elapsed)
+  u10: fetched+quantized (   530s elapsed)
+  v10: fetched+quantized (   535s elapsed)
+  verify cube 1488 t2m h=14: max|err|=4.597e-04 max scale/2=4.625e-04 -> ok
+  window done in 536s (1504 cubes, ~34.4h remaining)
+window 94/200: t0=1983-10-13T20 centers=[(46.7, 67.9), (-51.6, 161.1), (45.4, 172.6), (-35.4, 106.0), (19.0, 14.7), (-8.7, 315.4), (-35.3, 29.8), (-0.1, 49.1), (-46.6, 335.5), (22.9, 240.6), (40.9, 112.7), (21.2, 74.4), (6.3, 163.7), (-62.9, 114.6), (-8.8, 214.5), (51.1, 232.7)]
+  t: fetched+quantized (    82s elapsed)
+  z: fetched+quantized (   167s elapsed)
+  u: fetched+quantized (   286s elapsed)
+  v: fetched+quantized (   408s elapsed)
+  q: fetched+quantized (   515s elapsed)
+  msl: fetched+quantized (   520s elapsed)
+  t2m: fetched+quantized (   525s elapsed)
+  u10: fetched+quantized (   530s elapsed)
+  v10: fetched+quantized (   535s elapsed)
+  verify cube 1512 v10 h=44: max|err|=2.755e-04 max scale/2=2.763e-04 -> ok
+  window done in 536s (1520 cubes, ~33.7h remaining)
+window 95/200: t0=2017-10-07T17 centers=[(12.4, 199.2), (15.6, 270.0), (-14.4, 151.6), (12.0, 111.7), (-34.8, 236.5), (-27.3, 205.0), (-32.1, 51.1), (8.6, 335.7), (48.4, 346.1), (37.4, 47.5), (-12.3, 297.4), (51.7, 118.3), (-49.1, 120.4), (-37.4, 340.5), (64.4, 295.9), (-21.0, 122.4)]
+  t: fetched+quantized (    81s elapsed)
+  z: fetched+quantized (   167s elapsed)
+  u: fetched+quantized (   285s elapsed)
+  v: fetched+quantized (   408s elapsed)
+  q: fetched+quantized (   515s elapsed)
+  msl: fetched+quantized (   520s elapsed)
+  t2m: fetched+quantized (   524s elapsed)
+  u10: fetched+quantized (   530s elapsed)
+  v10: fetched+quantized (   535s elapsed)
+  verify cube 1534 t h=13: max|err|=3.006e-04 max scale/2=3.031e-04 -> ok
+  window done in 538s (1536 cubes, ~32.9h remaining)
+window 96/200: t0=1996-03-08T06 centers=[(-58.4, 326.2), (-20.5, 192.7), (-4.2, 111.1), (23.3, 145.5), (-25.5, 58.7), (-8.0, 321.1), (30.6, 273.1), (50.9, 307.4), (-17.3, 251.1), (64.5, 133.5), (-11.6, 16.3), (32.1, 351.8), (18.0, 327.2), (40.7, 176.8), (7.1, 54.1), (-41.1, 293.3)]
+  t: fetched+quantized (    81s elapsed)
+  z: fetched+quantized (   167s elapsed)
+  u: fetched+quantized (   285s elapsed)
+  v: fetched+quantized (   408s elapsed)
+  q: fetched+quantized (   513s elapsed)
+  msl: fetched+quantized (   518s elapsed)
+  t2m: fetched+quantized (   522s elapsed)
+  u10: fetched+quantized (   528s elapsed)
+  v10: fetched+quantized (   533s elapsed)
+  verify cube 1543 v h=21: max|err|=1.171e-03 max scale/2=1.176e-03 -> ok
+  window done in 535s (1552 cubes, ~32.2h remaining)
+window 97/200: t0=1999-03-07T18 centers=[(14.3, 243.1), (42.3, 27.4), (23.0, 174.6), (29.8, 80.0), (2.0, 105.3), (-37.8, 154.5), (-47.2, 90.1), (36.9, 298.8), (17.7, 38.7), (1.1, 279.6), (0.6, 217.9), (-1.5, 11.1), (48.4, 227.1), (-14.4, 179.7), (-15.2, 246.4), (-18.7, 128.9)]
+  t: fetched+quantized (    81s elapsed)
+  z: fetched+quantized (   164s elapsed)
+  u: fetched+quantized (   284s elapsed)
+  v: fetched+quantized (   406s elapsed)
+  q: fetched+quantized (   514s elapsed)
+  msl: fetched+quantized (   518s elapsed)
+  t2m: fetched+quantized (   523s elapsed)
+  u10: fetched+quantized (   528s elapsed)
+  v10: fetched+quantized (   533s elapsed)
+  verify cube 1556 u h=70: max|err|=6.467e-04 max scale/2=6.497e-04 -> ok
+  window done in 536s (1568 cubes, ~31.5h remaining)
+window 98/200: t0=2009-01-10T02 centers=[(41.0, 27.7), (-22.1, 63.9), (37.4, 136.4), (-38.6, 237.2), (-60.8, 283.8), (-28.0, 26.3), (-7.0, 180.1), (-12.9, 210.2), (-51.2, 127.9), (-7.7, 134.5), (-1.8, 82.7), (-58.0, 73.2), (10.0, 336.3), (18.2, 289.9), (39.9, 95.5), (-2.4, 6.8)]
+  t: fetched+quantized (    83s elapsed)
+  z: fetched+quantized (   168s elapsed)
+  u: fetched+quantized (   285s elapsed)
+  v: fetched+quantized (   408s elapsed)
+  q: fetched+quantized (   514s elapsed)
+  msl: fetched+quantized (   518s elapsed)
+  t2m: fetched+quantized (   523s elapsed)
+  u10: fetched+quantized (   528s elapsed)
+  v10: fetched+quantized (   533s elapsed)
+  verify cube 1574 t2m h=67: max|err|=4.665e-05 max scale/2=4.700e-05 -> ok
+  window done in 534s (1584 cubes, ~30.9h remaining)
+window 99/200: t0=1990-06-25T09 centers=[(-11.2, 237.6), (-56.3, 29.4), (18.8, 33.9), (-21.8, 36.9), (45.8, 282.3), (51.9, 170.1), (-2.4, 355.6), (-60.1, 289.3), (33.5, 65.1), (-25.5, 90.2), (-54.7, 212.0), (19.1, 105.3), (31.7, 245.1), (-13.4, 113.9), (-34.4, 274.2), (-52.0, 124.9)]
+  t: fetched+quantized (    81s elapsed)
+  z: fetched+quantized (   166s elapsed)
+  u: fetched+quantized (   284s elapsed)
+  v: fetched+quantized (   406s elapsed)
+  q: fetched+quantized (   512s elapsed)
+  msl: fetched+quantized (   517s elapsed)
+  t2m: fetched+quantized (   522s elapsed)
+  u10: fetched+quantized (   527s elapsed)
+  v10: fetched+quantized (   532s elapsed)
+  verify cube 1587 u10 h=20: max|err|=2.040e-04 max scale/2=2.049e-04 -> ok
+  window done in 533s (1600 cubes, ~30.2h remaining)
+window 100/200: t0=2014-01-27T04 centers=[(-6.8, 247.7), (-1.1, 41.3), (8.5, 218.4), (13.0, 343.2), (-37.8, 13.7), (28.0, 236.0), (-47.7, 201.8), (5.8, 271.7), (64.6, 136.5), (18.3, 158.5), (45.6, 187.7), (62.3, 272.7), (-4.2, 321.3), (-0.4, 176.5), (27.2, 21.6), (-38.1, 122.9)]
+  t: fetched+quantized (    81s elapsed)
+  z: fetched+quantized (   166s elapsed)
+  u: fetched+quantized (   285s elapsed)
+  v: fetched+quantized (   408s elapsed)
+  q: fetched+quantized (   514s elapsed)
+  msl: fetched+quantized (   519s elapsed)
+  t2m: fetched+quantized (   523s elapsed)
+  u10: fetched+quantized (   528s elapsed)
+  v10: fetched+quantized (   533s elapsed)
+  verify cube 1605 z h=64: max|err|=1.637e-01 max scale/2=1.648e-01 -> ok
+  window done in 536s (1616 cubes, ~29.6h remaining)
+window 101/200: t0=1996-06-24T11 centers=[(-23.4, 324.0), (13.0, 206.2), (6.1, 75.0), (-38.1, 55.1), (-22.0, 246.5), (21.0, 174.3), (-20.4, 281.7), (-9.0, 139.9), (57.0, 228.5), (7.1, 271.5), (-21.0, 191.6), (25.8, 305.6), (58.6, 337.4), (-63.4, 83.1), (-36.2, 135.1), (24.3, 54.9)]
+  t: fetched+quantized (    81s elapsed)
+  z: fetched+quantized (   168s elapsed)
+  u: fetched+quantized (   286s elapsed)
+  v: fetched+quantized (   409s elapsed)
+  q: fetched+quantized (   516s elapsed)
+  msl: fetched+quantized (   521s elapsed)
+  t2m: fetched+quantized (   526s elapsed)
+  u10: fetched+quantized (   530s elapsed)
+  v10: fetched+quantized (   536s elapsed)
+  verify cube 1630 q h=67: max|err|=1.040e-07 max scale/2=1.059e-07 -> ok
+  window done in 538s (1632 cubes, ~29.0h remaining)
+window 102/200: t0=1985-07-30T06 centers=[(-19.4, 187.9), (4.0, 250.6), (-1.9, 108.8), (31.6, 241.0), (-47.3, 197.4), (-11.4, 151.5), (-26.2, 228.6), (-37.0, 78.3), (47.9, 294.3), (36.5, 327.5), (-51.7, 236.9), (-43.3, 131.9), (39.3, 153.9), (8.2, 288.2), (45.7, 16.8), (-16.1, 16.0)]
+  t: fetched+quantized (    81s elapsed)
+  z: fetched+quantized (   166s elapsed)
+  u: fetched+quantized (   285s elapsed)
+  v: fetched+quantized (   408s elapsed)
+  q: fetched+quantized (   514s elapsed)
+  msl: fetched+quantized (   519s elapsed)
+  t2m: fetched+quantized (   524s elapsed)
+  u10: fetched+quantized (   529s elapsed)
+  v10: fetched+quantized (   534s elapsed)
+  verify cube 1642 u h=31: max|err|=1.085e-03 max scale/2=1.089e-03 -> ok
+  window done in 537s (1648 cubes, ~28.4h remaining)
+window 103/200: t0=1991-04-08T22 centers=[(56.6, 163.8), (31.6, 85.9), (11.7, 132.4), (27.9, 49.3), (-16.4, 352.3), (0.9, 197.2), (51.4, 307.8), (-39.9, 167.5), (-20.2, 226.5), (56.6, 246.8), (-31.8, 136.1), (-43.4, 6.9), (-14.4, 278.7), (6.9, 292.4), (5.7, 107.8), (-56.5, 230.2)]
+  t: fetched+quantized (    80s elapsed)
+  z: fetched+quantized (   165s elapsed)
+  u: fetched+quantized (   283s elapsed)
+  v: fetched+quantized (   406s elapsed)
+  q: fetched+quantized (   512s elapsed)
+  msl: fetched+quantized (   517s elapsed)
+  t2m: fetched+quantized (   522s elapsed)
+  u10: fetched+quantized (   527s elapsed)
+  v10: fetched+quantized (   532s elapsed)
+  verify cube 1653 v10 h=54: max|err|=1.475e-04 max scale/2=1.480e-04 -> ok
+  window done in 533s (1664 cubes, ~27.9h remaining)
+window 104/200: t0=2003-03-03T03 centers=[(39.9, 186.9), (-19.5, 208.4), (-60.2, 120.1), (46.1, 287.5), (44.4, 111.7), (-16.9, 66.3), (-24.2, 268.4), (-1.5, 241.0), (2.4, 24.6), (-40.3, 304.0), (-54.3, 250.9), (-8.7, 111.9), (23.1, 225.1), (20.5, 325.9), (-40.6, 50.4), (45.7, 353.8)]
+  t: fetched+quantized (    81s elapsed)
+  z: fetched+quantized (   166s elapsed)
+  u: fetched+quantized (   284s elapsed)
+  v: fetched+quantized (   407s elapsed)
+  q: fetched+quantized (   514s elapsed)
+  msl: fetched+quantized (   519s elapsed)
+  t2m: fetched+quantized (   523s elapsed)
+  u10: fetched+quantized (   529s elapsed)
+  v10: fetched+quantized (   534s elapsed)
+  verify cube 1674 u10 h=18: max|err|=2.952e-04 max scale/2=2.961e-04 -> ok
+  window done in 534s (1680 cubes, ~27.3h remaining)
+window 105/200: t0=1990-03-02T23 centers=[(-16.5, 146.5), (37.0, 351.4), (-20.0, 278.7), (57.4, 271.4), (-19.8, 318.4), (16.7, 217.1), (17.5, 96.1), (-29.4, 38.0), (-15.2, 86.0), (16.2, 18.3), (28.6, 146.5), (11.5, 258.3), (-61.0, 24.8), (49.2, 189.6), (62.3, 355.6), (8.5, 346.6)]
+  t: fetched+quantized (    82s elapsed)
+  z: fetched+quantized (   167s elapsed)
+  u: fetched+quantized (   285s elapsed)
+  v: fetched+quantized (   407s elapsed)
+  q: fetched+quantized (   512s elapsed)
+  msl: fetched+quantized (   516s elapsed)
+  t2m: fetched+quantized (   521s elapsed)
+  u10: fetched+quantized (   526s elapsed)
+  v10: fetched+quantized (   531s elapsed)
+  verify cube 1689 msl h=88: max|err|=1.843e-02 max scale/2=1.855e-02 -> ok
+  window done in 532s (1696 cubes, ~26.8h remaining)
+window 106/200: t0=1999-06-07T16 centers=[(-11.3, 230.0), (-45.0, 293.9), (25.1, 260.1), (22.8, 317.9), (25.1, 172.1), (4.8, 189.3), (-48.0, 66.2), (-56.8, 220.8), (8.1, 345.5), (61.8, 21.8), (-13.7, 274.7), (-49.2, 9.1), (26.6, 205.5), (-8.5, 103.7), (25.8, 101.9), (-11.6, 320.8)]
+  t: fetched+quantized (    81s elapsed)
+  z: fetched+quantized (   165s elapsed)
+  u: fetched+quantized (   283s elapsed)
+  v: fetched+quantized (   406s elapsed)
+  q: fetched+quantized (   513s elapsed)
+  msl: fetched+quantized (   518s elapsed)
+  t2m: fetched+quantized (   522s elapsed)
+  u10: fetched+quantized (   528s elapsed)
+  v10: fetched+quantized (   533s elapsed)
+  verify cube 1707 t2m h=74: max|err|=3.762e-04 max scale/2=3.785e-04 -> ok
+  window done in 533s (1712 cubes, ~26.3h remaining)
+window 107/200: t0=2006-04-27T03 centers=[(37.2, 33.2), (-34.3, 226.3), (25.7, 196.4), (2.0, 50.9), (-29.8, 64.0), (60.5, 159.1), (19.2, 350.9), (-4.5, 227.2), (36.3, 135.5), (-30.8, 155.6), (-30.5, 311.1), (23.7, 91.6), (-32.6, 101.9), (24.1, 234.4), (-10.3, 356.2), (-59.8, 348.1)]
+  t: fetched+quantized (    80s elapsed)
+  z: fetched+quantized (   165s elapsed)
+  u: fetched+quantized (   284s elapsed)
+  v: fetched+quantized (   406s elapsed)
+  q: fetched+quantized (   513s elapsed)
+  msl: fetched+quantized (   517s elapsed)
+  t2m: fetched+quantized (   522s elapsed)
+  u10: fetched+quantized (   527s elapsed)
+  v10: fetched+quantized (   532s elapsed)
+  verify cube 1727 v h=20: max|err|=1.190e-03 max scale/2=1.196e-03 -> ok
+  window done in 535s (1728 cubes, ~25.8h remaining)
+window 108/200: t0=2000-06-19T05 centers=[(22.0, 240.8), (0.7, 98.7), (-24.0, 30.8), (-1.8, 17.6), (6.4, 134.6), (18.7, 182.1), (-38.6, 202.1), (47.1, 164.9), (21.4, 76.2), (-46.6, 74.0), (-28.5, 142.5), (-24.4, 238.1), (-14.4, 305.3), (-46.8, 352.3), (47.3, 93.3), (21.6, 343.1)]
+  t: fetched+quantized (    81s elapsed)
+  z: fetched+quantized (   165s elapsed)
+  u: fetched+quantized (   282s elapsed)
+  v: fetched+quantized (   404s elapsed)
+  q: fetched+quantized (   509s elapsed)
+  msl: fetched+quantized (   514s elapsed)
+  t2m: fetched+quantized (   518s elapsed)
+  u10: fetched+quantized (   523s elapsed)
+  v10: fetched+quantized (   529s elapsed)
+  verify cube 1732 u10 h=59: max|err|=1.346e-04 max scale/2=1.357e-04 -> ok
+  window done in 530s (1744 cubes, ~25.3h remaining)
+window 109/200: t0=2018-06-24T03 centers=[(34.1, 147.6), (21.5, 259.2), (-51.6, 70.4), (8.9, 135.3), (52.3, 208.4), (-39.4, 206.0), (-24.9, 357.8), (7.2, 320.5), (45.4, 31.2), (14.9, 40.9), (-51.4, 137.6), (-52.4, 283.6), (-20.8, 61.9), (65.0, 85.9), (-57.4, 0.7), (-20.6, 282.7)]
+  t: fetched+quantized (    80s elapsed)
+  z: fetched+quantized (   164s elapsed)
+  u: fetched+quantized (   281s elapsed)
+  v: fetched+quantized (   403s elapsed)
+  q: fetched+quantized (   509s elapsed)
+  msl: fetched+quantized (   514s elapsed)
+  t2m: fetched+quantized (   519s elapsed)
+  u10: fetched+quantized (   524s elapsed)
+  v10: fetched+quantized (   529s elapsed)
+  verify cube 1752 t2m h=49: max|err|=3.508e-04 max scale/2=3.534e-04 -> ok
+  window done in 530s (1760 cubes, ~24.8h remaining)
+window 110/200: t0=2006-04-23T04 centers=[(51.0, 269.6), (-46.1, 60.7), (0.1, 134.0), (6.0, 313.2), (-46.4, 147.8), (-23.8, 252.3), (-6.9, 58.0), (30.6, 154.9), (32.0, 61.5), (58.8, 319.6), (-62.0, 299.0), (-6.2, 285.6), (31.1, 0.4), (-33.9, 318.7), (17.7, 218.8), (-35.6, 105.6)]
+  t: fetched+quantized (    81s elapsed)
+  z: fetched+quantized (   165s elapsed)
+  u: fetched+quantized (   283s elapsed)
+  v: fetched+quantized (   405s elapsed)
+  q: fetched+quantized (   512s elapsed)
+  msl: fetched+quantized (   516s elapsed)
+  t2m: fetched+quantized (   521s elapsed)
+  u10: fetched+quantized (   526s elapsed)
+  v10: fetched+quantized (   531s elapsed)
+  verify cube 1768 u h=17: max|err|=5.709e-04 max scale/2=5.725e-04 -> ok
+  window done in 534s (1776 cubes, ~24.3h remaining)
+window 111/200: t0=1979-10-25T22 centers=[(-61.8, 252.0), (-15.4, 31.3), (-8.6, 277.1), (8.2, 74.6), (-9.3, 348.0), (20.3, 32.6), (40.3, 336.7), (-37.0, 167.8), (63.3, 290.5), (52.3, 122.1), (-36.0, 334.4), (60.4, 43.1), (-41.3, 292.0), (-17.8, 243.4), (-38.6, 106.8), (23.2, 142.7)]
+  t: fetched+quantized (    81s elapsed)
+  z: fetched+quantized (   165s elapsed)
+  u: fetched+quantized (   285s elapsed)
+  v: fetched+quantized (   406s elapsed)
+  q: fetched+quantized (   512s elapsed)
+  msl: fetched+quantized (   517s elapsed)
+  t2m: fetched+quantized (   522s elapsed)
+  u10: fetched+quantized (   528s elapsed)
+  v10: fetched+quantized (   533s elapsed)
+  verify cube 1779 msl h=61: max|err|=1.417e-02 max scale/2=1.429e-02 -> ok
+  window done in 534s (1792 cubes, ~23.8h remaining)
+window 112/200: t0=1983-12-16T17 centers=[(-10.8, 188.4), (-17.2, 275.2), (-49.2, 112.4), (-20.2, 49.4), (3.0, 155.5), (-0.9, 225.5), (28.3, 34.9), (-34.8, 202.8), (-36.5, 247.0), (29.4, 264.9), (36.7, 179.4), (-20.3, 139.9), (-4.5, 95.6), (-57.8, 337.0), (-28.8, 310.2), (53.2, 99.7)]
+  t: fetched+quantized (    80s elapsed)
+  z: fetched+quantized (   164s elapsed)
+  u: fetched+quantized (   281s elapsed)
+  v: fetched+quantized (   402s elapsed)
+  q: fetched+quantized (   509s elapsed)
+  msl: fetched+quantized (   514s elapsed)
+  t2m: fetched+quantized (   519s elapsed)
+  u10: fetched+quantized (   524s elapsed)
+  v10: fetched+quantized (   529s elapsed)
+  verify cube 1804 v h=87: max|err|=3.812e-04 max scale/2=3.836e-04 -> ok
+  window done in 532s (1808 cubes, ~23.4h remaining)
+window 113/200: t0=2000-10-01T04 centers=[(19.7, 153.4), (29.4, 190.4), (-0.6, 182.4), (36.9, 46.3), (-38.0, 64.1), (-7.0, 38.4), (-6.3, 155.4), (-64.5, 244.5), (17.3, 357.9), (-4.3, 65.2), (-42.8, 199.4), (60.8, 93.8), (14.8, 239.9), (-22.4, 348.3), (-44.6, 155.0), (-58.0, 20.3)]
+  t: fetched+quantized (    80s elapsed)
+  z: fetched+quantized (   165s elapsed)
+  u: fetched+quantized (   283s elapsed)
+  v: fetched+quantized (   403s elapsed)
+  q: fetched+quantized (   508s elapsed)
+  msl: fetched+quantized (   513s elapsed)
+  t2m: fetched+quantized (   517s elapsed)
+  u10: fetched+quantized (   523s elapsed)
+  v10: fetched+quantized (   528s elapsed)
+  verify cube 1816 v10 h=66: max|err|=1.831e-04 max scale/2=1.843e-04 -> ok
+  window done in 529s (1824 cubes, ~23.0h remaining)
+window 114/200: t0=1988-06-12T14 centers=[(-2.0, 23.7), (-61.3, 164.9), (28.1, 112.3), (-50.1, 263.9), (-13.5, 120.8), (-29.3, 163.0), (47.7, 20.8), (14.3, 335.8), (-30.4, 41.9), (24.5, 70.0), (49.7, 260.4), (-29.7, 200.8), (-2.9, 70.8), (-57.9, 108.3), (45.7, 204.0), (61.1, 135.9)]
+  t: fetched+quantized (    81s elapsed)
+  z: fetched+quantized (   163s elapsed)
+  u: fetched+quantized (   279s elapsed)
+  v: fetched+quantized (   400s elapsed)
+  q: fetched+quantized (   505s elapsed)
+  msl: fetched+quantized (   510s elapsed)
+  t2m: fetched+quantized (   515s elapsed)
+  u10: fetched+quantized (   520s elapsed)
+  v10: fetched+quantized (   525s elapsed)
+  verify cube 1829 t h=77: max|err|=4.110e-04 max scale/2=4.140e-04 -> ok
+  window done in 527s (1840 cubes, ~22.5h remaining)
+window 115/200: t0=2008-02-23T17 centers=[(-62.4, 136.9), (21.4, 260.7), (49.4, 262.6), (-0.0, 353.1), (-24.7, 159.7), (-6.4, 292.7), (53.5, 61.3), (14.1, 36.8), (-24.0, 272.2), (33.9, 297.0), (-28.5, 105.6), (19.0, 71.0), (39.6, 144.0), (55.7, 198.2), (-63.1, 279.4), (-13.4, 135.9)]
+  t: fetched+quantized (    81s elapsed)
+  z: fetched+quantized (   164s elapsed)
+  u: fetched+quantized (   281s elapsed)
+  v: fetched+quantized (   401s elapsed)
+  q: fetched+quantized (   503s elapsed)
+  msl: fetched+quantized (   508s elapsed)
+  t2m: fetched+quantized (   513s elapsed)
+  u10: fetched+quantized (   518s elapsed)
+  v10: fetched+quantized (   523s elapsed)
+  verify cube 1848 t2m h=68: max|err|=3.510e-04 max scale/2=3.533e-04 -> ok
+  window done in 524s (1856 cubes, ~22.1h remaining)
+window 116/200: t0=1992-10-27T05 centers=[(27.2, 122.1), (-8.0, 252.3), (-36.7, 88.2), (-44.4, 168.6), (9.6, 329.4), (10.7, 9.6), (1.5, 46.0), (18.7, 66.8), (36.7, 275.8), (-15.6, 211.8), (-62.5, 248.0), (12.4, 303.1), (1.7, 158.9), (-0.9, 97.1), (-28.5, 18.7), (-63.1, 137.1)]
+  t: fetched+quantized (    80s elapsed)
+  z: fetched+quantized (   161s elapsed)
+  u: fetched+quantized (   276s elapsed)
+  v: fetched+quantized (   394s elapsed)
+  q: fetched+quantized (   497s elapsed)
+  msl: fetched+quantized (   502s elapsed)
+  t2m: fetched+quantized (   507s elapsed)
+  u10: fetched+quantized (   512s elapsed)
+  v10: fetched+quantized (   517s elapsed)
+  verify cube 1871 u10 h=48: max|err|=2.572e-04 max scale/2=2.581e-04 -> ok
+  window done in 518s (1872 cubes, ~21.7h remaining)
+window 117/200: t0=2012-07-19T12 centers=[(-31.7, 262.0), (-2.5, 46.6), (-5.5, 217.0), (36.0, 200.2), (-1.4, 267.0), (-62.8, 275.6), (-34.2, 81.5), (-33.9, 318.6), (-4.1, 92.2), (-16.0, 188.5), (39.7, 269.2), (64.9, 85.1), (-6.4, 322.9), (22.0, 152.7), (-25.8, 7.0), (49.6, 304.0)]
+  t: fetched+quantized (    81s elapsed)
+  z: fetched+quantized (   162s elapsed)
+  u: fetched+quantized (   276s elapsed)
+  v: fetched+quantized (   394s elapsed)
+  q: fetched+quantized (   495s elapsed)
+  msl: fetched+quantized (   500s elapsed)
+  t2m: fetched+quantized (   505s elapsed)
+  u10: fetched+quantized (   510s elapsed)
+  v10: fetched+quantized (   515s elapsed)
+  verify cube 1884 u10 h=24: max|err|=1.656e-04 max scale/2=1.664e-04 -> ok
+  window done in 517s (1888 cubes, ~21.3h remaining)
+window 118/200: t0=2017-05-23T18 centers=[(-45.5, 276.3), (9.0, 46.3), (-9.4, 257.6), (-0.0, 15.9), (18.2, 187.4), (65.7, 345.5), (-11.0, 156.0), (23.9, 223.0), (-19.2, 306.4), (-50.8, 236.8), (18.9, 88.1), (28.4, 336.3), (-28.6, 39.1), (-20.1, 205.7), (-2.4, 126.7), (-61.5, 314.6)]
+  t: fetched+quantized (    81s elapsed)
+  z: fetched+quantized (   162s elapsed)
+  u: fetched+quantized (   275s elapsed)
+  v: fetched+quantized (   395s elapsed)
+  q: fetched+quantized (   500s elapsed)
+  msl: fetched+quantized (   505s elapsed)
+  t2m: fetched+quantized (   510s elapsed)
+  u10: fetched+quantized (   515s elapsed)
+  v10: fetched+quantized (   520s elapsed)
+  verify cube 1896 u h=27: max|err|=9.886e-04 max scale/2=9.946e-04 -> ok
+  window done in 523s (1904 cubes, ~20.9h remaining)
+window 119/200: t0=1989-07-01T05 centers=[(-65.6, 159.2), (5.8, 174.3), (58.4, 109.5), (-48.2, 267.8), (-9.7, 154.4), (-37.8, 321.9), (-7.0, 10.3), (57.3, 210.1), (-37.0, 209.0), (-10.7, 282.5), (-13.2, 44.0), (-7.0, 215.9), (37.4, 68.7), (36.1, 351.4), (63.3, 261.2), (34.1, 316.3)]
+  t: fetched+quantized (    80s elapsed)
+  z: fetched+quantized (   169s elapsed)
+  u: fetched+quantized (   293s elapsed)
+  v: fetched+quantized (   417s elapsed)
+  q: fetched+quantized (   523s elapsed)
+  msl: fetched+quantized (   528s elapsed)
+  t2m: fetched+quantized (   532s elapsed)
+  u10: fetched+quantized (   537s elapsed)
+  v10: fetched+quantized (   542s elapsed)
+  verify cube 1915 v10 h=75: max|err|=1.286e-04 max scale/2=1.291e-04 -> ok
+  window done in 543s (1920 cubes, ~20.5h remaining)
+window 120/200: t0=1983-09-26T12 centers=[(30.4, 328.3), (-46.8, 189.4), (-11.9, 309.7), (-56.5, 142.9), (-10.0, 143.7), (-46.9, 243.9), (-5.1, 181.4), (-17.2, 212.3), (17.8, 275.7), (-1.4, 91.7), (14.3, 28.7), (31.1, 236.1), (37.9, 166.4), (-23.8, 275.9), (-46.2, 46.7), (-46.6, 349.3)]
+  t: fetched+quantized (    80s elapsed)
+  z: fetched+quantized (   180s elapsed)
+  u: fetched+quantized (   298s elapsed)
+  v: fetched+quantized (   421s elapsed)
+  q: fetched+quantized (   526s elapsed)
+  msl: fetched+quantized (   531s elapsed)
+  t2m: fetched+quantized (   535s elapsed)
+  u10: fetched+quantized (   541s elapsed)
+  v10: fetched+quantized (   546s elapsed)
+  verify cube 1924 v h=29: max|err|=6.503e-04 max scale/2=6.525e-04 -> ok
+  window done in 549s (1936 cubes, ~20.1h remaining)
+window 121/200: t0=1983-04-06T16 centers=[(8.7, 315.4), (2.2, 287.3), (41.6, 187.6), (-44.5, 224.1), (57.0, 127.2), (18.0, 22.1), (-49.7, 359.0), (-4.9, 252.0), (-43.6, 183.0), (55.3, 299.9), (-42.7, 39.3), (56.1, 251.0), (14.3, 178.4), (13.2, 207.7), (-44.6, 138.8), (-31.3, 330.6)]
+  t: fetched+quantized (    81s elapsed)
+  z: fetched+quantized (   168s elapsed)
+  u: fetched+quantized (   286s elapsed)
+  v: fetched+quantized (   408s elapsed)
+  q: fetched+quantized (   513s elapsed)
+  msl: fetched+quantized (   518s elapsed)
+  t2m: fetched+quantized (   523s elapsed)
+  u10: fetched+quantized (   528s elapsed)
+  v10: fetched+quantized (   533s elapsed)
+  verify cube 1940 t h=57: max|err|=3.763e-04 max scale/2=3.787e-04 -> ok
+  window done in 535s (1952 cubes, ~19.7h remaining)
+window 122/200: t0=2014-02-03T06 centers=[(1.1, 109.4), (-64.4, 22.0), (27.3, 237.3), (-45.0, 232.2), (33.6, 272.5), (-12.4, 176.4), (-23.0, 315.5), (47.9, 137.5), (-55.5, 129.8), (-36.8, 51.7), (24.5, 53.4), (35.9, 176.0), (-40.2, 178.0), (-18.7, 262.7), (12.0, 146.8), (52.7, 52.0)]
+  t: fetched+quantized (    81s elapsed)
+  z: fetched+quantized (   170s elapsed)
+  u: fetched+quantized (   291s elapsed)
+  v: fetched+quantized (   415s elapsed)
+  q: fetched+quantized (   523s elapsed)
+  msl: fetched+quantized (   528s elapsed)
+  t2m: fetched+quantized (   532s elapsed)
+  u10: fetched+quantized (   537s elapsed)
+  v10: fetched+quantized (   542s elapsed)
+  verify cube 1952 msl h=32: max|err|=1.721e-02 max scale/2=1.734e-02 -> ok
+  window done in 543s (1968 cubes, ~19.4h remaining)
+window 123/200: t0=1989-11-09T20 centers=[(19.8, 208.7), (-39.9, 241.7), (13.9, 104.5), (-15.7, 213.9), (-57.5, 358.3), (-31.7, 56.8), (0.7, 308.4), (24.9, 31.4), (40.5, 4.7), (41.8, 171.6), (-15.0, 176.4), (-44.1, 90.6), (-15.6, 102.7), (57.5, 119.9), (55.5, 264.8), (17.4, 162.1)]
+  t: fetched+quantized (    81s elapsed)
+  z: fetched+quantized (   168s elapsed)
+  u: fetched+quantized (   289s elapsed)
+  v: fetched+quantized (   408s elapsed)
+  q: fetched+quantized (   509s elapsed)
+  msl: fetched+quantized (   513s elapsed)
+  t2m: fetched+quantized (   518s elapsed)
+  u10: fetched+quantized (   523s elapsed)
+  v10: fetched+quantized (   528s elapsed)
+  verify cube 1975 u h=50: max|err|=9.860e-04 max scale/2=9.896e-04 -> ok
+  window done in 531s (1984 cubes, ~19.0h remaining)
+window 124/200: t0=2015-10-25T06 centers=[(-21.8, 242.2), (-5.9, 75.0), (-28.5, 318.3), (-22.5, 173.3), (-1.0, 146.3), (44.5, 351.1), (-43.9, 24.5), (65.9, 253.6), (-1.6, 274.8), (-49.4, 76.1), (-55.1, 203.6), (8.3, 17.9), (-35.2, 289.1), (41.1, 143.2), (-21.4, 200.2), (32.0, 59.6)]
+  t: fetched+quantized (    81s elapsed)
+  z: fetched+quantized (   160s elapsed)
+  u: fetched+quantized (   273s elapsed)
+  v: fetched+quantized (   401s elapsed)
+  q: fetched+quantized (   512s elapsed)
+  msl: fetched+quantized (   516s elapsed)
+  t2m: fetched+quantized (   521s elapsed)
+  u10: fetched+quantized (   526s elapsed)
+  v10: fetched+quantized (   531s elapsed)
+  verify cube 1995 q h=1: max|err|=1.679e-07 max scale/2=1.701e-07 -> ok
+  window done in 533s (2000 cubes, ~18.7h remaining)
+window 125/200: t0=2014-09-24T14 centers=[(55.6, 329.6), (15.9, 208.4), (36.2, 297.1), (-1.6, 133.4), (-54.2, 331.9), (65.2, 159.7), (16.6, 41.0), (-56.4, 180.5), (-57.4, 252.0), (61.2, 43.3), (-29.5, 166.7), (-33.3, 9.4), (-19.4, 319.1), (43.7, 122.1), (-2.6, 245.4), (11.9, 334.1)]
+  t: fetched+quantized (    80s elapsed)
+  z: fetched+quantized (   181s elapsed)
+  u: fetched+quantized (   309s elapsed)
+  v: fetched+quantized (   438s elapsed)
+  q: fetched+quantized (   550s elapsed)
+  msl: fetched+quantized (   555s elapsed)
+  t2m: fetched+quantized (   559s elapsed)
+  u10: fetched+quantized (   564s elapsed)
+  v10: fetched+quantized (   569s elapsed)
+  verify cube 2002 v10 h=67: max|err|=2.350e-04 max scale/2=2.361e-04 -> ok
+  window done in 570s (2016 cubes, ~18.3h remaining)
+window 126/200: t0=1983-11-12T03 centers=[(-29.3, 83.5), (13.2, 2.0), (41.3, 189.3), (58.5, 95.0), (7.7, 296.6), (-28.0, 171.1), (57.2, 310.6), (-5.3, 141.2), (19.3, 324.7), (-47.9, 28.2), (-28.7, 271.7), (-64.0, 144.4), (63.3, 24.6), (-1.4, 109.1), (-1.6, 259.1), (37.5, 17.2)]
+  t: fetched+quantized (    81s elapsed)
+  z: fetched+quantized (   194s elapsed)
+  u: fetched+quantized (   336s elapsed)
+  v: fetched+quantized (   475s elapsed)
+  q: fetched+quantized (   747s elapsed)
+  msl: fetched+quantized (   774s elapsed)
+  t2m: fetched+quantized (   806s elapsed)
+  u10: fetched+quantized (   842s elapsed)
+  v10: fetched+quantized (   848s elapsed)
+  verify cube 2029 q h=87: max|err|=1.470e-07 max scale/2=1.490e-07 -> ok
+  window done in 850s (2032 cubes, ~18.1h remaining)
+window 127/200: t0=1998-05-21T08 centers=[(55.6, 26.3), (58.2, 84.7), (-31.4, 100.7), (-10.8, 15.1), (2.2, 310.3), (-47.5, 295.4), (-46.8, 64.8), (18.2, 214.1), (51.5, 323.8), (32.0, 97.2), (-36.0, 247.3), (52.2, 224.9), (24.3, 275.3), (5.8, 58.1), (-52.1, 356.6), (-44.9, 202.2)]
+  t: fetched+quantized (   115s elapsed)
+  z: fetched+quantized (   371s elapsed)
+  u: fetched+quantized (   752s elapsed)
+  v: fetched+quantized (  1365s elapsed)
+  q: fetched+quantized (  2001s elapsed)
+  msl: fetched+quantized (  2027s elapsed)
+  t2m: fetched+quantized (  2061s elapsed)
+  u10: fetched+quantized (  2105s elapsed)
+  v10: fetched+quantized (  2157s elapsed)
+  verify cube 2047 t2m h=33: max|err|=2.332e-04 max scale/2=2.348e-04 -> ok
+  window done in 2168s (2048 cubes, ~18.1h remaining)
+window 128/200: t0=2021-10-04T01 centers=[(25.7, 95.3), (50.2, 323.3), (-13.3, 230.7), (-25.0, 195.0), (15.4, 8.6), (27.1, 210.9), (-13.5, 258.2), (5.1, 46.6), (-0.9, 76.6), (-44.0, 160.4), (29.7, 296.8), (-48.9, 270.7), (-4.7, 320.7), (5.8, 285.9), (22.3, 157.9), (55.4, 42.3)]
+  t: fetched+quantized (   516s elapsed)
+  z: fetched+quantized (  1063s elapsed)
+  u: fetched+quantized (  1750s elapsed)
+  v: fetched+quantized (  2408s elapsed)
+  q: fetched+quantized (  3042s elapsed)
+  msl: fetched+quantized (  3084s elapsed)
+  t2m: fetched+quantized (  3129s elapsed)
+  u10: fetched+quantized (  3223s elapsed)
+  v10: fetched+quantized (  3299s elapsed)
+  verify cube 2058 t2m h=73: max|err|=2.340e-04 max scale/2=2.355e-04 -> ok
+  window done in 3315s (2064 cubes, ~18.5h remaining)
+window 129/200: t0=1981-08-06T12 centers=[(-19.0, 200.1), (25.4, 63.1), (-48.8, 249.0), (-62.5, 45.2), (64.5, 239.2), (-44.6, 11.7), (10.4, 299.9), (-19.9, 266.2), (45.9, 30.5), (30.7, 99.0), (6.8, 181.2), (30.8, 256.1), (52.3, 120.0), (-27.6, 331.4), (-21.8, 85.0), (-33.7, 161.1)]
+  t: fetched+quantized (   643s elapsed)
+  z: fetched+quantized (  1156s elapsed)
+  u: fetched+quantized (  1564s elapsed)
+  v: fetched+quantized (  2167s elapsed)
+  q: fetched+quantized (  2749s elapsed)
+  msl: fetched+quantized (  2783s elapsed)
+  t2m: fetched+quantized (  2822s elapsed)
+  u10: fetched+quantized (  2882s elapsed)
+  v10: fetched+quantized (  2957s elapsed)
+  verify cube 2077 u10 h=35: max|err|=3.142e-04 max scale/2=3.148e-04 -> ok
+  window done in 2971s (2080 cubes, ~18.8h remaining)
+window 130/200: t0=1981-10-03T01 centers=[(5.5, 153.6), (-46.5, 89.9), (-50.3, 217.5), (-9.0, 19.4), (20.0, 301.2), (-12.4, 236.8), (22.8, 87.4), (35.5, 19.5), (-30.1, 336.9), (-27.0, 294.7), (-26.6, 125.7), (-11.8, 192.7), (-45.9, 24.2), (62.6, 59.1), (50.0, 214.4), (-7.8, 78.5)]
+  t: fetched+quantized (   486s elapsed)
+  z: fetched+quantized (   868s elapsed)
+  u: fetched+quantized (  1600s elapsed)
+  v: fetched+quantized (  2357s elapsed)
+  q: fetched+quantized (  2883s elapsed)
+  msl: fetched+quantized (  2917s elapsed)
+  t2m: fetched+quantized (  2944s elapsed)
+  u10: fetched+quantized (  2985s elapsed)
+  v10: fetched+quantized (  3029s elapsed)
+  verify cube 2093 u10 h=25: max|err|=2.203e-04 max scale/2=2.208e-04 -> ok
+  window done in 3038s (2096 cubes, ~19.0h remaining)
+window 131/200: t0=1991-07-01T19 centers=[(-55.7, 255.5), (-53.5, 37.8), (-18.8, 179.9), (-22.1, 91.0), (28.7, 96.3), (-2.5, 279.4), (32.6, 268.0), (-22.2, 32.2), (-21.3, 149.9), (37.8, 63.6), (-30.3, 354.9), (-51.1, 335.2), (24.6, 27.0), (6.0, 359.4), (56.9, 348.8), (38.4, 221.8)]
+  t: fetched+quantized (   469s elapsed)
+  z: fetched+quantized (   929s elapsed)
+  u: fetched+quantized (  1464s elapsed)
+  v: fetched+quantized (  2105s elapsed)
+  q: fetched+quantized (  2537s elapsed)
+  msl: fetched+quantized (  2559s elapsed)
+  t2m: fetched+quantized (  2586s elapsed)
+  u10: fetched+quantized (  2625s elapsed)
+  v10: fetched+quantized (  2669s elapsed)
+  verify cube 2108 v10 h=59: max|err|=2.229e-04 max scale/2=2.241e-04 -> ok
+  window done in 2682s (2112 cubes, ~19.1h remaining)
+window 132/200: t0=2022-06-27T23 centers=[(-34.9, 346.2), (-1.6, 227.3), (26.1, 19.2), (40.9, 181.0), (-53.7, 148.7), (36.7, 282.1), (-42.0, 23.0), (5.0, 332.5), (-6.9, 281.3), (56.0, 320.6), (-17.4, 41.5), (15.6, 264.5), (41.1, 113.8), (-63.3, 230.8), (43.4, 357.0), (-56.2, 103.8)]
+  t: fetched+quantized (   368s elapsed)
+  z: fetched+quantized (   734s elapsed)
+  u: fetched+quantized (  1327s elapsed)
+  v: fetched+quantized (  1935s elapsed)
+  q: fetched+quantized (  2232s elapsed)
+  msl: fetched+quantized (  2261s elapsed)
+  t2m: fetched+quantized (  2298s elapsed)
+  u10: fetched+quantized (  2349s elapsed)
+  v10: fetched+quantized (  2396s elapsed)
+  verify cube 2127 z h=66: max|err|=3.523e-01 max scale/2=3.547e-01 -> ok
+  window done in 2485s (2128 cubes, ~19.2h remaining)
+window 133/200: t0=1999-09-24T20 centers=[(-15.6, 80.3), (-56.4, 268.4), (46.3, 110.3), (-30.9, 19.7), (14.5, 225.6), (-21.0, 254.5), (17.3, 62.5), (6.9, 15.0), (-51.5, 196.5), (-55.5, 2.6), (-20.3, 204.5), (25.6, 266.1), (-46.2, 106.8), (44.6, 324.3), (55.8, 45.7), (-17.9, 155.9)]
+  t: fetched+quantized (   361s elapsed)
+  z: fetched+quantized (   743s elapsed)
+  u: fetched+quantized (  1252s elapsed)
+  v: fetched+quantized (  1725s elapsed)
+  q: fetched+quantized (  2093s elapsed)
+  msl: fetched+quantized (  2129s elapsed)
+  t2m: fetched+quantized (  2162s elapsed)
+  u10: fetched+quantized (  2211s elapsed)
+  v10: fetched+quantized (  2267s elapsed)
+  verify cube 2139 msl h=61: max|err|=2.063e-02 max scale/2=2.077e-02 -> ok
+  window done in 2275s (2144 cubes, ~19.2h remaining)
+window 134/200: t0=2022-03-02T03 centers=[(-65.4, 302.7), (-10.4, 239.0), (40.0, 255.8), (-37.1, 222.2), (-56.1, 75.7), (-1.8, 58.6), (23.3, 359.2), (62.7, 237.1), (-30.1, 113.1), (-35.3, 296.5), (60.9, 303.1), (18.1, 310.2), (15.3, 237.9), (1.6, 216.6), (52.7, 186.3), (-18.5, 174.5)]
+  t: fetched+quantized (   328s elapsed)
+  z: fetched+quantized (   750s elapsed)
+  u: fetched+quantized (  1382s elapsed)
+  v: fetched+quantized (  1999s elapsed)
+  q: fetched+quantized (  2538s elapsed)
+  msl: fetched+quantized (  2565s elapsed)
+  t2m: fetched+quantized (  2592s elapsed)
+  u10: fetched+quantized (  2627s elapsed)
+  v10: fetched+quantized (  2662s elapsed)
+  verify cube 2153 z h=65: max|err|=7.822e-02 max scale/2=7.871e-02 -> ok
+  window done in 2710s (2160 cubes, ~19.3h remaining)
+window 135/200: t0=1985-02-15T16 centers=[(-49.6, 180.5), (33.5, 305.7), (-20.9, 240.9), (47.1, 345.8), (-47.6, 104.0), (-0.9, 187.4), (14.2, 118.4), (6.6, 266.5), (35.4, 248.8), (-28.8, 17.9), (-36.9, 328.6), (36.9, 143.3), (52.2, 37.5), (30.7, 193.4), (-58.8, 291.1), (-24.2, 292.0)]
+  t: fetched+quantized (   418s elapsed)
+  z: fetched+quantized (   793s elapsed)
+  u: fetched+quantized (  1212s elapsed)
+resume: 2160 cubes, next window 135
+split=train years=1979..2023 target=200 windows x 16 cubes (0.55 GiB/cube pre-compression) -> /data/ERA5-samples/train
+window 135/200: t0=1985-02-15T16 centers=[(-49.6, 180.5), (33.5, 305.7), (-20.9, 240.9), (47.1, 345.8), (-47.6, 104.0), (-0.9, 187.4), (14.2, 118.4), (6.6, 266.5), (35.4, 248.8), (-28.8, 17.9), (-36.9, 328.6), (36.9, 143.3), (52.2, 37.5), (30.7, 193.4), (-58.8, 291.1), (-24.2, 292.0)]
+  ! temperature hour 48 stalled >600s, resubmitting
+  ! temperature hour 50 stalled >600s, resubmitting
+  ! temperature hour 59 stalled >600s, resubmitting
+  ! temperature hour 68 stalled >600s, resubmitting
+  ! temperature hour 83 stalled >600s, resubmitting
+  ! temperature hour 84 stalled >600s, resubmitting
+  ! temperature hour 87 stalled >600s, resubmitting
+  ! temperature hour 50 stalled >600s, resubmitting
+  t: fetched+quantized (  1985s elapsed)
+  ! geopotential hour 1 stalled >600s, resubmitting
+  ! geopotential hour 22 stalled >600s, resubmitting
+  ! geopotential hour 36 stalled >600s, resubmitting
+  z: fetched+quantized (  3256s elapsed)
+  ! u_component_of_wind hour 14 stalled >600s, resubmitting
+  ! u_component_of_wind hour 18 stalled >600s, resubmitting
+  ! u_component_of_wind hour 23 stalled >600s, resubmitting
+  ! u_component_of_wind hour 40 stalled >600s, resubmitting
+  ! u_component_of_wind hour 50 stalled >600s, resubmitting
+  ! u_component_of_wind hour 65 stalled >600s, resubmitting
+  ! u_component_of_wind hour 89 stalled >600s, resubmitting
+  u: fetched+quantized (  5117s elapsed)
+  v: fetched+quantized (  5959s elapsed)
+  ! specific_humidity hour 38 stalled >600s, resubmitting
+  q: fetched+quantized (  7207s elapsed)
+  msl: fetched+quantized (  7222s elapsed)
+  t2m: fetched+quantized (  7228s elapsed)
+  u10: fetched+quantized (  7377s elapsed)
+  v10: fetched+quantized (  7525s elapsed)
+  verify cube 2172 u10 h=11: max|err|=2.222e-04 max scale/2=2.233e-04 -> ok
+  window done in 7990s (2176 cubes, ~142.0h remaining)
+window 136/200: t0=1999-05-17T03 centers=[(29.1, 69.6), (-6.3, 300.5), (-54.6, 213.1), (-58.9, 155.3), (-33.2, 280.7), (40.9, 255.8), (10.8, 160.4), (51.7, 110.4), (50.0, 164.2), (-47.3, 331.2), (-3.9, 85.0), (-8.7, 40.9), (9.9, 108.1), (-7.9, 204.4), (37.1, 306.0), (-22.5, 320.6)]
+  ! temperature hour 41 stalled >600s, resubmitting
+  t: fetched+quantized (  1291s elapsed)
+  ! geopotential hour 29 stalled >600s, resubmitting
+  ! geopotential hour 31 stalled >600s, resubmitting
+  ! geopotential hour 63 stalled >600s, resubmitting
+  z: fetched+quantized (  2522s elapsed)
+  ! u_component_of_wind hour 38 stalled >600s, resubmitting
+  ! u_component_of_wind hour 40 stalled >600s, resubmitting
+  ! u_component_of_wind hour 72 stalled >600s, resubmitting
+  u: fetched+quantized (  4317s elapsed)
+  ! v_component_of_wind hour 10 stalled >600s, resubmitting
+  v: fetched+quantized (  5527s elapsed)
+  q: fetched+quantized (  6558s elapsed)
+  msl: fetched+quantized (  6583s elapsed)
+  t2m: fetched+quantized (  6612s elapsed)
+  u10: fetched+quantized (  6628s elapsed)
+  v10: fetched+quantized (  6723s elapsed)
+  verify cube 2185 t h=27: max|err|=3.789e-04 max scale/2=3.813e-04 -> ok
+  window done in 7264s (2192 cubes, ~133.5h remaining)
+window 137/200: t0=2020-04-09T06 centers=[(-50.6, 88.6), (8.8, 341.0), (-16.2, 67.7), (-59.1, 30.1), (33.7, 334.3), (31.2, 154.0), (18.5, 125.3), (17.5, 211.9), (61.1, 310.7), (-45.7, 264.3), (-15.3, 231.2), (-48.5, 202.6), (36.9, 80.0), (15.1, 304.4), (24.2, 35.6), (16.9, 6.0)]
+  ! temperature hour 13 stalled >600s, resubmitting
+  t: fetched+quantized (  1214s elapsed)
+  ! geopotential hour 0 stalled >600s, resubmitting
+  ! geopotential hour 15 stalled >600s, resubmitting
+  ! geopotential hour 70 stalled >600s, resubmitting
+  ! geopotential hour 72 stalled >600s, resubmitting
+  ! geopotential hour 84 stalled >600s, resubmitting
+  z: fetched+quantized (  2637s elapsed)
+  ! u_component_of_wind hour 8 stalled >600s, resubmitting
+  ! u_component_of_wind hour 14 stalled >600s, resubmitting
+  ! u_component_of_wind hour 49 stalled >600s, resubmitting
+  ! u_component_of_wind hour 66 stalled >600s, resubmitting
+  ! u_component_of_wind hour 67 stalled >600s, resubmitting
+  ! u_component_of_wind hour 90 stalled >600s, resubmitting
+  u: fetched+quantized (  4230s elapsed)
+  ! v_component_of_wind hour 4 stalled >600s, resubmitting
+  ! v_component_of_wind hour 16 stalled >600s, resubmitting
+  ! v_component_of_wind hour 17 stalled >600s, resubmitting
+  ! v_component_of_wind hour 30 stalled >600s, resubmitting
+  ! v_component_of_wind hour 32 stalled >600s, resubmitting
+  v: fetched+quantized (  5944s elapsed)
+  ! specific_humidity hour 6 stalled >600s, resubmitting
+  ! specific_humidity hour 13 stalled >600s, resubmitting
+  q: fetched+quantized (  7114s elapsed)
+  msl: fetched+quantized (  7152s elapsed)
+  t2m: fetched+quantized (  7191s elapsed)
+  u10: fetched+quantized (  7229s elapsed)
+  v10: fetched+quantized (  7256s elapsed)
+  verify cube 2199 t h=56: max|err|=2.539e-04 max scale/2=2.555e-04 -> ok
+  window done in 7352s (2208 cubes, ~129.8h remaining)
+window 138/200: t0=1986-01-21T03 centers=[(-21.4, 249.8), (38.8, 194.6), (-8.3, 8.9), (-14.2, 83.2), (-41.9, 0.5), (22.8, 60.4), (-18.1, 53.8), (-54.4, 80.9), (-13.5, 173.4), (17.8, 164.5), (-30.7, 121.0), (-56.3, 324.8), (38.5, 131.1), (55.4, 358.5), (-37.1, 224.5), (48.6, 312.7)]
+  ! temperature hour 33 stalled >600s, resubmitting
+  ! temperature hour 35 stalled >600s, resubmitting
+  ! temperature hour 69 stalled >600s, resubmitting
+  ! temperature hour 89 stalled >600s, resubmitting
+  t: fetched+quantized (  1592s elapsed)
+  ! geopotential hour 6 stalled >600s, resubmitting
+  ! geopotential hour 32 stalled >600s, resubmitting
+  z: fetched+quantized (  2899s elapsed)
+  ! u_component_of_wind hour 8 stalled >600s, resubmitting
+  ! u_component_of_wind hour 16 stalled >600s, resubmitting
+  ! u_component_of_wind hour 34 stalled >600s, resubmitting
+  ! u_component_of_wind hour 52 stalled >600s, resubmitting
+  u: fetched+quantized (  4416s elapsed)
+  ! v_component_of_wind hour 9 stalled >600s, resubmitting
+  ! v_component_of_wind hour 15 stalled >600s, resubmitting
+  ! v_component_of_wind hour 56 stalled >600s, resubmitting
+  v: fetched+quantized (  6069s elapsed)
+  ! specific_humidity hour 0 stalled >600s, resubmitting
+  ! specific_humidity hour 19 stalled >600s, resubmitting
+  q: fetched+quantized (  7285s elapsed)
+  msl: fetched+quantized (  7400s elapsed)
+  t2m: fetched+quantized (  7407s elapsed)
+  u10: fetched+quantized (  7413s elapsed)
+  v10: fetched+quantized (  7420s elapsed)
+  verify cube 2223 v10 h=57: max|err|=3.070e-04 max scale/2=3.080e-04 -> ok
+  window done in 7421s (2224 cubes, ~127.2h remaining)
+window 139/200: t0=1987-04-11T23 centers=[(11.6, 267.6), (17.3, 8.3), (40.6, 65.3), (-37.3, 110.5), (-52.2, 171.6), (-61.1, 329.8), (60.1, 190.2), (-45.8, 280.2), (-47.4, 236.7), (-40.1, 29.7), (14.4, 326.9), (48.4, 230.8), (-49.6, 66.5), (-17.8, 9.0), (-29.4, 326.1), (5.6, 298.4)]
+  ! temperature hour 45 stalled >600s, resubmitting
+  t: fetched+quantized (  1248s elapsed)
+  ! geopotential hour 5 stalled >600s, resubmitting
+  ! geopotential hour 24 stalled >600s, resubmitting
+  z: fetched+quantized (  2734s elapsed)
+  ! u_component_of_wind hour 25 stalled >600s, resubmitting
+  ! u_component_of_wind hour 51 stalled >600s, resubmitting
+  u: fetched+quantized (  4501s elapsed)
+  ! v_component_of_wind hour 25 stalled >600s, resubmitting
+  v: fetched+quantized (  6139s elapsed)
+  q: fetched+quantized (  7171s elapsed)
+  msl: fetched+quantized (  7405s elapsed)
+  t2m: fetched+quantized (  7432s elapsed)
+  ! 10m_u_component_of_wind hour 16 stalled >600s, resubmitting
+  u10: fetched+quantized (  8195s elapsed)
+  v10: fetched+quantized (  8251s elapsed)
+  verify cube 2230 u10 h=88: max|err|=3.357e-04 max scale/2=3.371e-04 -> ok
+  window done in 8260s (2240 cubes, ~127.6h remaining)
+window 140/200: t0=1990-09-28T00 centers=[(-49.1, 210.6), (-6.7, 61.1), (4.9, 166.3), (41.0, 272.4), (-11.8, 350.1), (45.4, 211.9), (-44.7, 335.2), (-11.3, 108.9), (48.0, 342.6), (-26.1, 26.7), (42.7, 138.5), (-43.9, 115.7), (25.4, 185.7), (41.6, 98.7), (10.7, 327.5), (-10.1, 202.5)]
+  ! temperature hour 2 stalled >600s, resubmitting
+  ! temperature hour 17 stalled >600s, resubmitting
+  ! temperature hour 82 stalled >600s, resubmitting
+  t: fetched+quantized (  1432s elapsed)
+  ! geopotential hour 17 stalled >600s, resubmitting
+  ! geopotential hour 19 stalled >600s, resubmitting
+  z: fetched+quantized (  3144s elapsed)
+  ! u_component_of_wind hour 2 stalled >600s, resubmitting
+  ! u_component_of_wind hour 27 stalled >600s, resubmitting
+  ! u_component_of_wind hour 32 stalled >600s, resubmitting
+  ! u_component_of_wind hour 37 stalled >600s, resubmitting
+  ! u_component_of_wind hour 49 stalled >600s, resubmitting
+  u: fetched+quantized (  5353s elapsed)
+resume: 2240 cubes, next window 140
+split=train years=1979..2023 target=200 windows x 16 cubes (0.55 GiB/cube pre-compression) -> /data/ERA5-samples/train
+window 140/200: t0=1990-09-28T00 centers=[(-49.1, 210.6), (-6.7, 61.1), (4.9, 166.3), (41.0, 272.4), (-11.8, 350.1), (45.4, 211.9), (-44.7, 335.2), (-11.3, 108.9), (48.0, 342.6), (-26.1, 26.7), (42.7, 138.5), (-43.9, 115.7), (25.4, 185.7), (41.6, 98.7), (10.7, 327.5), (-10.1, 202.5)]
+  ! temperature hour 15 stalled >600s, resubmitting
+  ! temperature hour 59 stalled >600s, resubmitting
+  t: fetched+quantized (  1208s elapsed)
+  z: fetched+quantized (  1345s elapsed)
+  ! u_component_of_wind hour 86 stalled >600s, resubmitting
+  ! u_component_of_wind hour 86 stalled >600s, resubmitting
+  u: fetched+quantized (  3095s elapsed)
+  ! v_component_of_wind hour 17 stalled >600s, resubmitting
+  ! v_component_of_wind hour 52 stalled >600s, resubmitting
+  ! v_component_of_wind hour 71 stalled >600s, resubmitting
+  v: fetched+quantized (  4644s elapsed)
+  ! specific_humidity hour 69 stalled >600s, resubmitting
+  q: fetched+quantized (  5982s elapsed)
+  msl: fetched+quantized (  6004s elapsed)
+  t2m: fetched+quantized (  6060s elapsed)
+  u10: fetched+quantized (  6140s elapsed)
+  v10: fetched+quantized (  6174s elapsed)
+  verify cube 2252 u10 h=11: max|err|=2.567e-04 max scale/2=2.575e-04 -> ok
+  window done in 6176s (2256 cubes, ~101.2h remaining)
+window 141/200: t0=2023-03-08T03 centers=[(-17.6, 214.7), (37.7, 146.7), (15.0, 188.9), (44.4, 211.1), (45.4, 286.3), (40.0, 337.4), (-47.7, 281.7), (-4.4, 301.9), (15.4, 7.2), (62.8, 35.8), (21.3, 229.0), (-38.8, 325.4), (19.5, 289.4), (-26.1, 351.8), (-41.2, 159.0), (-9.3, 92.1)]
+  ! temperature hour 31 stalled >600s, resubmitting
+  t: fetched+quantized (  1103s elapsed)
+  ! geopotential hour 12 stalled >600s, resubmitting
+  z: fetched+quantized (  2235s elapsed)
+  ! u_component_of_wind hour 1 stalled >600s, resubmitting
+  ! u_component_of_wind hour 12 stalled >600s, resubmitting
+  ! u_component_of_wind hour 18 stalled >600s, resubmitting
+  ! u_component_of_wind hour 75 stalled >600s, resubmitting
+  u: fetched+quantized (  3694s elapsed)
+resume: 2256 cubes, next window 141
+split=train years=1979..2023 target=200 windows x 16 cubes (0.55 GiB/cube pre-compression) -> /data/ERA5-samples/train
+window 141/200: t0=2023-03-08T03 centers=[(-17.6, 214.7), (37.7, 146.7), (15.0, 188.9), (44.4, 211.1), (45.4, 286.3), (40.0, 337.4), (-47.7, 281.7), (-4.4, 301.9), (15.4, 7.2), (62.8, 35.8), (21.3, 229.0), (-38.8, 325.4), (19.5, 289.4), (-26.1, 351.8), (-41.2, 159.0), (-9.3, 92.1)]
+  ! temperature hour 22 stalled >180s, resubmitting
+  t: fetched+quantized (   775s elapsed)
+  z: fetched+quantized (  1384s elapsed)
+  u: fetched+quantized (  2094s elapsed)
+  ! v_component_of_wind hour 60 stalled >180s, resubmitting
+  v: fetched+quantized (  3243s elapsed)
+  ! specific_humidity hour 20 stalled >180s, resubmitting
+  q: fetched+quantized (  4197s elapsed)
+  msl: fetched+quantized (  4228s elapsed)
+  t2m: fetched+quantized (  4258s elapsed)
+  u10: fetched+quantized (  4395s elapsed)
+  v10: fetched+quantized (  4409s elapsed)
+  verify cube 2268 u10 h=11: max|err|=2.310e-04 max scale/2=2.316e-04 -> ok
+  window done in 4410s (2272 cubes, ~71.1h remaining)
+window 142/200: t0=2013-04-03T20 centers=[(59.0, 202.1), (56.6, 255.3), (-57.3, 268.7), (-7.0, 342.6), (10.5, 156.0), (17.0, 95.7), (-42.6, 93.3), (-0.6, 233.6), (-6.5, 209.2), (33.2, 231.2), (16.3, 314.7), (27.2, 38.1), (29.7, 285.2), (-40.0, 49.0), (-40.0, 162.8), (64.4, 110.5)]
+  ! temperature hour 1 stalled >180s, resubmitting
+  ! temperature hour 9 stalled >180s, resubmitting
+  ! temperature hour 20 stalled >180s, resubmitting
+  ! temperature hour 54 stalled >180s, resubmitting
+  ! temperature hour 58 stalled >180s, resubmitting
+  t: fetched+quantized (   936s elapsed)
+  ! geopotential hour 19 stalled >180s, resubmitting
+  ! geopotential hour 55 stalled >180s, resubmitting
+  ! geopotential hour 76 stalled >180s, resubmitting
+  z: fetched+quantized (  1793s elapsed)
+  ! u_component_of_wind hour 15 stalled >180s, resubmitting
+  u: fetched+quantized (  3199s elapsed)
+  ! v_component_of_wind hour 14 stalled >180s, resubmitting
+  ! v_component_of_wind hour 16 stalled >180s, resubmitting
+  ! v_component_of_wind hour 21 stalled >180s, resubmitting
+  ! v_component_of_wind hour 23 stalled >180s, resubmitting
+  ! v_component_of_wind hour 25 stalled >180s, resubmitting
+  ! v_component_of_wind hour 26 stalled >180s, resubmitting
+  ! v_component_of_wind hour 64 stalled >180s, resubmitting
+  ! v_component_of_wind hour 91 stalled >180s, resubmitting
+  v: fetched+quantized (  4675s elapsed)
+  ! specific_humidity hour 62 stalled >180s, resubmitting
+  ! specific_humidity hour 73 stalled >180s, resubmitting
+  ! specific_humidity hour 79 stalled >180s, resubmitting
+  q: fetched+quantized (  5925s elapsed)
+  msl: fetched+quantized (  5956s elapsed)
+  t2m: fetched+quantized (  5985s elapsed)
+  u10: fetched+quantized (  6072s elapsed)
+  v10: fetched+quantized (  6132s elapsed)
+  verify cube 2281 t h=27: max|err|=3.827e-04 max scale/2=3.851e-04 -> ok
+  window done in 6294s (2288 cubes, ~84.7h remaining)
+window 143/200: t0=2002-07-12T00 centers=[(-45.6, 136.4), (-33.9, 45.2), (-7.2, 52.8), (60.5, 100.4), (-41.8, 252.1), (23.2, 272.6), (52.3, 286.6), (-28.5, 187.6), (18.6, 40.0), (-49.7, 2.3), (20.2, 204.0), (1.2, 76.8), (-21.0, 232.3), (-48.3, 73.4), (-7.4, 159.0), (15.4, 244.5)]
+  ! temperature hour 48 stalled >180s, resubmitting
+  ! temperature hour 66 stalled >180s, resubmitting
+  t: fetched+quantized (   779s elapsed)
+  ! geopotential hour 9 stalled >180s, resubmitting
+  z: fetched+quantized (  1287s elapsed)
+  ! u_component_of_wind hour 91 stalled >180s, resubmitting
+  u: fetched+quantized (  2021s elapsed)
+  v: fetched+quantized (  2317s elapsed)
+  q: fetched+quantized (  2625s elapsed)
+  msl: fetched+quantized (  2632s elapsed)
+  t2m: fetched+quantized (  2638s elapsed)
+  u10: fetched+quantized (  2646s elapsed)
+  v10: fetched+quantized (  2653s elapsed)
+  verify cube 2295 t h=56: max|err|=3.764e-04 max scale/2=3.787e-04 -> ok
+  window done in 2658s (2304 cubes, ~69.3h remaining)
+window 144/200: t0=1981-03-20T11 centers=[(-13.6, 7.6), (-11.0, 242.0), (-65.3, 53.8), (55.7, 193.8), (32.1, 155.0), (23.8, 219.8), (20.3, 67.2), (-37.4, 120.8), (-47.5, 182.3), (59.8, 83.7), (-23.5, 302.1), (-48.7, 267.3), (-46.6, 350.3), (36.0, 250.7), (-11.3, 117.6), (17.0, 3.4)]
+  t: fetched+quantized (   276s elapsed)
+  z: fetched+quantized (   523s elapsed)
+  u: fetched+quantized (   814s elapsed)
+  v: fetched+quantized (  1112s elapsed)
+  q: fetched+quantized (  1366s elapsed)
+  msl: fetched+quantized (  1372s elapsed)
+  t2m: fetched+quantized (  1377s elapsed)
+  u10: fetched+quantized (  1384s elapsed)
+  v10: fetched+quantized (  1390s elapsed)
+  verify cube 2319 v10 h=57: max|err|=1.533e-04 max scale/2=1.541e-04 -> ok
+  window done in 1391s (2320 cubes, ~56.4h remaining)
+window 145/200: t0=1993-07-22T16 centers=[(-51.8, 85.1), (20.4, 157.8), (14.4, 300.2), (-4.6, 89.8), (-20.6, 26.3), (61.4, 201.1), (38.0, 72.7), (-38.0, 158.5), (10.1, 37.3), (-42.0, 284.1), (24.0, 331.0), (-54.6, 19.3), (13.2, 122.5), (-12.7, 311.8), (-34.3, 240.1), (7.3, 275.6)]
+  t: fetched+quantized (   193s elapsed)
+  z: fetched+quantized (   361s elapsed)
+  u: fetched+quantized (   588s elapsed)
+  ! v_component_of_wind hour 38 stalled >180s, resubmitting
+  ! v_component_of_wind hour 42 stalled >180s, resubmitting
+  v: fetched+quantized (  1610s elapsed)
+  ! specific_humidity hour 4 stalled >180s, resubmitting
+  ! specific_humidity hour 20 stalled >180s, resubmitting
+  ! specific_humidity hour 63 stalled >180s, resubmitting
+  q: fetched+quantized (  2525s elapsed)
+  msl: fetched+quantized (  2552s elapsed)
+  t2m: fetched+quantized (  2580s elapsed)
+  u10: fetched+quantized (  2621s elapsed)
+  v10: fetched+quantized (  2628s elapsed)
+  verify cube 2326 u10 h=88: max|err|=2.222e-04 max scale/2=2.231e-04 -> ok
+  window done in 2630s (2336 cubes, ~52.2h remaining)
+window 146/200: t0=2005-08-02T22 centers=[(-22.4, 286.9), (-48.5, 297.5), (-57.7, 85.6), (-3.0, 193.1), (-15.5, 126.8), (26.2, 228.1), (59.1, 7.0), (9.7, 299.4), (-7.8, 80.4), (2.2, 25.9), (0.9, 325.2), (12.6, 352.8), (38.9, 180.3), (4.2, 246.0), (35.4, 50.0), (38.2, 323.1)]
+  ! temperature hour 81 stalled >180s, resubmitting
+  t: fetched+quantized (   955s elapsed)
+  z: fetched+quantized (  1502s elapsed)
+  ! u_component_of_wind hour 7 stalled >180s, resubmitting
+  u: fetched+quantized (  2621s elapsed)
+  ! v_component_of_wind hour 43 stalled >180s, resubmitting
+  ! v_component_of_wind hour 89 stalled >180s, resubmitting
+  v: fetched+quantized (  3570s elapsed)
+  ! specific_humidity hour 8 stalled >180s, resubmitting
+  ! specific_humidity hour 27 stalled >180s, resubmitting
+  ! specific_humidity hour 82 stalled >180s, resubmitting
+  q: fetched+quantized (  4510s elapsed)
+  msl: fetched+quantized (  4517s elapsed)
+  t2m: fetched+quantized (  4522s elapsed)
+  u10: fetched+quantized (  4529s elapsed)
+  v10: fetched+quantized (  4613s elapsed)
+  verify cube 2350 t h=66: max|err|=2.680e-04 max scale/2=2.697e-04 -> ok
+  window done in 4785s (2352 cubes, ~54.4h remaining)
+window 147/200: t0=1979-07-07T00 centers=[(22.8, 145.7), (4.8, 212.6), (5.4, 240.8), (11.8, 20.1), (-27.2, 135.6), (-25.5, 168.5), (-59.2, 346.3), (58.4, 278.5), (46.3, 324.6), (17.2, 54.2), (-16.1, 275.4), (-14.2, 342.1), (-36.9, 231.9), (-26.7, 196.6), (38.3, 233.3), (30.3, 264.9)]
+  t: fetched+quantized (   585s elapsed)
+  ! geopotential hour 0 stalled >180s, resubmitting
+  ! geopotential hour 12 stalled >180s, resubmitting
+  z: fetched+quantized (  1546s elapsed)
+  u: fetched+quantized (  2036s elapsed)
+  v: fetched+quantized (  2261s elapsed)
+  q: fetched+quantized (  2463s elapsed)
+  msl: fetched+quantized (  2469s elapsed)
+  t2m: fetched+quantized (  2474s elapsed)
+  u10: fetched+quantized (  2480s elapsed)
+  v10: fetched+quantized (  2487s elapsed)
+  verify cube 2363 z h=48: max|err|=6.612e-02 max scale/2=6.676e-02 -> ok
+  window done in 2490s (2368 cubes, ~50.9h remaining)
+window 148/200: t0=1982-01-08T12 centers=[(-10.0, 240.3), (22.1, 60.9), (42.3, 101.3), (-24.0, 214.5), (-19.9, 320.3), (-55.2, 309.5), (-35.6, 267.4), (-61.9, 56.1), (3.9, 32.0), (-41.0, 158.6), (39.6, 243.3), (3.4, 155.1), (24.2, 286.7), (41.8, 14.4), (-29.6, 114.6), (-32.8, 50.4)]
+  t: fetched+quantized (   168s elapsed)
+  z: fetched+quantized (   476s elapsed)
+  u: fetched+quantized (  1204s elapsed)
+  v: fetched+quantized (  1572s elapsed)
+  q: fetched+quantized (  1790s elapsed)
+  msl: fetched+quantized (  1795s elapsed)
+  t2m: fetched+quantized (  1800s elapsed)
+  u10: fetched+quantized (  1807s elapsed)
+  v10: fetched+quantized (  1814s elapsed)
+  verify cube 2383 t2m h=27: max|err|=1.869e-04 max scale/2=1.881e-04 -> ok
+  window done in 1816s (2384 cubes, ~46.9h remaining)
+window 149/200: t0=1987-11-10T11 centers=[(52.1, 202.9), (-43.5, 73.5), (13.9, 85.7), (-13.8, 14.3), (34.1, 277.4), (-8.6, 329.5), (-55.3, 229.8), (-42.3, 31.7), (-39.9, 193.4), (36.4, 70.7), (-10.6, 91.7), (-25.1, 349.6), (31.4, 10.4), (3.2, 156.9), (-23.6, 222.9), (24.2, 118.6)]
+  t: fetched+quantized (   179s elapsed)
+  z: fetched+quantized (   349s elapsed)
+  u: fetched+quantized (   582s elapsed)
+  v: fetched+quantized (   816s elapsed)
+  q: fetched+quantized (  1037s elapsed)
+  msl: fetched+quantized (  1043s elapsed)
+  t2m: fetched+quantized (  1049s elapsed)
+  u10: fetched+quantized (  1055s elapsed)
+  v10: fetched+quantized (  1062s elapsed)
+  verify cube 2389 msl h=13: max|err|=1.316e-02 max scale/2=1.327e-02 -> ok
+  window done in 1063s (2400 cubes, ~42.5h remaining)
+window 150/200: t0=2011-03-08T03 centers=[(-34.1, 152.2), (-22.0, 222.5), (22.2, 91.0), (8.9, 170.2), (-26.2, 43.2), (10.2, 55.7), (-45.0, 337.4), (37.5, 168.3), (-51.1, 262.3), (-14.9, 345.3), (-52.7, 43.6), (-1.3, 285.8), (50.2, 39.7), (16.0, 13.6), (-9.2, 83.8), (20.2, 131.0)]
+  t: fetched+quantized (   163s elapsed)
+  z: fetched+quantized (   323s elapsed)
+  u: fetched+quantized (   706s elapsed)
+  v: fetched+quantized (  1385s elapsed)
+  ! specific_humidity hour 94 stalled >180s, resubmitting
+  q: fetched+quantized (  2263s elapsed)
+  msl: fetched+quantized (  2285s elapsed)
+  t2m: fetched+quantized (  2300s elapsed)
+  u10: fetched+quantized (  2452s elapsed)
+  v10: fetched+quantized (  2543s elapsed)
+  verify cube 2409 msl h=57: max|err|=1.567e-02 max scale/2=1.577e-02 -> ok
+  window done in 2562s (2416 cubes, ~41.0h remaining)
+window 151/200: t0=1982-07-27T07 centers=[(-49.2, 176.1), (7.6, 170.6), (-6.3, 222.1), (50.2, 240.6), (55.4, 44.5), (17.1, 25.1), (-19.7, 58.0), (-6.7, 137.8), (-31.0, 212.7), (15.7, 354.2), (16.4, 241.1), (3.5, 97.2), (21.2, 298.4), (-43.9, 340.8), (-41.6, 241.2), (-2.5, 261.3)]
+  ! temperature hour 0 stalled >180s, resubmitting
+  ! temperature hour 5 stalled >180s, resubmitting
+  ! temperature hour 43 stalled >180s, resubmitting
+  ! temperature hour 45 stalled >180s, resubmitting
+  t: fetched+quantized (  1099s elapsed)
+  z: fetched+quantized (  1893s elapsed)
+  u: fetched+quantized (  2278s elapsed)
+  v: fetched+quantized (  2541s elapsed)
+  q: fetched+quantized (  2757s elapsed)
+  msl: fetched+quantized (  2762s elapsed)
+  t2m: fetched+quantized (  2768s elapsed)
+  u10: fetched+quantized (  2774s elapsed)
+  v10: fetched+quantized (  2782s elapsed)
+  verify cube 2428 q h=69: max|err|=1.085e-07 max scale/2=1.102e-07 -> ok
+  window done in 2785s (2432 cubes, ~39.9h remaining)
+window 152/200: t0=1995-04-08T22 centers=[(-8.0, 306.6), (26.6, 79.3), (16.3, 330.9), (-12.6, 32.3), (27.7, 226.3), (-43.1, 122.0), (-58.7, 173.7), (26.2, 12.2), (-1.2, 71.9), (19.9, 108.3), (61.2, 343.0), (-28.6, 161.8), (-55.0, 347.5), (-46.0, 301.7), (0.2, 0.4), (-36.4, 235.3)]
+  t: fetched+quantized (   168s elapsed)
+  z: fetched+quantized (   337s elapsed)
+  u: fetched+quantized (   568s elapsed)
+  v: fetched+quantized (   805s elapsed)
+  q: fetched+quantized (  1013s elapsed)
+  msl: fetched+quantized (  1019s elapsed)
+  t2m: fetched+quantized (  1024s elapsed)
+  u10: fetched+quantized (  1030s elapsed)
+  v10: fetched+quantized (  1037s elapsed)
+  verify cube 2447 z h=48: max|err|=1.097e-01 max scale/2=1.103e-01 -> ok
+  window done in 1040s (2448 cubes, ~36.9h remaining)
+window 153/200: t0=2002-12-05T18 centers=[(55.0, 38.6), (-8.9, 103.4), (-18.9, 64.9), (55.7, 108.9), (49.6, 183.7), (-40.4, 12.8), (-19.9, 320.3), (-26.2, 281.5), (32.5, 91.7), (-31.0, 132.2), (13.4, 164.6), (7.1, 74.8), (-13.2, 246.8), (-25.5, 204.2), (5.3, 45.1), (3.6, 138.0)]
+  t: fetched+quantized (   162s elapsed)
+  z: fetched+quantized (   331s elapsed)
+  u: fetched+quantized (   634s elapsed)
+  ! v_component_of_wind hour 18 stalled >180s, resubmitting
+  ! v_component_of_wind hour 42 stalled >180s, resubmitting
+  v: fetched+quantized (  1772s elapsed)
+  ! specific_humidity hour 9 stalled >180s, resubmitting
+  ! specific_humidity hour 21 stalled >180s, resubmitting
+  ! specific_humidity hour 59 stalled >180s, resubmitting
+  ! specific_humidity hour 61 stalled >180s, resubmitting
+  q: fetched+quantized (  3334s elapsed)
+  msl: fetched+quantized (  3404s elapsed)
+  t2m: fetched+quantized (  3422s elapsed)
+  u10: fetched+quantized (  3455s elapsed)
+  v10: fetched+quantized (  3517s elapsed)
+  verify cube 2450 t2m h=13: max|err|=1.220e-04 max scale/2=1.229e-04 -> ok
+  window done in 3525s (2464 cubes, ~36.8h remaining)
+window 154/200: t0=1994-02-11T06 centers=[(6.6, 323.0), (-18.2, 9.1), (-45.5, 103.7), (-2.1, 298.6), (40.5, 325.4), (-60.2, 30.0), (31.7, 101.7), (-45.9, 303.3), (-28.9, 36.9), (16.2, 52.3), (-9.3, 85.6), (53.0, 247.8), (-16.4, 188.9), (20.6, 188.0), (8.0, 135.2), (-23.4, 267.9)]
+  ! temperature hour 81 stalled >180s, resubmitting
+  t: fetched+quantized (   868s elapsed)
+  ! geopotential hour 7 stalled >180s, resubmitting
+  z: fetched+quantized (  1931s elapsed)
+  ! u_component_of_wind hour 15 stalled >180s, resubmitting
+  u: fetched+quantized (  2569s elapsed)
+  ! v_component_of_wind hour 52 stalled >180s, resubmitting
+  v: fetched+quantized (  3488s elapsed)
+  ! specific_humidity hour 18 stalled >180s, resubmitting
+  ! specific_humidity hour 31 stalled >180s, resubmitting
+  q: fetched+quantized (  4673s elapsed)
+  msl: fetched+quantized (  4752s elapsed)
+  t2m: fetched+quantized (  4763s elapsed)
+  u10: fetched+quantized (  4864s elapsed)
+  v10: fetched+quantized (  5026s elapsed)
+  verify cube 2471 u h=95: max|err|=6.559e-04 max scale/2=6.585e-04 -> ok
+  window done in 5103s (2480 cubes, ~38.0h remaining)
+window 155/200: t0=1992-10-04T08 centers=[(-32.2, 0.8), (-23.9, 224.8), (31.3, 301.5), (13.5, 220.8), (56.8, 61.4), (19.3, 127.5), (-23.2, 27.8), (-56.6, 113.6), (-1.1, 111.2), (16.6, 42.5), (-31.0, 100.9), (17.8, 327.7), (-55.0, 287.5), (15.5, 85.2), (39.7, 148.6), (55.3, 269.8)]
+  t: fetched+quantized (   846s elapsed)
+  z: fetched+quantized (  1520s elapsed)
+  u: fetched+quantized (  2526s elapsed)
+  v: fetched+quantized (  3499s elapsed)
+  ! specific_humidity hour 3 stalled >180s, resubmitting
+  ! specific_humidity hour 20 stalled >180s, resubmitting
+  ! specific_humidity hour 49 stalled >180s, resubmitting
+  q: fetched+quantized (  4629s elapsed)
+  msl: fetched+quantized (  4687s elapsed)
+  t2m: fetched+quantized (  4729s elapsed)
+  u10: fetched+quantized (  4755s elapsed)
+  v10: fetched+quantized (  4918s elapsed)
+  verify cube 2486 v10 h=84: max|err|=2.405e-04 max scale/2=2.420e-04 -> ok
+  window done in 4923s (2496 cubes, ~38.7h remaining)
+window 156/200: t0=2000-06-09T19 centers=[(-55.8, 8.9), (29.7, 238.2), (-23.9, 189.2), (3.7, 103.2), (38.8, 34.6), (-6.5, 236.0), (12.1, 324.0), (-40.4, 315.2), (23.1, 352.7), (47.7, 170.9), (-54.9, 97.5), (-43.5, 222.7), (-23.7, 40.5), (35.6, 280.8), (8.5, 19.9), (8.7, 66.4)]
+  ! temperature hour 87 stalled >180s, resubmitting
+  t: fetched+quantized (   946s elapsed)
+  ! geopotential hour 45 stalled >180s, resubmitting
+  ! geopotential hour 53 stalled >180s, resubmitting
+  z: fetched+quantized (  1801s elapsed)
+  ! u_component_of_wind hour 2 stalled >180s, resubmitting
+  ! u_component_of_wind hour 3 stalled >180s, resubmitting
+  ! u_component_of_wind hour 6 stalled >180s, resubmitting
+  ! u_component_of_wind hour 12 stalled >180s, resubmitting
+  ! u_component_of_wind hour 23 stalled >180s, resubmitting
+  ! u_component_of_wind hour 66 stalled >180s, resubmitting
+  u: fetched+quantized (  3096s elapsed)
+  ! v_component_of_wind hour 8 stalled >180s, resubmitting
+  ! v_component_of_wind hour 34 stalled >180s, resubmitting
+  ! v_component_of_wind hour 72 stalled >180s, resubmitting
+  v: fetched+quantized (  4548s elapsed)
+  ! specific_humidity hour 6 stalled >180s, resubmitting
+  ! specific_humidity hour 43 stalled >180s, resubmitting
+  q: fetched+quantized (  5837s elapsed)
+  msl: fetched+quantized (  5904s elapsed)
+  t2m: fetched+quantized (  5930s elapsed)
+  ! 10m_u_component_of_wind hour 51 stalled >180s, resubmitting
+  u10: fetched+quantized (  6146s elapsed)
+  v10: fetched+quantized (  6206s elapsed)
+  verify cube 2502 q h=30: max|err|=1.471e-07 max scale/2=1.490e-07 -> ok
+  window done in 6302s (2512 cubes, ~40.1h remaining)
+window 157/200: t0=1990-06-13T10 centers=[(-34.1, 333.0), (28.3, 20.9), (1.3, 239.6), (58.5, 305.2), (-6.6, 2.4), (-64.6, 170.2), (-13.5, 304.7), (32.1, 274.5), (38.9, 116.9), (-38.5, 74.2), (-12.6, 110.5), (6.6, 332.2), (20.1, 190.8), (5.3, 145.9), (-22.0, 39.0), (-40.8, 204.2)]
+  ! temperature hour 24 stalled >180s, resubmitting
+  ! temperature hour 94 stalled >180s, resubmitting
+  ! temperature hour 24 stalled >180s, resubmitting
+  t: fetched+quantized (  1536s elapsed)
+  z: fetched+quantized (  2460s elapsed)
+  ! u_component_of_wind hour 0 stalled >180s, resubmitting
+  ! u_component_of_wind hour 10 stalled >180s, resubmitting
+  ! u_component_of_wind hour 40 stalled >180s, resubmitting
+  ! u_component_of_wind hour 10 stalled >180s, resubmitting
+  u: fetched+quantized (  4268s elapsed)
+  ! v_component_of_wind hour 6 stalled >180s, resubmitting
+  ! v_component_of_wind hour 41 stalled >180s, resubmitting
+  ! v_component_of_wind hour 42 stalled >180s, resubmitting
+  ! v_component_of_wind hour 52 stalled >180s, resubmitting
+  ! v_component_of_wind hour 76 stalled >180s, resubmitting
+  v: fetched+quantized (  6259s elapsed)
+  q: fetched+quantized (  7906s elapsed)
+  msl: fetched+quantized (  7982s elapsed)
+  t2m: fetched+quantized (  8087s elapsed)
+  u10: fetched+quantized (  8173s elapsed)
+  v10: fetched+quantized (  8328s elapsed)
+  ! 10m_u_component_of_wind hour 0 stalled >180s, resubmitting
+  verify cube 2524 u10 h=46: max|err|=1.562e-04 max scale/2=1.575e-04 -> ok
+  window done in 8603s (2528 cubes, ~42.8h remaining)
+window 158/200: t0=2020-06-04T03 centers=[(25.8, 213.9), (10.6, 34.2), (60.5, 217.5), (-58.7, 131.5), (-41.6, 249.8), (-43.4, 347.8), (42.3, 100.8), (21.9, 359.7), (-14.5, 291.8), (65.9, 291.2), (16.8, 262.1), (8.1, 59.4), (-63.5, 307.5), (-31.0, 151.2), (-18.3, 328.7), (62.1, 154.8)]
+  ! temperature hour 0 stalled >180s, resubmitting
+  t: fetched+quantized (  1527s elapsed)
+  ! geopotential hour 42 stalled >180s, resubmitting
+  z: fetched+quantized (  2878s elapsed)
+  u: fetched+quantized (  4757s elapsed)
+resume: 2528 cubes, next window 158
+split=train years=1979..2023 target=200 windows x 16 cubes (0.55 GiB/cube pre-compression) -> /data/ERA5-samples/train
+window 158/200: t0=2020-06-04T03 centers=[(25.8, 213.9), (10.6, 34.2), (60.5, 217.5), (-58.7, 131.5), (-41.6, 249.8), (-43.4, 347.8), (42.3, 100.8), (21.9, 359.7), (-14.5, 291.8), (65.9, 291.2), (16.8, 262.1), (8.1, 59.4), (-63.5, 307.5), (-31.0, 151.2), (-18.3, 328.7), (62.1, 154.8)]
+  ! temperature hour 15 stalled >180s, resubmitting
+  ! temperature hour 42 stalled >180s, resubmitting
+  t: fetched+quantized (   736s elapsed)
+  z: fetched+quantized (   874s elapsed)
+  u: fetched+quantized (  1079s elapsed)
+  ! v_component_of_wind hour 88 stalled >180s, resubmitting
+  v: fetched+quantized (  1717s elapsed)
+  ! specific_humidity hour 5 stalled >180s, resubmitting
+  ! specific_humidity hour 64 stalled >180s, resubmitting
+  q: fetched+quantized (  2638s elapsed)
+  msl: fetched+quantized (  2714s elapsed)
+  ! 2m_temperature hour 78 stalled >180s, resubmitting
+  t2m: fetched+quantized (  2946s elapsed)
+  u10: fetched+quantized (  3029s elapsed)
+  v10: fetched+quantized (  3088s elapsed)
+  verify cube 2540 u10 h=11: max|err|=2.956e-04 max scale/2=2.967e-04 -> ok
+  window done in 3094s (2544 cubes, ~35.2h remaining)
+window 159/200: t0=2012-11-25T17 centers=[(-18.3, 22.3), (-3.8, 191.5), (32.9, 233.8), (46.3, 107.5), (35.5, 54.2), (-25.4, 229.9), (-57.1, 137.8), (-59.2, 192.0), (-57.6, 252.5), (-7.3, 318.5), (-55.2, 14.2), (18.9, 158.9), (16.7, 276.3), (61.5, 171.1), (-9.9, 106.5), (-48.0, 93.3)]
+  ! temperature hour 10 stalled >180s, resubmitting
+  ! temperature hour 15 stalled >180s, resubmitting
+  t: fetched+quantized (   973s elapsed)
+  ! geopotential hour 57 stalled >180s, resubmitting
+  ! geopotential hour 73 stalled >180s, resubmitting
+  z: fetched+quantized (  1965s elapsed)
+  ! u_component_of_wind hour 21 stalled >180s, resubmitting
+  u: fetched+quantized (  3153s elapsed)
+  ! v_component_of_wind hour 10 stalled >180s, resubmitting
+  ! v_component_of_wind hour 56 stalled >180s, resubmitting
+  ! v_component_of_wind hour 79 stalled >180s, resubmitting
+  ! v_component_of_wind hour 84 stalled >180s, resubmitting
+  v: fetched+quantized (  4193s elapsed)
+  ! specific_humidity hour 17 stalled >180s, resubmitting
+  ! specific_humidity hour 70 stalled >180s, resubmitting
+  q: fetched+quantized (  5197s elapsed)
+  msl: fetched+quantized (  5249s elapsed)
+  t2m: fetched+quantized (  5356s elapsed)
+  u10: fetched+quantized (  5457s elapsed)
+  v10: fetched+quantized (  5568s elapsed)
+  verify cube 2553 t h=27: max|err|=1.806e-04 max scale/2=1.817e-04 -> ok
+  window done in 5675s (2560 cubes, ~48.7h remaining)
+window 160/200: t0=1997-07-19T05 centers=[(-45.5, 15.2), (-60.4, 205.8), (-28.4, 325.4), (-2.2, 29.0), (13.0, 69.9), (25.2, 278.4), (-14.2, 70.6), (30.3, 47.6), (-17.2, 196.2), (-3.3, 334.6), (-29.7, 146.6), (-22.0, 352.8), (48.6, 24.9), (19.3, 131.2), (-40.8, 235.3), (-21.9, 274.4)]
+  t: fetched+quantized (   543s elapsed)
+  ! geopotential hour 19 stalled >180s, resubmitting
+  ! geopotential hour 78 stalled >180s, resubmitting
+  z: fetched+quantized (  1123s elapsed)
+  ! u_component_of_wind hour 12 stalled >180s, resubmitting
+  u: fetched+quantized (  2135s elapsed)
+  ! v_component_of_wind hour 3 stalled >180s, resubmitting
+  ! v_component_of_wind hour 43 stalled >180s, resubmitting
+  ! v_component_of_wind hour 57 stalled >180s, resubmitting
+  ! v_component_of_wind hour 73 stalled >180s, resubmitting
+  v: fetched+quantized (  3326s elapsed)
+  ! specific_humidity hour 4 stalled >180s, resubmitting
+  ! specific_humidity hour 19 stalled >180s, resubmitting
+  ! specific_humidity hour 20 stalled >180s, resubmitting
+  ! specific_humidity hour 21 stalled >180s, resubmitting
+  ! specific_humidity hour 4 stalled >180s, resubmitting
+  q: fetched+quantized (  4643s elapsed)
+  msl: fetched+quantized (  4683s elapsed)
+  t2m: fetched+quantized (  4723s elapsed)
+  u10: fetched+quantized (  4775s elapsed)
+  v10: fetched+quantized (  4793s elapsed)
+  verify cube 2567 t h=56: max|err|=2.706e-04 max scale/2=2.724e-04 -> ok
+  window done in 4862s (2576 cubes, ~49.2h remaining)
+window 161/200: t0=1999-07-04T16 centers=[(34.8, 278.4), (-9.3, 190.6), (37.7, 78.4), (39.4, 4.7), (45.6, 158.4), (24.6, 51.1), (-21.3, 25.6), (-40.0, 327.9), (-30.0, 284.8), (-31.6, 90.2), (3.6, 120.6), (-0.7, 352.4), (-5.8, 46.9), (60.7, 231.9), (-40.6, 126.6), (52.2, 328.4)]
+  ! temperature hour 31 stalled >180s, resubmitting
+  t: fetched+quantized (   804s elapsed)
+  ! geopotential hour 11 stalled >180s, resubmitting
+  ! geopotential hour 51 stalled >180s, resubmitting
+  z: fetched+quantized (  1496s elapsed)
+  ! u_component_of_wind hour 0 stalled >180s, resubmitting
+  ! u_component_of_wind hour 21 stalled >180s, resubmitting
+  u: fetched+quantized (  2421s elapsed)
+  ! v_component_of_wind hour 2 stalled >180s, resubmitting
+  ! v_component_of_wind hour 17 stalled >180s, resubmitting
+  ! v_component_of_wind hour 50 stalled >180s, resubmitting
+  v: fetched+quantized (  3458s elapsed)
+  ! specific_humidity hour 19 stalled >180s, resubmitting
+  ! specific_humidity hour 49 stalled >180s, resubmitting
+  q: fetched+quantized (  4546s elapsed)
+  msl: fetched+quantized (  4571s elapsed)
+  t2m: fetched+quantized (  4633s elapsed)
+  u10: fetched+quantized (  4728s elapsed)
+  v10: fetched+quantized (  4746s elapsed)
+  verify cube 2591 v10 h=57: max|err|=2.397e-04 max scale/2=2.405e-04 -> ok
+  window done in 4747s (2592 cubes, ~48.5h remaining)
+window 162/200: t0=1997-08-04T16 centers=[(9.8, 195.1), (27.3, 289.2), (-36.5, 112.1), (-47.8, 35.0), (0.0, 96.2), (-44.3, 263.6), (4.6, 357.3), (40.1, 105.6), (-37.9, 157.1), (45.3, 163.2), (5.8, 61.3), (-16.6, 172.5), (-56.8, 351.1), (-3.4, 251.7), (17.7, 133.6), (35.8, 253.2)]
+  t: fetched+quantized (   461s elapsed)
+  ! geopotential hour 61 stalled >180s, resubmitting
+  z: fetched+quantized (   993s elapsed)
+  u: fetched+quantized (  1241s elapsed)
+  v: fetched+quantized (  1490s elapsed)
+  q: fetched+quantized (  1693s elapsed)
+  msl: fetched+quantized (  1699s elapsed)
+  t2m: fetched+quantized (  1704s elapsed)
+  u10: fetched+quantized (  1711s elapsed)
+  v10: fetched+quantized (  1717s elapsed)
+  verify cube 2598 u10 h=88: max|err|=1.359e-04 max scale/2=1.365e-04 -> ok
+  window done in 1719s (2608 cubes, ~41.3h remaining)
+window 163/200: t0=2018-02-09T23 centers=[(64.2, 128.7), (-36.6, 213.8), (40.1, 313.3), (-30.5, 180.3), (23.3, 343.5), (59.5, 278.2), (-12.2, 140.9), (-27.9, 245.2), (6.9, 93.5), (-49.2, 26.2), (54.6, 216.9), (48.9, 6.7), (-31.0, 55.5), (55.7, 66.2), (3.8, 247.3), (-64.5, 194.8)]
+  t: fetched+quantized (   168s elapsed)
+  z: fetched+quantized (   334s elapsed)
+  u: fetched+quantized (   564s elapsed)
+  v: fetched+quantized (   806s elapsed)
+  q: fetched+quantized (  1033s elapsed)
+  msl: fetched+quantized (  1039s elapsed)
+  t2m: fetched+quantized (  1044s elapsed)
+  u10: fetched+quantized (  1051s elapsed)
+  v10: fetched+quantized (  1057s elapsed)
+  verify cube 2622 t h=66: max|err|=1.985e-04 max scale/2=1.999e-04 -> ok
+  window done in 1060s (2624 cubes, ~35.3h remaining)
+window 164/200: t0=1993-11-10T19 centers=[(-7.4, 347.9), (-20.4, 161.0), (25.8, 175.7), (57.3, 203.2), (-63.7, 133.5), (-4.9, 124.4), (27.9, 14.8), (33.9, 88.1), (7.6, 224.6), (63.9, 116.9), (-33.9, 341.8), (0.4, 77.9), (-48.8, 81.3), (-33.5, 280.6), (24.7, 328.8), (-5.9, 306.3)]
+  t: fetched+quantized (   160s elapsed)
+  z: fetched+quantized (   334s elapsed)
+  u: fetched+quantized (   568s elapsed)
+  v: fetched+quantized (   813s elapsed)
+  q: fetched+quantized (  1041s elapsed)
+  msl: fetched+quantized (  1048s elapsed)
+  t2m: fetched+quantized (  1053s elapsed)
+  u10: fetched+quantized (  1060s elapsed)
+  v10: fetched+quantized (  1066s elapsed)
+  verify cube 2635 z h=48: max|err|=4.631e-02 max scale/2=4.659e-02 -> ok
+  window done in 1069s (2640 cubes, ~30.9h remaining)
+window 165/200: t0=2015-04-06T22 centers=[(42.4, 78.4), (62.9, 199.7), (25.2, 174.1), (38.2, 24.8), (-7.9, 307.0), (-19.9, 195.9), (-20.2, 61.7), (-5.9, 151.0), (43.1, 114.9), (-8.8, 274.8), (-40.9, 132.9), (-6.6, 346.8), (35.3, 297.6), (-27.4, 166.6), (19.1, 44.0), (40.0, 227.4)]
+  t: fetched+quantized (   159s elapsed)
+  z: fetched+quantized (   327s elapsed)
+  u: fetched+quantized (   556s elapsed)
+  v: fetched+quantized (   791s elapsed)
+  q: fetched+quantized (   995s elapsed)
+  msl: fetched+quantized (  1000s elapsed)
+  t2m: fetched+quantized (  1006s elapsed)
+  u10: fetched+quantized (  1012s elapsed)
+  v10: fetched+quantized (  1019s elapsed)
+  verify cube 2655 t2m h=27: max|err|=4.365e-04 max scale/2=4.392e-04 -> ok
+  window done in 1020s (2656 cubes, ~27.4h remaining)
+window 166/200: t0=1981-07-12T18 centers=[(9.0, 16.8), (-25.2, 295.2), (62.5, 7.7), (11.0, 252.9), (-26.2, 333.3), (56.4, 192.9), (-50.7, 115.0), (-23.1, 59.1), (-15.3, 184.8), (55.7, 125.1), (30.7, 208.8), (-44.8, 6.4), (13.1, 129.7), (3.8, 89.5), (53.5, 268.4), (-60.1, 323.7)]
+  t: fetched+quantized (   158s elapsed)
+  z: fetched+quantized (   321s elapsed)
+  u: fetched+quantized (   545s elapsed)
+  ! v_component_of_wind hour 78 stalled >180s, resubmitting
+  v: fetched+quantized (  1611s elapsed)
+  q: fetched+quantized (  2469s elapsed)
+  msl: fetched+quantized (  2509s elapsed)
+  t2m: fetched+quantized (  2538s elapsed)
+  u10: fetched+quantized (  2620s elapsed)
+  v10: fetched+quantized (  2690s elapsed)
+  verify cube 2661 msl h=13: max|err|=2.727e-02 max scale/2=2.747e-02 -> ok
+  window done in 2698s (2672 cubes, ~26.4h remaining)
+window 167/200: t0=2007-05-27T16 centers=[(-34.1, 204.9), (25.5, 266.1), (-19.4, 137.9), (10.0, 293.8), (26.9, 171.9), (-31.2, 267.3), (-10.2, 338.2), (-52.7, 240.9), (-56.3, 26.0), (63.5, 150.6), (-27.8, 4.3), (35.0, 39.9), (-45.3, 100.0), (28.1, 343.2), (1.1, 24.4), (21.8, 71.9)]
+  t: fetched+quantized (   517s elapsed)
+  ! geopotential hour 58 stalled >180s, resubmitting
+  z: fetched+quantized (  1228s elapsed)
+  u: fetched+quantized (  2141s elapsed)
+  ! v_component_of_wind hour 32 stalled >180s, resubmitting
+  v: fetched+quantized (  3050s elapsed)
+  q: fetched+quantized (  3806s elapsed)
+  msl: fetched+quantized (  3914s elapsed)
+  t2m: fetched+quantized (  3943s elapsed)
+  u10: fetched+quantized (  3996s elapsed)
+  v10: fetched+quantized (  4136s elapsed)
+  verify cube 2681 msl h=57: max|err|=2.763e-02 max scale/2=2.781e-02 -> ok
+  window done in 4137s (2688 cubes, ~26.7h remaining)
+window 168/200: t0=2023-10-26T18 centers=[(-14.4, 156.6), (10.3, 344.1), (-25.7, 306.1), (-41.0, 35.8), (9.1, 317.9), (47.2, 158.7), (-44.4, 225.1), (38.4, 122.1), (54.7, 258.1), (1.5, 120.4), (19.3, 190.9), (17.5, 67.7), (-43.4, 96.9), (0.4, 256.0), (44.6, 54.9), (-23.5, 350.0)]
+  ! temperature hour 16 stalled >180s, resubmitting
+  ! temperature hour 60 stalled >180s, resubmitting
+  ! temperature hour 66 stalled >180s, resubmitting
+  ! temperature hour 67 stalled >180s, resubmitting
+  t: fetched+quantized (   932s elapsed)
+  ! geopotential hour 58 stalled >180s, resubmitting
+  z: fetched+quantized (  1992s elapsed)
+  ! u_component_of_wind hour 49 stalled >180s, resubmitting
+  ! u_component_of_wind hour 63 stalled >180s, resubmitting
+  u: fetched+quantized (  3020s elapsed)
+  v: fetched+quantized (  4037s elapsed)
+  ! specific_humidity hour 39 stalled >180s, resubmitting
+  ! specific_humidity hour 89 stalled >180s, resubmitting
+  ! specific_humidity hour 89 stalled >180s, resubmitting
+  q: fetched+quantized (  5386s elapsed)
+  msl: fetched+quantized (  5466s elapsed)
+  t2m: fetched+quantized (  5495s elapsed)
+  u10: fetched+quantized (  5605s elapsed)
+  v10: fetched+quantized (  5651s elapsed)
+  verify cube 2700 q h=69: max|err|=6.795e-08 max scale/2=6.940e-08 -> ok
+  window done in 5665s (2704 cubes, ~28.0h remaining)
+window 169/200: t0=2001-11-16T02 centers=[(-23.9, 251.1), (44.3, 328.9), (39.6, 85.0), (24.2, 121.3), (34.8, 281.6), (-65.2, 61.6), (57.8, 18.5), (-36.9, 51.2), (-43.7, 219.1), (-34.0, 180.9), (57.6, 173.2), (-63.5, 191.2), (24.9, 241.9), (-13.3, 351.3), (13.6, 195.7), (-26.1, 282.6)]
+  ! temperature hour 13 stalled >180s, resubmitting
+  ! temperature hour 40 stalled >180s, resubmitting
+  t: fetched+quantized (   980s elapsed)
+  z: fetched+quantized (  1595s elapsed)
+  ! u_component_of_wind hour 45 stalled >180s, resubmitting
+  u: fetched+quantized (  2839s elapsed)
+  ! v_component_of_wind hour 33 stalled >180s, resubmitting
+  ! v_component_of_wind hour 52 stalled >180s, resubmitting
+  v: fetched+quantized (  3874s elapsed)
+  ! specific_humidity hour 14 stalled >180s, resubmitting
+  ! specific_humidity hour 15 stalled >180s, resubmitting
+  q: fetched+quantized (  5031s elapsed)
+  msl: fetched+quantized (  5109s elapsed)
+  t2m: fetched+quantized (  5137s elapsed)
+  u10: fetched+quantized (  5164s elapsed)
+  v10: fetched+quantized (  5194s elapsed)
+  verify cube 2719 z h=48: max|err|=6.757e-02 max scale/2=6.805e-02 -> ok
+  window done in 5319s (2720 cubes, ~28.5h remaining)
+window 170/200: t0=2000-12-13T00 centers=[(-32.1, 337.4), (1.7, 37.5), (53.6, 250.7), (22.4, 275.0), (27.8, 176.7), (62.3, 78.6), (3.7, 148.9), (24.2, 18.8), (6.3, 223.4), (-61.6, 276.4), (14.5, 248.4), (-32.9, 25.8), (-1.4, 70.0), (-64.9, 10.2), (-30.0, 266.0), (53.9, 181.9)]
+  ! temperature hour 18 stalled >180s, resubmitting
+  t: fetched+quantized (   904s elapsed)
+  z: fetched+quantized (  1580s elapsed)
+  ! u_component_of_wind hour 24 stalled >180s, resubmitting
+  u: fetched+quantized (  2993s elapsed)
+  ! v_component_of_wind hour 13 stalled >180s, resubmitting
+  ! v_component_of_wind hour 46 stalled >180s, resubmitting
+  ! v_component_of_wind hour 49 stalled >180s, resubmitting
+  ! v_component_of_wind hour 69 stalled >180s, resubmitting
+  v: fetched+quantized (  4629s elapsed)
+  ! specific_humidity hour 43 stalled >180s, resubmitting
+  ! specific_humidity hour 62 stalled >180s, resubmitting
+  q: fetched+quantized (  5988s elapsed)
+  msl: fetched+quantized (  6047s elapsed)
+  t2m: fetched+quantized (  6054s elapsed)
+  u10: fetched+quantized (  6061s elapsed)
+  v10: fetched+quantized (  6070s elapsed)
+  verify cube 2722 t2m h=13: max|err|=4.583e-04 max scale/2=4.623e-04 -> ok
+  window done in 6072s (2736 cubes, ~29.2h remaining)
+window 171/200: t0=1997-04-25T04 centers=[(-19.3, 25.5), (31.8, 52.6), (-18.4, 124.7), (-2.4, 68.5), (-47.6, 139.3), (-61.3, 292.4), (-19.3, 201.4), (33.0, 113.2), (11.0, 251.6), (39.7, 181.8), (60.2, 30.5), (-22.4, 160.2), (-62.4, 203.0), (12.0, 205.7), (35.0, 307.6), (26.8, 343.3)]
+  ! temperature hour 51 stalled >180s, resubmitting
+  t: fetched+quantized (  1237s elapsed)
+  ! geopotential hour 27 stalled >180s, resubmitting
+  z: fetched+quantized (  2599s elapsed)
+  u: fetched+quantized (  3450s elapsed)
+  v: fetched+quantized (  3942s elapsed)
+  q: fetched+quantized (  4285s elapsed)
+  msl: fetched+quantized (  4298s elapsed)
+  t2m: fetched+quantized (  4304s elapsed)
+  u10: fetched+quantized (  4310s elapsed)
+  v10: fetched+quantized (  4318s elapsed)
+  verify cube 2743 u h=95: max|err|=6.733e-04 max scale/2=6.761e-04 -> ok
+  window done in 4321s (2752 cubes, ~28.6h remaining)
+window 172/200: t0=2014-03-09T02 centers=[(20.2, 351.6), (-27.9, 70.6), (13.6, 49.1), (-18.9, 101.0), (-11.2, 39.0), (-47.5, 350.8), (46.3, 6.6), (-64.8, 87.5), (46.3, 200.5), (-21.6, 283.5), (1.5, 301.4), (18.3, 86.4), (-6.2, 123.3), (1.1, 263.8), (23.1, 117.5), (0.4, 156.0)]
+  t: fetched+quantized (   309s elapsed)
+  z: fetched+quantized (   578s elapsed)
+  u: fetched+quantized (   932s elapsed)
+  ! v_component_of_wind hour 66 stalled >180s, resubmitting
+  v: fetched+quantized (  1963s elapsed)
+  ! specific_humidity hour 13 stalled >180s, resubmitting
+  ! specific_humidity hour 14 stalled >180s, resubmitting
+  ! specific_humidity hour 30 stalled >180s, resubmitting
+  q: fetched+quantized (  3606s elapsed)
+  msl: fetched+quantized (  3681s elapsed)
+  t2m: fetched+quantized (  3731s elapsed)
+  u10: fetched+quantized (  3762s elapsed)
+  v10: fetched+quantized (  3900s elapsed)
+  verify cube 2758 v10 h=84: max|err|=2.059e-04 max scale/2=2.064e-04 -> ok
+  window done in 3916s (2768 cubes, ~27.7h remaining)
+window 173/200: t0=1984-01-14T20 centers=[(-33.4, 41.4), (-0.1, 265.1), (-16.3, 243.8), (-3.6, 75.8), (0.3, 180.7), (-30.9, 315.5), (1.7, 128.4), (-55.3, 266.0), (0.7, 46.5), (-39.2, 352.5), (-20.0, 161.7), (-65.4, 182.2), (52.3, 295.2), (-45.0, 212.9), (1.0, 11.0), (9.3, 99.0)]
+  ! temperature hour 7 stalled >180s, resubmitting
+  ! temperature hour 55 stalled >180s, resubmitting
+  ! temperature hour 56 stalled >180s, resubmitting
+  t: fetched+quantized (  1158s elapsed)
+  ! geopotential hour 45 stalled >180s, resubmitting
+  ! geopotential hour 53 stalled >180s, resubmitting
+  z: fetched+quantized (  2304s elapsed)
+  ! u_component_of_wind hour 28 stalled >180s, resubmitting
+  ! u_component_of_wind hour 69 stalled >180s, resubmitting
+  u: fetched+quantized (  4032s elapsed)
+  v: fetched+quantized (  5489s elapsed)
+  q: fetched+quantized (  6762s elapsed)
+  ! mean_sea_level_pressure hour 64 stalled >180s, resubmitting
+  msl: fetched+quantized (  7018s elapsed)
+  t2m: fetched+quantized (  7060s elapsed)
+  u10: fetched+quantized (  7090s elapsed)
+  v10: fetched+quantized (  7214s elapsed)
+  verify cube 2774 q h=30: max|err|=1.546e-07 max scale/2=1.568e-07 -> ok
+  window done in 7248s (2784 cubes, ~28.3h remaining)
+window 174/200: t0=2009-09-02T20 centers=[(16.2, 97.6), (-7.6, 274.9), (-27.9, 139.4), (-13.0, 229.4), (57.5, 9.9), (43.4, 57.1), (-46.5, 163.0), (-60.1, 80.0), (48.3, 157.4), (-33.0, 101.7), (50.7, 215.1), (-65.1, 268.2), (26.7, 187.8), (-28.2, 353.2), (-29.8, 52.4), (21.8, 154.3)]
+  ! temperature hour 55 stalled >180s, resubmitting
+  t: fetched+quantized (  1447s elapsed)
+  ! geopotential hour 31 stalled >180s, resubmitting
+  z: fetched+quantized (  2944s elapsed)
+  ! u_component_of_wind hour 94 stalled >180s, resubmitting
+  ! u_component_of_wind hour 94 stalled >180s, resubmitting
+  u: fetched+quantized (  4984s elapsed)
+resume: 2784 cubes, next window 174
+split=train years=1979..2023 target=200 windows x 16 cubes (0.55 GiB/cube pre-compression) -> /data/ERA5-samples/train
+window 174/200: t0=2009-09-02T20 centers=[(16.2, 97.6), (-7.6, 274.9), (-27.9, 139.4), (-13.0, 229.4), (57.5, 9.9), (43.4, 57.1), (-46.5, 163.0), (-60.1, 80.0), (48.3, 157.4), (-33.0, 101.7), (50.7, 215.1), (-65.1, 268.2), (26.7, 187.8), (-28.2, 353.2), (-29.8, 52.4), (21.8, 154.3)]
+  ! temperature hour 0 stalled >180s, resubmitting
+  ! temperature hour 3 stalled >180s, resubmitting
+  ! temperature hour 8 stalled >180s, resubmitting
+  ! temperature hour 28 stalled >180s, resubmitting
+  ! temperature hour 69 stalled >180s, resubmitting
+  ! temperature hour 77 stalled >180s, resubmitting
+  t: fetched+quantized (   954s elapsed)
+  ! geopotential hour 11 stalled >180s, resubmitting
+  z: fetched+quantized (  1775s elapsed)
+  ! u_component_of_wind hour 13 stalled >180s, resubmitting
+  ! u_component_of_wind hour 15 stalled >180s, resubmitting
+  ! u_component_of_wind hour 61 stalled >180s, resubmitting
+  ! u_component_of_wind hour 62 stalled >180s, resubmitting
+  ! u_component_of_wind hour 65 stalled >180s, resubmitting
+  ! u_component_of_wind hour 68 stalled >180s, resubmitting
+  u: fetched+quantized (  2524s elapsed)
+  ! v_component_of_wind hour 0 stalled >180s, resubmitting
+  ! v_component_of_wind hour 8 stalled >180s, resubmitting
+  ! v_component_of_wind hour 9 stalled >180s, resubmitting
+  ! v_component_of_wind hour 14 stalled >180s, resubmitting
+  ! v_component_of_wind hour 21 stalled >180s, resubmitting
+  ! v_component_of_wind hour 45 stalled >180s, resubmitting
+  ! v_component_of_wind hour 49 stalled >180s, resubmitting
+  ! v_component_of_wind hour 52 stalled >180s, resubmitting
+  ! v_component_of_wind hour 76 stalled >180s, resubmitting
+  v: fetched+quantized (  3872s elapsed)
+  ! specific_humidity hour 0 stalled >180s, resubmitting
+  ! specific_humidity hour 12 stalled >180s, resubmitting
+  ! specific_humidity hour 53 stalled >180s, resubmitting
+  ! specific_humidity hour 57 stalled >180s, resubmitting
+  q: fetched+quantized (  4722s elapsed)
+  ! mean_sea_level_pressure hour 17 stalled >180s, resubmitting
+  msl: fetched+quantized (  4990s elapsed)
+  t2m: fetched+quantized (  5022s elapsed)
+  u10: fetched+quantized (  5052s elapsed)
+  v10: fetched+quantized (  5064s elapsed)
+  verify cube 2796 u10 h=11: max|err|=2.079e-04 max scale/2=2.089e-04 -> ok
+  window done in 5065s (2800 cubes, ~35.2h remaining)
+window 175/200: t0=1980-05-29T05 centers=[(-52.1, 168.3), (15.0, 247.1), (-20.0, 126.4), (24.8, 103.9), (27.7, 190.7), (-9.2, 5.2), (43.1, 62.7), (-57.7, 298.8), (-24.8, 242.5), (-34.8, 281.2), (-11.2, 316.0), (-22.9, 56.4), (39.5, 274.9), (23.5, 139.6), (-4.7, 88.8), (17.3, 296.4)]
+  ! temperature hour 5 stalled >180s, resubmitting
+  ! temperature hour 7 stalled >180s, resubmitting
+  ! temperature hour 13 stalled >180s, resubmitting
+  ! temperature hour 14 stalled >180s, resubmitting
+  ! temperature hour 66 stalled >180s, resubmitting
+  t: fetched+quantized (   982s elapsed)
+  ! geopotential hour 64 stalled >180s, resubmitting
+  z: fetched+quantized (  1776s elapsed)
+  ! u_component_of_wind hour 21 stalled >180s, resubmitting
+  ! u_component_of_wind hour 63 stalled >180s, resubmitting
+  ! u_component_of_wind hour 94 stalled >180s, resubmitting
+  u: fetched+quantized (  2805s elapsed)
+  ! v_component_of_wind hour 6 stalled >180s, resubmitting
+  ! v_component_of_wind hour 49 stalled >180s, resubmitting
+  v: fetched+quantized (  3885s elapsed)
+  ! specific_humidity hour 4 stalled >180s, resubmitting
+  ! specific_humidity hour 47 stalled >180s, resubmitting
+  ! specific_humidity hour 60 stalled >180s, resubmitting
+  q: fetched+quantized (  4619s elapsed)
+  msl: fetched+quantized (  4654s elapsed)
+  t2m: fetched+quantized (  4698s elapsed)
+  u10: fetched+quantized (  4735s elapsed)
+  v10: fetched+quantized (  4896s elapsed)
+  verify cube 2809 t h=27: max|err|=4.680e-04 max scale/2=4.711e-04 -> ok
+  window done in 4939s (2816 cubes, ~33.3h remaining)
+window 176/200: t0=1999-06-13T03 centers=[(-37.6, 355.8), (35.5, 355.4), (-58.8, 119.6), (-32.2, 189.8), (-46.8, 49.7), (0.5, 161.6), (3.1, 311.7), (31.4, 84.5), (-26.6, 326.2), (-34.6, 253.3), (30.5, 132.7), (-10.4, 53.4), (32.3, 222.2), (15.5, 54.2), (-7.6, 216.0), (5.4, 30.7)]
+  ! temperature hour 9 stalled >180s, resubmitting
+  ! temperature hour 16 stalled >180s, resubmitting
+  ! temperature hour 18 stalled >180s, resubmitting
+  ! temperature hour 82 stalled >180s, resubmitting
+  t: fetched+quantized (   963s elapsed)
+  ! geopotential hour 9 stalled >180s, resubmitting
+  ! geopotential hour 45 stalled >180s, resubmitting
+  ! geopotential hour 51 stalled >180s, resubmitting
+  ! geopotential hour 55 stalled >180s, resubmitting
+  ! geopotential hour 57 stalled >180s, resubmitting
+  ! geopotential hour 60 stalled >180s, resubmitting
+  z: fetched+quantized (  1949s elapsed)
+  ! u_component_of_wind hour 14 stalled >180s, resubmitting
+  ! u_component_of_wind hour 83 stalled >180s, resubmitting
+  u: fetched+quantized (  3134s elapsed)
+  ! v_component_of_wind hour 35 stalled >180s, resubmitting
+  ! v_component_of_wind hour 44 stalled >180s, resubmitting
+  v: fetched+quantized (  4250s elapsed)
+  ! specific_humidity hour 6 stalled >180s, resubmitting
+  ! specific_humidity hour 17 stalled >180s, resubmitting
+  ! specific_humidity hour 60 stalled >180s, resubmitting
+  q: fetched+quantized (  5262s elapsed)
+  msl: fetched+quantized (  5290s elapsed)
+  t2m: fetched+quantized (  5312s elapsed)
+  u10: fetched+quantized (  5326s elapsed)
+  v10: fetched+quantized (  5334s elapsed)
+  verify cube 2823 t h=56: max|err|=2.559e-04 max scale/2=2.574e-04 -> ok
+  window done in 5412s (2832 cubes, ~32.8h remaining)
+window 177/200: t0=1987-04-24T17 centers=[(-42.2, 230.3), (-7.1, 37.4), (62.7, 330.5), (-56.7, 184.0), (14.1, 126.4), (-4.3, 80.3), (7.9, 12.2), (33.7, 179.5), (24.7, 88.4), (52.2, 128.3), (64.5, 65.1), (-39.1, 113.1), (36.9, 307.0), (-3.1, 231.7), (6.0, 341.8), (21.4, 57.0)]
+  ! temperature hour 13 stalled >180s, resubmitting
+  t: fetched+quantized (   792s elapsed)
+  ! geopotential hour 0 stalled >180s, resubmitting
+  ! geopotential hour 13 stalled >180s, resubmitting
+  z: fetched+quantized (  1782s elapsed)
+  ! u_component_of_wind hour 7 stalled >180s, resubmitting
+  u: fetched+quantized (  2972s elapsed)
+  ! v_component_of_wind hour 31 stalled >180s, resubmitting
+  ! v_component_of_wind hour 63 stalled >180s, resubmitting
+  ! v_component_of_wind hour 85 stalled >180s, resubmitting
+  v: fetched+quantized (  4214s elapsed)
+  ! specific_humidity hour 0 stalled >180s, resubmitting
+  ! specific_humidity hour 54 stalled >180s, resubmitting
+  ! specific_humidity hour 60 stalled >180s, resubmitting
+  q: fetched+quantized (  5377s elapsed)
+  msl: fetched+quantized (  5455s elapsed)
+  t2m: fetched+quantized (  5488s elapsed)
+  u10: fetched+quantized (  5529s elapsed)
+  v10: fetched+quantized (  5559s elapsed)
+  verify cube 2847 v10 h=57: max|err|=1.777e-04 max scale/2=1.787e-04 -> ok
+  window done in 5572s (2848 cubes, ~32.1h remaining)
+window 178/200: t0=2001-08-07T20 centers=[(59.0, 169.0), (17.6, 106.3), (49.3, 242.3), (-52.0, 294.9), (-25.2, 35.7), (-0.5, 124.2), (40.8, 279.2), (-26.0, 153.0), (-16.7, 4.1), (-2.2, 64.5), (-2.6, 204.4), (7.8, 267.3), (-19.3, 243.8), (39.6, 62.0), (24.6, 147.5), (-28.3, 91.6)]
+  ! temperature hour 63 stalled >180s, resubmitting
+  t: fetched+quantized (   992s elapsed)
+  ! geopotential hour 76 stalled >180s, resubmitting
+  z: fetched+quantized (  1965s elapsed)
+  u: fetched+quantized (  2798s elapsed)
+  v: fetched+quantized (  3232s elapsed)
+  ! specific_humidity hour 77 stalled >180s, resubmitting
+  ! specific_humidity hour 78 stalled >180s, resubmitting
+  q: fetched+quantized (  3962s elapsed)
+  msl: fetched+quantized (  3968s elapsed)
+  t2m: fetched+quantized (  3973s elapsed)
+  u10: fetched+quantized (  3980s elapsed)
+  v10: fetched+quantized (  3986s elapsed)
+  verify cube 2854 u10 h=88: max|err|=2.198e-04 max scale/2=2.206e-04 -> ok
+  window done in 3987s (2864 cubes, ~29.1h remaining)
+window 179/200: t0=2010-10-28T01 centers=[(-16.9, 172.4), (64.4, 268.7), (-27.6, 241.1), (10.4, 219.9), (21.1, 176.9), (-9.2, 306.1), (-32.7, 340.9), (-49.5, 202.6), (31.8, 203.8), (29.7, 100.0), (49.7, 339.1), (-24.5, 103.7), (-64.5, 269.8), (-58.2, 5.5), (57.5, 131.1), (-47.9, 59.7)]
+  t: fetched+quantized (   155s elapsed)
+  z: fetched+quantized (   317s elapsed)
+  u: fetched+quantized (   540s elapsed)
+  v: fetched+quantized (   768s elapsed)
+  q: fetched+quantized (   963s elapsed)
+  msl: fetched+quantized (   968s elapsed)
+  t2m: fetched+quantized (   974s elapsed)
+  u10: fetched+quantized (   981s elapsed)
+  v10: fetched+quantized (   987s elapsed)
+  verify cube 2878 t h=66: max|err|=3.474e-04 max scale/2=3.497e-04 -> ok
+  window done in 990s (2880 cubes, ~24.0h remaining)
+window 180/200: t0=1992-06-27T03 centers=[(-23.6, 56.0), (23.3, 6.3), (48.7, 229.2), (30.2, 150.3), (4.0, 150.3), (-65.6, 185.4), (-63.5, 315.6), (56.5, 54.0), (37.5, 86.0), (14.1, 202.5), (60.3, 301.6), (-11.8, 31.5), (29.8, 55.3), (-37.6, 196.1), (-13.9, 112.2), (34.6, 339.3)]
+  t: fetched+quantized (   148s elapsed)
+  ! geopotential hour 31 stalled >180s, resubmitting
+  ! geopotential hour 41 stalled >180s, resubmitting
+  z: fetched+quantized (   965s elapsed)
+  u: fetched+quantized (  2153s elapsed)
+  ! v_component_of_wind hour 10 stalled >180s, resubmitting
+  ! v_component_of_wind hour 52 stalled >180s, resubmitting
+  ! v_component_of_wind hour 55 stalled >180s, resubmitting
+  v: fetched+quantized (  3785s elapsed)
+  ! specific_humidity hour 73 stalled >180s, resubmitting
+  q: fetched+quantized (  5143s elapsed)
+  msl: fetched+quantized (  5231s elapsed)
+  t2m: fetched+quantized (  5278s elapsed)
+  u10: fetched+quantized (  5294s elapsed)
+  v10: fetched+quantized (  5436s elapsed)
+  verify cube 2891 z h=48: max|err|=6.873e-02 max scale/2=6.922e-02 -> ok
+  window done in 5465s (2896 cubes, ~23.7h remaining)
+window 181/200: t0=2003-02-23T05 centers=[(19.4, 160.8), (15.3, 261.1), (14.2, 47.4), (-11.9, 5.9), (2.5, 221.9), (13.4, 87.5), (-64.3, 299.9), (46.6, 34.9), (-41.1, 47.6), (16.6, 300.2), (52.9, 222.8), (60.4, 132.8), (-21.3, 314.2), (-27.7, 122.9), (27.1, 7.4), (44.2, 88.9)]
+  ! temperature hour 77 stalled >180s, resubmitting
+  t: fetched+quantized (  1323s elapsed)
+  z: fetched+quantized (  1688s elapsed)
+  u: fetched+quantized (  1937s elapsed)
+  v: fetched+quantized (  2180s elapsed)
+  ! specific_humidity hour 72 stalled >180s, resubmitting
+  ! specific_humidity hour 90 stalled >180s, resubmitting
+  q: fetched+quantized (  3512s elapsed)
+  ! mean_sea_level_pressure hour 51 stalled >180s, resubmitting
+  msl: fetched+quantized (  3749s elapsed)
+  t2m: fetched+quantized (  3833s elapsed)
+  u10: fetched+quantized (  3858s elapsed)
+  v10: fetched+quantized (  3867s elapsed)
+  verify cube 2911 t2m h=27: max|err|=4.575e-04 max scale/2=4.604e-04 -> ok
+  window done in 3868s (2912 cubes, ~22.1h remaining)
+window 182/200: t0=1979-10-26T05 centers=[(21.0, 97.3), (-48.3, 336.7), (23.8, 306.6), (-31.0, 108.4), (-40.6, 196.6), (-15.8, 287.6), (-4.1, 201.2), (-5.6, 50.0), (-5.4, 232.1), (61.1, 273.0), (-8.1, 11.3), (51.7, 64.6), (-1.8, 325.4), (-59.0, 269.7), (42.5, 214.9), (57.3, 166.7)]
+  t: fetched+quantized (  1157s elapsed)
+  z: fetched+quantized (  1345s elapsed)
+  u: fetched+quantized (  1596s elapsed)
+  v: fetched+quantized (  1874s elapsed)
+  q: fetched+quantized (  2159s elapsed)
+  msl: fetched+quantized (  2166s elapsed)
+  t2m: fetched+quantized (  2173s elapsed)
+  u10: fetched+quantized (  2181s elapsed)
+  v10: fetched+quantized (  2189s elapsed)
+  verify cube 2917 msl h=13: max|err|=2.623e-02 max scale/2=2.642e-02 -> ok
+  window done in 2190s (2928 cubes, ~19.7h remaining)
+window 183/200: t0=2011-11-14T00 centers=[(29.9, 82.4), (0.1, 132.5), (9.3, 271.5), (-27.6, 253.5), (-32.1, 26.8), (-62.9, 81.8), (55.3, 250.4), (2.2, 335.9), (-49.8, 121.4), (4.9, 238.6), (0.5, 58.7), (-23.1, 102.1), (4.1, 169.2), (30.2, 243.1), (-24.0, 307.2), (-37.4, 349.8)]
+  t: fetched+quantized (   214s elapsed)
+  z: fetched+quantized (   407s elapsed)
+  u: fetched+quantized (   657s elapsed)
+  v: fetched+quantized (   904s elapsed)
+  q: fetched+quantized (  1190s elapsed)
+  msl: fetched+quantized (  1197s elapsed)
+  t2m: fetched+quantized (  1204s elapsed)
+  u10: fetched+quantized (  1212s elapsed)
+  v10: fetched+quantized (  1220s elapsed)
+  verify cube 2937 msl h=57: max|err|=1.563e-02 max scale/2=1.586e-02 -> ok
+  window done in 1221s (2944 cubes, ~17.2h remaining)
+window 184/200: t0=2020-02-19T07 centers=[(14.1, 215.5), (-36.3, 163.7), (58.5, 28.8), (43.9, 287.2), (-62.3, 138.0), (56.9, 243.5), (35.5, 106.4), (19.3, 154.2), (0.5, 250.8), (-10.1, 64.7), (-42.9, 40.0), (-12.1, 187.9), (-44.2, 303.0), (16.5, 50.6), (-35.4, 83.9), (36.6, 193.2)]
+  t: fetched+quantized (   205s elapsed)
+  z: fetched+quantized (   466s elapsed)
+  u: fetched+quantized (   743s elapsed)
+  v: fetched+quantized (  1008s elapsed)
+  q: fetched+quantized (  1251s elapsed)
+  msl: fetched+quantized (  1258s elapsed)
+  t2m: fetched+quantized (  1265s elapsed)
+  u10: fetched+quantized (  1273s elapsed)
+  v10: fetched+quantized (  1281s elapsed)
+  verify cube 2956 q h=69: max|err|=1.338e-07 max scale/2=1.357e-07 -> ok
+  window done in 1284s (2960 cubes, ~15.1h remaining)
+window 185/200: t0=2013-08-29T10 centers=[(-16.8, 2.8), (-42.8, 21.7), (22.2, 290.8), (52.6, 255.0), (0.5, 130.6), (-27.6, 309.9), (-2.4, 68.0), (-2.5, 252.0), (49.4, 85.9), (-29.2, 188.4), (-51.4, 242.8), (-48.9, 80.6), (7.7, 314.0), (5.6, 95.8), (43.1, 310.2), (-59.7, 332.8)]
+  t: fetched+quantized (   203s elapsed)
+  z: fetched+quantized (   459s elapsed)
+  u: fetched+quantized (   749s elapsed)
+  v: fetched+quantized (   983s elapsed)
+  q: fetched+quantized (  1183s elapsed)
+  msl: fetched+quantized (  1190s elapsed)
+  t2m: fetched+quantized (  1196s elapsed)
+  u10: fetched+quantized (  1204s elapsed)
+  v10: fetched+quantized (  1212s elapsed)
+  verify cube 2975 z h=48: max|err|=4.120e-01 max scale/2=4.146e-01 -> ok
+  window done in 1215s (2976 cubes, ~13.4h remaining)
+window 186/200: t0=2006-02-10T05 centers=[(50.4, 326.9), (28.3, 62.9), (-42.9, 225.5), (-4.2, 159.2), (25.8, 107.8), (-26.6, 348.2), (-25.8, 262.8), (53.2, 42.7), (-7.1, 43.6), (-14.4, 84.1), (-45.9, 310.5), (-24.2, 195.1), (58.0, 220.2), (38.1, 158.1), (1.0, 296.4), (-19.1, 313.3)]
+  t: fetched+quantized (   151s elapsed)
+  z: fetched+quantized (   308s elapsed)
+  u: fetched+quantized (   531s elapsed)
+  ! v_component_of_wind hour 70 stalled >180s, resubmitting
+  ! v_component_of_wind hour 72 stalled >180s, resubmitting
+  ! v_component_of_wind hour 80 stalled >180s, resubmitting
+  v: fetched+quantized (  1638s elapsed)
+  q: fetched+quantized (  3126s elapsed)
+  msl: fetched+quantized (  3176s elapsed)
+  t2m: fetched+quantized (  3245s elapsed)
+  u10: fetched+quantized (  3254s elapsed)
+  v10: fetched+quantized (  3265s elapsed)
+  verify cube 2978 t2m h=13: max|err|=1.928e-04 max scale/2=1.940e-04 -> ok
+  window done in 3266s (2992 cubes, ~12.4h remaining)
+window 187/200: t0=2000-07-30T20 centers=[(53.3, 272.0), (4.6, 340.1), (39.0, 141.6), (-59.7, 90.1), (41.6, 83.2), (-25.9, 283.6), (-7.9, 220.4), (-45.0, 190.0), (-21.0, 139.7), (-61.8, 156.1), (49.8, 48.9), (-53.6, 243.7), (-0.5, 247.6), (34.5, 346.2), (-49.9, 312.2), (-1.0, 35.9)]
+  t: fetched+quantized (  1231s elapsed)
+  z: fetched+quantized (  2462s elapsed)
+  ! u_component_of_wind hour 67 stalled >180s, resubmitting
+  u: fetched+quantized (  4514s elapsed)
+  v: fetched+quantized (  6466s elapsed)
+  ! specific_humidity hour 90 stalled >180s, resubmitting
+  q: fetched+quantized (  8212s elapsed)
+  msl: fetched+quantized (  8376s elapsed)
+  t2m: fetched+quantized (  8519s elapsed)
+  u10: fetched+quantized (  8530s elapsed)
+  v10: fetched+quantized (  8539s elapsed)
+  verify cube 2999 u h=95: max|err|=9.310e-04 max scale/2=9.369e-04 -> ok
+  window done in 8543s (3008 cubes, ~12.6h remaining)
+window 188/200: t0=1988-01-04T11 centers=[(-31.5, 159.6), (-45.9, 234.6), (57.0, 51.4), (26.0, 286.0), (-16.8, 124.1), (59.7, 174.4), (5.3, 314.8), (-14.5, 191.7), (-32.5, 357.4), (20.9, 133.3), (-11.7, 77.3), (20.8, 241.9), (-20.3, 330.7), (23.4, 1.4), (-10.2, 259.6), (-62.9, 337.7)]
+  ! temperature hour 76 stalled >180s, resubmitting
+  t: fetched+quantized (  1370s elapsed)
+  z: fetched+quantized (  2611s elapsed)
+resume: 3008 cubes, next window 188
+split=train years=1979..2023 target=200 windows x 16 cubes (0.55 GiB/cube pre-compression) -> /data/ERA5-samples/train
+window 188/200: t0=1988-01-04T11 centers=[(-31.5, 159.6), (-45.9, 234.6), (57.0, 51.4), (26.0, 286.0), (-16.8, 124.1), (59.7, 174.4), (5.3, 314.8), (-14.5, 191.7), (-32.5, 357.4), (20.9, 133.3), (-11.7, 77.3), (20.8, 241.9), (-20.3, 330.7), (23.4, 1.4), (-10.2, 259.6), (-62.9, 337.7)]
+  ! temperature hour 10 stalled >180s, resubmitting
+  ! temperature hour 60 stalled >180s, resubmitting
+  t: fetched+quantized (   812s elapsed)
+  ! geopotential hour 9 stalled >180s, resubmitting
+  ! geopotential hour 18 stalled >180s, resubmitting
+  z: fetched+quantized (  1528s elapsed)
+  u: fetched+quantized (  1726s elapsed)
+  v: fetched+quantized (  1932s elapsed)
+  q: fetched+quantized (  2107s elapsed)
+  msl: fetched+quantized (  2113s elapsed)
+  t2m: fetched+quantized (  2118s elapsed)
+  u10: fetched+quantized (  2125s elapsed)
+  v10: fetched+quantized (  2132s elapsed)
+  verify cube 3020 u10 h=11: max|err|=1.886e-04 max scale/2=1.895e-04 -> ok
+  window done in 2133s (3024 cubes, ~6.5h remaining)
+window 189/200: t0=2005-05-30T15 centers=[(-41.1, 163.3), (-39.4, 14.5), (45.2, 279.5), (-57.9, 118.7), (-23.9, 285.7), (24.8, 48.5), (-45.3, 325.4), (-15.4, 190.2), (34.7, 189.5), (59.0, 164.8), (1.5, 160.4), (49.9, 28.9), (4.9, 4.6), (-29.6, 49.8), (-27.5, 253.5), (3.4, 278.8)]
+  t: fetched+quantized (   144s elapsed)
+  z: fetched+quantized (   281s elapsed)
+  u: fetched+quantized (   480s elapsed)
+  v: fetched+quantized (   686s elapsed)
+  q: fetched+quantized (   862s elapsed)
+  msl: fetched+quantized (   867s elapsed)
+  t2m: fetched+quantized (   873s elapsed)
+  u10: fetched+quantized (   879s elapsed)
+  v10: fetched+quantized (   886s elapsed)
+  verify cube 3033 t h=27: max|err|=2.064e-04 max scale/2=2.076e-04 -> ok
+  window done in 889s (3040 cubes, ~4.2h remaining)
+window 190/200: t0=2011-02-24T19 centers=[(37.7, 266.1), (-1.0, 169.8), (-19.1, 259.8), (-14.3, 79.8), (9.8, 305.3), (21.1, 196.7), (-19.2, 200.5), (-31.0, 13.0), (-4.0, 336.7), (-30.2, 43.0), (56.3, 300.4), (-0.8, 35.5), (-0.6, 218.7), (51.9, 209.3), (40.6, 45.4), (28.8, 108.1)]
+  t: fetched+quantized (   147s elapsed)
+  z: fetched+quantized (   289s elapsed)
+  ! u_component_of_wind hour 85 stalled >180s, resubmitting
+  u: fetched+quantized (  1152s elapsed)
+  ! v_component_of_wind hour 18 stalled >180s, resubmitting
+  ! v_component_of_wind hour 23 stalled >180s, resubmitting
+  ! v_component_of_wind hour 48 stalled >180s, resubmitting
+  ! v_component_of_wind hour 50 stalled >180s, resubmitting
+  ! v_component_of_wind hour 64 stalled >180s, resubmitting
+  ! v_component_of_wind hour 69 stalled >180s, resubmitting
+  v: fetched+quantized (  2331s elapsed)
+  q: fetched+quantized (  2970s elapsed)
+  msl: fetched+quantized (  2995s elapsed)
+  t2m: fetched+quantized (  3003s elapsed)
+  u10: fetched+quantized (  3067s elapsed)
+  v10: fetched+quantized (  3168s elapsed)
+  verify cube 3047 t h=56: max|err|=3.070e-04 max scale/2=3.090e-04 -> ok
+  window done in 3236s (3056 cubes, ~5.2h remaining)
+window 191/200: t0=1995-01-06T23 centers=[(-40.9, 275.8), (34.1, 26.8), (38.3, 235.2), (16.4, 166.0), (-60.2, 319.7), (-13.5, 336.2), (-36.6, 109.1), (25.0, 281.2), (47.7, 130.3), (10.8, 108.6), (-47.5, 181.0), (-18.6, 252.2), (-55.0, 36.0), (57.5, 44.2), (37.2, 72.3), (48.5, 268.1)]
+  ! temperature hour 21 stalled >180s, resubmitting
+  t: fetched+quantized (   725s elapsed)
+  ! geopotential hour 22 stalled >180s, resubmitting
+  ! geopotential hour 90 stalled >180s, resubmitting
+  z: fetched+quantized (  1685s elapsed)
+  ! u_component_of_wind hour 20 stalled >180s, resubmitting
+  ! u_component_of_wind hour 62 stalled >180s, resubmitting
+  ! u_component_of_wind hour 75 stalled >180s, resubmitting
+  u: fetched+quantized (  2648s elapsed)
+  ! v_component_of_wind hour 38 stalled >180s, resubmitting
+  v: fetched+quantized (  3641s elapsed)
+  ! specific_humidity hour 62 stalled >180s, resubmitting
+  q: fetched+quantized (  4365s elapsed)
+  ! mean_sea_level_pressure hour 27 stalled >180s, resubmitting
+  msl: fetched+quantized (  4604s elapsed)
+  t2m: fetched+quantized (  4670s elapsed)
+  u10: fetched+quantized (  4833s elapsed)
+  v10: fetched+quantized (  4844s elapsed)
+  verify cube 3071 v10 h=57: max|err|=3.177e-04 max scale/2=3.199e-04 -> ok
+  window done in 4846s (3072 cubes, ~6.2h remaining)
+window 192/200: t0=1994-08-02T20 centers=[(-19.7, 133.2), (-35.3, 165.4), (-50.3, 17.3), (4.1, 226.4), (18.2, 74.5), (-7.4, 296.9), (52.1, 320.9), (-43.1, 336.5), (51.6, 82.1), (12.9, 147.5), (-28.0, 277.2), (-14.5, 253.7), (-40.5, 214.7), (-26.0, 95.1), (47.1, 211.7), (22.9, 356.2)]
+  ! temperature hour 2 stalled >180s, resubmitting
+  ! temperature hour 4 stalled >180s, resubmitting
+  ! temperature hour 67 stalled >180s, resubmitting
+  t: fetched+quantized (   863s elapsed)
+  z: fetched+quantized (  1052s elapsed)
+  u: fetched+quantized (  1276s elapsed)
+  v: fetched+quantized (  1501s elapsed)
+  q: fetched+quantized (  1685s elapsed)
+  msl: fetched+quantized (  1690s elapsed)
+  t2m: fetched+quantized (  1696s elapsed)
+  u10: fetched+quantized (  1702s elapsed)
+  v10: fetched+quantized (  1709s elapsed)
+  verify cube 3078 u10 h=88: max|err|=2.451e-04 max scale/2=2.468e-04 -> ok
+  window done in 1710s (3088 cubes, ~5.0h remaining)
+window 193/200: t0=2022-09-23T18 centers=[(22.8, 218.6), (-30.4, 359.9), (12.4, 275.7), (56.7, 21.5), (18.7, 122.2), (-42.4, 307.1), (39.0, 246.5), (-45.0, 204.5), (-54.9, 89.2), (-58.7, 248.3), (-20.7, 27.4), (-16.8, 184.7), (30.5, 331.7), (6.7, 24.3), (-19.9, 233.4), (37.9, 102.6)]
+  t: fetched+quantized (   145s elapsed)
+  z: fetched+quantized (   295s elapsed)
+  u: fetched+quantized (   505s elapsed)
+  v: fetched+quantized (   721s elapsed)
+  q: fetched+quantized (   904s elapsed)
+  msl: fetched+quantized (   910s elapsed)
+  t2m: fetched+quantized (   915s elapsed)
+  u10: fetched+quantized (   921s elapsed)
+  v10: fetched+quantized (   928s elapsed)
+  verify cube 3102 t h=66: max|err|=2.175e-04 max scale/2=2.191e-04 -> ok
+  window done in 931s (3104 cubes, ~3.8h remaining)
+window 194/200: t0=2002-02-24T17 centers=[(11.2, 280.5), (9.7, 356.0), (-24.9, 38.9), (16.1, 43.4), (-29.3, 240.0), (-2.8, 88.3), (40.7, 109.6), (-30.6, 205.1), (64.3, 296.7), (45.2, 157.3), (-1.3, 179.2), (-49.2, 101.0), (30.5, 324.1), (-56.0, 186.3), (12.7, 231.3), (39.9, 7.1)]
+  t: fetched+quantized (   146s elapsed)
+  z: fetched+quantized (   291s elapsed)
+  u: fetched+quantized (   498s elapsed)
+  v: fetched+quantized (   709s elapsed)
+  q: fetched+quantized (   892s elapsed)
+  msl: fetched+quantized (   898s elapsed)
+  t2m: fetched+quantized (   903s elapsed)
+  u10: fetched+quantized (   910s elapsed)
+  v10: fetched+quantized (   916s elapsed)
+  verify cube 3115 z h=48: max|err|=1.005e-01 max scale/2=1.011e-01 -> ok
+  window done in 919s (3120 cubes, ~2.9h remaining)
+window 195/200: t0=1994-11-30T06 centers=[(39.0, 137.3), (-50.2, 5.5), (-23.0, 26.0), (-9.3, 237.4), (-54.1, 56.5), (-39.8, 232.5), (-32.6, 185.1), (-31.8, 327.5), (3.7, 128.7), (21.7, 171.5), (51.4, 52.1), (11.4, 295.0), (-41.2, 153.3), (47.1, 333.0), (-14.9, 358.4), (2.3, 44.0)]
+  t: fetched+quantized (   155s elapsed)
+  z: fetched+quantized (   294s elapsed)
+  u: fetched+quantized (   504s elapsed)
+  v: fetched+quantized (   720s elapsed)
+  q: fetched+quantized (   898s elapsed)
+  msl: fetched+quantized (   903s elapsed)
+  t2m: fetched+quantized (   908s elapsed)
+  u10: fetched+quantized (   915s elapsed)
+  v10: fetched+quantized (   922s elapsed)
+  verify cube 3135 t2m h=27: max|err|=2.172e-04 max scale/2=2.188e-04 -> ok
+  window done in 923s (3136 cubes, ~2.2h remaining)
+window 196/200: t0=2002-12-20T10 centers=[(45.4, 163.0), (3.5, 325.2), (29.7, 13.1), (-53.3, 169.3), (20.9, 299.2), (8.4, 357.6), (-42.7, 95.9), (-6.3, 115.5), (-12.2, 88.9), (8.7, 164.7), (28.1, 84.2), (42.2, 227.0), (13.0, 57.0), (-26.2, 10.7), (-46.1, 299.8), (-41.4, 335.8)]
+  t: fetched+quantized (   144s elapsed)
+  z: fetched+quantized (   292s elapsed)
+  u: fetched+quantized (   490s elapsed)
+  v: fetched+quantized (   695s elapsed)
+  q: fetched+quantized (   871s elapsed)
+  msl: fetched+quantized (   877s elapsed)
+  t2m: fetched+quantized (   882s elapsed)
+  u10: fetched+quantized (   889s elapsed)
+  v10: fetched+quantized (   896s elapsed)
+  verify cube 3141 msl h=13: max|err|=1.788e-02 max scale/2=1.802e-02 -> ok
+  window done in 897s (3152 cubes, ~1.5h remaining)
+window 197/200: t0=1983-08-02T06 centers=[(-15.9, 75.2), (-20.1, 297.4), (-37.5, 122.3), (-54.9, 293.9), (-59.5, 234.2), (21.5, 260.0), (5.3, 231.5), (-41.5, 332.5), (47.7, 90.3), (2.3, 343.8), (32.7, 187.1), (-41.1, 36.0), (-11.3, 265.0), (-15.0, 169.9), (21.6, 74.5), (-18.3, 0.9)]
+  t: fetched+quantized (   145s elapsed)
+  ! geopotential hour 90 stalled >180s, resubmitting
+  z: fetched+quantized (  1009s elapsed)
+  ! u_component_of_wind hour 1 stalled >180s, resubmitting
+  ! u_component_of_wind hour 33 stalled >180s, resubmitting
+  ! u_component_of_wind hour 70 stalled >180s, resubmitting
+  ! u_component_of_wind hour 73 stalled >180s, resubmitting
+  u: fetched+quantized (  2089s elapsed)
+  ! v_component_of_wind hour 22 stalled >180s, resubmitting
+  ! v_component_of_wind hour 35 stalled >180s, resubmitting
+  v: fetched+quantized (  3109s elapsed)
+  ! specific_humidity hour 5 stalled >180s, resubmitting
+  q: fetched+quantized (  3626s elapsed)
+  msl: fetched+quantized (  3828s elapsed)
+  t2m: fetched+quantized (  3955s elapsed)
+  ! 10m_u_component_of_wind hour 54 stalled >180s, resubmitting
+  u10: fetched+quantized (  4209s elapsed)
+  v10: fetched+quantized (  4295s elapsed)
+  verify cube 3161 msl h=57: max|err|=1.434e-02 max scale/2=1.443e-02 -> ok
+  window done in 4300s (3168 cubes, ~1.2h remaining)
+window 198/200: t0=2000-12-03T18 centers=[(65.1, 57.0), (-58.3, 143.6), (-12.6, 166.2), (1.6, 290.7), (32.4, 76.0), (2.5, 330.0), (53.4, 297.0), (17.8, 152.2), (-21.7, 242.9), (-55.2, 42.6), (-2.4, 118.1), (-28.6, 65.8), (27.9, 215.1), (2.3, 72.8), (-43.5, 183.7), (65.0, 167.4)]
+  ! temperature hour 35 stalled >180s, resubmitting
+  ! temperature hour 41 stalled >180s, resubmitting
+  ! temperature hour 73 stalled >180s, resubmitting
+  t: fetched+quantized (   832s elapsed)
+  ! geopotential hour 17 stalled >180s, resubmitting
+  z: fetched+quantized (  1608s elapsed)
+  ! u_component_of_wind hour 5 stalled >180s, resubmitting
+  ! u_component_of_wind hour 6 stalled >180s, resubmitting
+  ! u_component_of_wind hour 14 stalled >180s, resubmitting
+  ! u_component_of_wind hour 67 stalled >180s, resubmitting
+  u: fetched+quantized (  2595s elapsed)
+  v: fetched+quantized (  3295s elapsed)
+  ! specific_humidity hour 13 stalled >180s, resubmitting
+  ! specific_humidity hour 29 stalled >180s, resubmitting
+  ! specific_humidity hour 47 stalled >180s, resubmitting
+  q: fetched+quantized (  4325s elapsed)
+  msl: fetched+quantized (  4367s elapsed)
+  ! 2m_temperature hour 22 stalled >180s, resubmitting
+  t2m: fetched+quantized (  4667s elapsed)
+  u10: fetched+quantized (  4851s elapsed)
+  v10: fetched+quantized (  5019s elapsed)
+  ! specific_humidity hour 0 stalled >180s, resubmitting
+  ! specific_humidity hour 0 stalled >180s, resubmitting
+  verify cube 3180 q h=69: max|err|=1.213e-07 max scale/2=1.231e-07 -> ok
+  window done in 5518s (3184 cubes, ~0.7h remaining)
+window 199/200: t0=2009-05-02T10 centers=[(-5.0, 278.6), (3.2, 70.5), (23.4, 256.2), (21.0, 130.3), (19.2, 329.3), (22.7, 289.6), (-45.7, 227.5), (26.6, 52.9), (9.8, 230.6), (65.7, 338.6), (-53.8, 46.8), (65.2, 42.9), (43.4, 306.7), (-6.5, 97.1), (23.9, 359.0), (-19.2, 179.5)]
+  ! temperature hour 13 stalled >180s, resubmitting
+  t: fetched+quantized (   812s elapsed)
+  ! geopotential hour 38 stalled >180s, resubmitting
+  z: fetched+quantized (  1620s elapsed)
+  ! u_component_of_wind hour 34 stalled >180s, resubmitting
+  ! u_component_of_wind hour 36 stalled >180s, resubmitting
+  u: fetched+quantized (  2603s elapsed)
+  ! v_component_of_wind hour 19 stalled >180s, resubmitting
+  ! v_component_of_wind hour 67 stalled >180s, resubmitting
+  ! v_component_of_wind hour 78 stalled >180s, resubmitting
+  ! v_component_of_wind hour 84 stalled >180s, resubmitting
+  ! v_component_of_wind hour 90 stalled >180s, resubmitting
+  v: fetched+quantized (  3607s elapsed)
+  ! specific_humidity hour 42 stalled >180s, resubmitting
+  q: fetched+quantized (  4565s elapsed)
+  msl: fetched+quantized (  4618s elapsed)
+  t2m: fetched+quantized (  4714s elapsed)
+  ! 10m_u_component_of_wind hour 0 stalled >180s, resubmitting
+  u10: fetched+quantized (  4968s elapsed)
+  v10: fetched+quantized (  5024s elapsed)
+  verify cube 3199 z h=48: max|err|=1.287e-01 max scale/2=1.295e-01 -> ok
+  window done in 5030s (3200 cubes, ~0.0h remaining)
+done: 3200 cubes (1.73 TiB pre-compression) -> /data/ERA5-samples/train
+resume: 3200 cubes, next window 200
+split=train years=1979..2023 target=200 windows x 16 cubes (0.55 GiB/cube pre-compression) -> /data/ERA5-samples/train
+done: 3200 cubes (1.73 TiB pre-compression) -> /data/ERA5-samples/train

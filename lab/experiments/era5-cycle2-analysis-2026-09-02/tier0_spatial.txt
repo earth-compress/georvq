@@ -1,0 +1,16 @@
+checkpoints/era5_t64_scstd/model_43k_analysis.pt
+  2048 held-out 64px windows
+
+     tuple    bits  spatial   align       r1     r2     r4     r8    r16
+                     energy  (ccos)
+     4-0-0      36   0.7932  0.6746    0.988  0.974  0.942  0.862  0.656
+    10-0-0      90   0.8218  0.7217    0.988  0.974  0.943  0.866  0.663
+    20-0-0     180   0.8290  0.7289    0.989  0.975  0.944  0.868  0.666
+    20-1-0     340   0.8639  0.8331    0.989  0.975  0.943  0.858  0.631
+   20-20-3   11828   0.9826  0.9814    0.988  0.968  0.915  0.788  0.534
+  20-20-20   59700   0.9942  0.9929    0.987  0.966  0.909  0.774  0.523
+    SOURCE       -   1.0000  1.0000    0.985  0.962  0.902  0.769  0.519
+
+spatial energy = ||recon - its own patch mean||^2 relative to the source's
+align (ccos)  = cosine between the two deviations; 0 = variation that is
+                present but uncorrelated with the truth
