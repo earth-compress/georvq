@@ -118,9 +118,18 @@ def train(cfg: Config, gpu=0):
 
     specs = cfg.model.tiers
     mins = cfg.model.min_depths
-    tuples = [t for t in monotone_tuples(specs)
-              if all(L >= m for L, m in zip(t, mins))]
-    canon = canonical_tuples(specs, mins)
+    on_path = cfg.model.depth_sampling == "path"
+    if on_path:
+        # Path sampling trains only the strict fill order (each tier
+        # saturated before the next opens), so validation and the R-D
+        # front enumerate that path and nothing else -- scoring a tuple
+        # like 15-10-10 would put never-trained operating points on the
+        # pareto.
+        tuples = [list(t) for t in path_tuples(specs, mins)]
+    else:
+        tuples = [t for t in monotone_tuples(specs)
+                  if all(L >= m for L, m in zip(t, mins))]
+    canon = canonical_tuples(specs, mins, path=on_path)
     ref_fronts = [load_rd_ref(s) for s in cfg.eval.rd_refs]
     run_dir = os.path.join(cfg.log.out_dir, cfg.log.run_tag)
     os.makedirs(run_dir, exist_ok=True)
