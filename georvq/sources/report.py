@@ -287,7 +287,7 @@ def _narrow(declared, wanted, kind):
             f"log.report.{kind}: {missing} not declared by this source "
             f"(declared: {sorted(have)}). Reporting is narrowed from what "
             f"the source offers, never widened — add it to the source's "
-            f"ReportSpec if it is genuinely meaningful for this field.")
+            f"ReportSpec if it is meaningful for this field.")
     return tuple(have[w] for w in wanted)
 
 

@@ -71,7 +71,7 @@ def setup_data(cfg: Config, source, device):
 
     val_frac=0 is closed-distribution mode (compress a fixed corpus):
     train on every chip and let "val" measure training-set fit."""
-    store = open_store(cfg.data.store_dir)
+    store = open_store(cfg.data.store_dir, cfg.data.reader)
     train_rows, val_rows = store.split(cfg.data.val_frac,
                                        seed=cfg.data.split_seed)
     if cfg.data.val_frac == 0:
@@ -118,18 +118,16 @@ def train(cfg: Config, gpu=0):
 
     specs = cfg.model.tiers
     mins = cfg.model.min_depths
-    on_path = cfg.model.depth_sampling == "path"
-    if on_path:
-        # Path sampling trains only the strict fill order (each tier
-        # saturated before the next opens), so validation and the R-D
-        # front enumerate that path and nothing else -- scoring a tuple
-        # like 15-10-10 would put never-trained operating points on the
-        # pareto.
+    # The tuples validation scores must be ones the run trains. Under path
+    # sampling that is the truncation path itself -- scoring the whole
+    # monotone cone would fill the R-D scatter with balanced tuples like
+    # 4-4-4 that are never sampled and are dominated anyway.
+    if cfg.model.depth_sampling == "path":
         tuples = [list(t) for t in path_tuples(specs, mins)]
     else:
         tuples = [t for t in monotone_tuples(specs)
                   if all(L >= m for L, m in zip(t, mins))]
-    canon = canonical_tuples(specs, mins, path=on_path)
+    canon = canonical_tuples(specs, mins, cfg.model.depth_sampling)
     ref_fronts = [load_rd_ref(s) for s in cfg.eval.rd_refs]
     run_dir = os.path.join(cfg.log.out_dir, cfg.log.run_tag)
     os.makedirs(run_dir, exist_ok=True)
@@ -179,13 +177,29 @@ def train(cfg: Config, gpu=0):
             v.ema_decay != VQConfig.model_fields["ema_decay"].default
             or v.reset_mode != "random"):
         # maturing silently wins over both of these, and a run that set
-        # them meant them -- say so rather than let the run quietly use
-        # decay 0.9995 with resets off
+        # them meant them, so say so rather than let the run use decay
+        # 0.9995 with resets off without reporting it
         print(f"note: mature_warmstart is on, so the warm-started books "
               f"run at decay 0.9995 with resets DISABLED -- overriding "
               f"vq.ema_decay={v.ema_decay} and vq.reset_mode="
               f"{v.reset_mode!r}. Set vq.mature_warmstart=false to keep "
               f"them live.", flush=True)
+    if cfg.train.init_from and v.warmup_steps:
+        # A VQ-free warmup is for training from scratch: it trains the
+        # autoencoder unquantized, then k-means-initialises the books at
+        # warmup_steps + 1. Warm-started books need no init, and that
+        # k-means DISCARDS them -- so inheriting warmup_steps from a
+        # from-scratch preset silently converts a warm-start run into a
+        # from-scratch one, halfway in, with a healthy-looking loss.
+        # Observed: a grown-Tessera run inherited warmup_steps=20000 and
+        # would have thrown away the released codebooks at step 20001.
+        raise ValueError(
+            f"train.init_from is set and model.vq.warmup_steps is "
+            f"{v.warmup_steps}. The VQ-free warmup would k-means "
+            f"re-initialise the warm-started codebooks at step "
+            f"{v.warmup_steps + 1}, discarding them. Set "
+            f"model.vq.warmup_steps: 0 for a warm start, or drop "
+            f"train.init_from to train from scratch.")
     if cfg.train.init_from and not v.mature_warmstart:
         # undo load_partial's maturing: keep the books live at the
         # configured decay with resets (and therefore reset_mode) active
@@ -308,7 +322,11 @@ def train(cfg: Config, gpu=0):
         if s < lr0:                   # AdamW warms its moments at lr=0 first
             return 0.0
         s -= lr0
-        ramp = min(1.0, (s + 1) / warmup)
+        # max(warmup, 1): warmup=0 is the natural way to write
+        # "no warmup" and used to divide by zero here, killing
+        # the run at its first optimiser step -- after the pool
+        # had already spent minutes prefilling.
+        ramp = min(1.0, (s + 1) / max(warmup, 1))
         if const_lr:                  # stoppable at any step
             return ramp
         total = max(cfg.train.steps - lr0, 1)
@@ -577,6 +595,15 @@ def train(cfg: Config, gpu=0):
                    "perf/tokens_per_s": tok_s,
                    "perf/data_wait_ms": data_ms,
                    "perf/pool_chips_loaded": pool.chips_loaded}
+            # Which decoder served how much of the batch. With a bank the
+            # realised step cost depends on how the depth sampler split
+            # the rows, so this is what explains a throughput change, and
+            # a member starved of rows is one whose rung will lag.
+            counts = getattr(model.decoder, "last_counts", None)
+            if counts:
+                tot = sum(counts.values()) or 1
+                for k, c in counts.items():
+                    log[f"train/bucket_frac_{k}"] = c / tot
             if gnorm is not None:
                 # PRE-clip norm: the diagnostic that would have shown the
                 # step-1900 blow-up coming
@@ -584,7 +611,11 @@ def train(cfg: Config, gpu=0):
                 log["train/grad_clipped"] = float(
                     gnorm > v.clip_norm)
                 log["train/nonfinite_steps"] = nonfinite_steps
-            log.update({f"train/{k}": float(val) for k, val in m.items()})
+            # detach: a source may return its loss term among the metrics
+            # (S2 returns "mse"), and float() on a grad tensor warns
+            log.update({f"train/{k}": float(val.detach())
+                        if torch.is_tensor(val) else float(val)
+                        for k, val in m.items()})
             if pool.cycle:
                 log["data/epochs"] = pool.epochs
                 log["data/tiles_streamed"] = pool.tiles_streamed
@@ -644,13 +675,36 @@ def train(cfg: Config, gpu=0):
             base_str = "".join(
                 f" {b.key}={vs[f'{qm.key}_{b.key}']:.4f}"
                 for b in report.baselines if f"{qm.key}_{b.key}" in vs)
+            # with a decoder bank, say which member served each rung: a
+            # step in the ladder at a member boundary is the continuity
+            # risk of decoding adjacent rates with different networks
+            def _dec(t):
+                if getattr(model.decoder, "members", None) is None:
+                    return ""
+                from georvq.model.decoder import active_tiers
+                return f"[d{active_tiers(list(t)) - 1}]"
+
             print(f"step {step} VAL[{qm.key}]: "
                   + ("" if vq_live else "[warmup: ceiling only] ")
-                  + " ".join(f"{k}({tname(t)})={cbt[tname(t)]:.4f}"
+                  + " ".join(f"{k}({tname(t)}){_dec(t)}={cbt[tname(t)]:.4f}"
                              for k, t in canon.items() if tname(t) in cbt)
                   + f" ceil={vs[f'{qm.key}_ceiling']:.4f}"
                   + extra_str + base_str,
                   flush=True)
+            # The extras PER TUPLE, not just at the ceiling. On a source
+            # with a transmitted mean the headline cosine is inflated --
+            # measured on Tessera, a coarse-only decode reads cos 0.875
+            # against ccos 0.316 -- so a log carrying only the headline
+            # can show a run flat or negative while the reconstruction is
+            # improving. They are computed either way, so printing them
+            # costs nothing.
+            for m in report.extra:
+                by_t = ebt.get(m.key, {})
+                if by_t:
+                    print(f"    {m.key}: "
+                          + " ".join(f"{k}={by_t[tname(t)]:.4f}"
+                                     for k, t in canon.items()
+                                     if tname(t) in by_t), flush=True)
             if use_wandb:
                 scalars = {f"val/{qm.key}_{k}": cbt[tname(t)]
                            for k, t in canon.items() if tname(t) in cbt}

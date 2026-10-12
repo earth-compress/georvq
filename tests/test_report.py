@@ -68,8 +68,14 @@ def test_each_shipped_source_declares_its_own_surface():
         "log": {"run_tag": "t", "wandb": False},
     })
     s2 = S2Source(s2cfg.model).report(s2cfg.model)
-    # reflectance, not an embedding field: no cosine, no block-mean floor
-    assert s2.quality.key == "sam"
+    # Reflectance, not an embedding field: no cosine, no block-mean floor.
+    # The headline is ABSOLUTE (R2), because S2's magnitude spread is 6.6x
+    # -- the widest in the five-source table -- and because the loss is
+    # MSE, so selecting checkpoints on a direction metric would select on
+    # something the run is not optimising. The angle stays as a
+    # diagnostic: band ratios can degrade while MSE looks fine.
+    assert s2.quality.key == "r2"
+    assert [m.key for m in s2.extra] == ["rmse", "sam"]
     assert s2.baselines == ()
     assert s2.preview.key == "band_rgb"
 

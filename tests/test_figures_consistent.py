@@ -45,7 +45,28 @@ FIGURES = {
         "lab/findings/codebook-sample-budget.md",
         "docs/SOURCE_ONBOARDING.md",
     },
+    # PCA-packed S2 stats channel: mean bytes/window at tolerance 0.01
+    "9.73": {
+        "lab/findings/s2-stats-pca-packing.md",   # canonical
+        "configs/s2/s2_pyr96.yaml",               # the run that charges it
+    },
+    # a fixed side channel's share of the coarse rung
+    "3.31": {
+        "lab/findings/fixed-side-channels-dominate-coarse-rungs.md",
+    },
+    # the batch/throughput knee on the S2 pyramid (windows/s)
+    "628": {
+        "lab/findings/batch-past-the-knee-buys-codebook-health.md",
+    },
+    "634": {
+        "lab/findings/batch-past-the-knee-buys-codebook-health.md",
+    },
 }
+
+# Deliberately NOT pinned: short decimals such as 4.7, 12.1 and 5.3, which
+# occur incidentally as unrelated constants elsewhere in the tree. This
+# test matches literal substrings, so a figure is only a usable key when
+# its digits are distinctive enough not to collide.
 
 
 def _files():

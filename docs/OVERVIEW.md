@@ -202,10 +202,12 @@ reproduces a result.
   runs seed-stable but not bit-identical; expect ~±0.001 val-cos between
   identically-configured runs. Bit-exactness claims belong to the model
   (fixed inputs), not the trainer.
-- **Multi-group (S2-style) sources** have model-level support and a
-  RAM-resident loader; the streaming pool + standard train loop are
-  single-plane only for now (`docs/ADDING_A_SOURCE.md` has the working
-  pattern and the roadmap).
+- **Multi-group (S2-style) sources** stream through the same `ChipPool`
+  and train loop as single-plane ones, as one resident tensor per group
+  sharing a slot index and a crop origin. That origin must land on the
+  coarsest native grid (period 6 on S2), so multi-group crops are always
+  aligned and `slot_rows` must divide by the period — both asserted. See
+  `docs/ADDING_A_SOURCE.md`.
 
 ## Where to extend
 

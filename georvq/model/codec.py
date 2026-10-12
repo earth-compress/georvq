@@ -153,7 +153,8 @@ class PyramidCodec(nn.Module):
         self.tokenizer = ViTTokenizer(
             self.specs, cfg.window, cfg.bands, dim=cfg.tokenizer.dim,
             depth=cfg.tokenizer.depth, ff_ratio=cfg.ff_ratio,
-            late_join=cfg.tokenizer.late_join)
+            late_join=cfg.tokenizer.late_join,
+            stem_pyramid=cfg.tokenizer.stem_pyramid)
         if cfg.local_attn is not None:
             m = build_local_mask(self.specs, cfg.window, cfg.local_attn)
             # computed once; non-persistent so checkpoints stay unchanged
@@ -205,15 +206,36 @@ class PyramidCodec(nn.Module):
         else:
             self.stats_enc = self.stats_dec = None
 
-        head_in = PyramidAttnDecoder.head_in_dim(
-            self.specs, cfg.decoder.dim, cfg.decoder.cls_bridge)
-        self.decoder = PyramidAttnDecoder(
-            self.specs, head=source.build_head(cfg, head_in),
-            dim=cfg.decoder.dim, depth=cfg.decoder.depth,
-            heads=cfg.decoder.heads, cls_bridge=cfg.decoder.cls_bridge,
-            ff_ratio=cfg.ff_ratio, sigma_cond=cfg.sigma is not None,
-            sigma_freqs=cfg.sigma.freqs if cfg.sigma else 8,
-            late_join=cfg.decoder.late_join)
+        if cfg.decoder_bank is not None:
+            from georvq.model.decoder import DecoderBank
+            members = []
+            for st in cfg.decoder_bank:
+                sub = self.specs[:st.tiers]
+                hin = PyramidAttnDecoder.head_in_dim(
+                    sub, st.dim, st.cls_bridge)
+                members.append(PyramidAttnDecoder(
+                    sub, head=source.build_head(cfg, hin, n_tiers=st.tiers,
+                                                out_px=st.out_px),
+                    dim=st.dim, depth=st.depth, heads=st.heads,
+                    cls_bridge=st.cls_bridge,
+                    ff_ratio=(st.ff_ratio if st.ff_ratio is not None
+                              else cfg.ff_ratio),
+                    sigma_cond=cfg.sigma is not None,
+                    sigma_freqs=cfg.sigma.freqs if cfg.sigma else 8))
+            self.decoder = DecoderBank(members, cfg.window)
+        else:
+            head_in = PyramidAttnDecoder.head_in_dim(
+                self.specs, cfg.decoder.dim, cfg.decoder.cls_bridge)
+            self.decoder = PyramidAttnDecoder(
+                self.specs, head=source.build_head(cfg, head_in),
+                dim=cfg.decoder.dim, depth=cfg.decoder.depth,
+                heads=cfg.decoder.heads, cls_bridge=cfg.decoder.cls_bridge,
+                ff_ratio=(cfg.decoder.ff_ratio
+                          if cfg.decoder.ff_ratio is not None
+                          else cfg.ff_ratio),
+                sigma_cond=cfg.sigma is not None,
+                sigma_freqs=cfg.sigma.freqs if cfg.sigma else 8,
+                late_join=cfg.decoder.late_join)
         if cfg.local_attn is not None:
             self.decoder.register_buffer(
                 "attn_mask", build_local_mask(self.specs, cfg.window,
@@ -276,12 +298,34 @@ class PyramidCodec(nn.Module):
                 "mean must be passed (model.patch_mean(x, valid)). Omitting "
                 "it would silently produce a mean-removed field.")
 
-    def side_bits(self):
-        """Fixed per-window bits outside the index stream (stats channel)."""
-        if self.stats_cond is None:
-            return 0.0
-        from georvq.model.stats_cond import channel_bits
-        return float(channel_bits(self.stats_cond, self.bands))
+    def side_bits(self, depths=None):
+        """Fixed per-window bits outside the index stream.
+
+        TWO channels can land here and they are different mechanisms, so
+        both are charged:
+
+        - `model.stats_cond`, which transmits the per-window mean and
+          codes only the remainder; and
+        - a source's `normalizer`, which removes per-tile statistics
+          before the encoder and must ship them for the decode to mean
+          anything (S2's 26 per-band mean/std floats).
+
+        Charging only the first understated the rate of every normalized
+        source, and understated it worst exactly where it matters: on a
+        1/4/16 pyramid the coarse-only operating point can be SMALLER than
+        the stats channel it was silently not counting.
+        """
+        bits = 0.0
+        if self.stats_cond is not None:
+            from georvq.model.stats_cond import channel_bits
+            bits += float(channel_bits(self.stats_cond, self.bands))
+        src = getattr(self, "source", None)
+        if src is not None and hasattr(src, "side_bits"):
+            try:
+                bits += float(src.side_bits(self.cfg, depths))
+            except TypeError:            # sources predating the depth arg
+                bits += float(src.side_bits(self.cfg))
+        return bits
 
     def _stats_of(self, x, valid=None):
         """The stats argument the encode/decode pair needs, or None when

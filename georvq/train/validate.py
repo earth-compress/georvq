@@ -15,13 +15,26 @@ def tname(ls):
     return "-".join(map(str, ls))
 
 
-def canonical_tuples(specs, mins=None, path=False):
+def canonical_tuples(specs, mins=None, sampling="nested"):
     """Named operating points for scalar logging: minimal / coarse-only /
-    half-ladder / full. With min-depths training, every point is clamped
-    into the TRAINED tuple space (untrained tuples mislead). With `path`
-    (strict fill-order training), every named point must lie ON the path:
-    half becomes the path's midpoint rather than the per-tier half
-    cascade, which the path never visits."""
+    half-ladder / full.
+
+    Every point must be one the run actually TRAINS, or the scalar is a
+    measurement of a tuple the model never saw. Which points those are
+    depends on how depths are sampled:
+
+    - "path": the truncation path fills each tier to its depth before the
+      next begins -- (4,0,0)...(8,0,0),(8,1,0)...(8,8,0),(8,8,1)... A
+      balanced tuple like 4-4-4 is not on it and is never trained. It is
+      also strictly dominated in rate-distortion terms (`docs/FINDINGS.md`
+      on the efficient ladder), so it is not a point anyone would ship.
+    - "nested": any monotone tuple is trainable, and the historical
+      half-ladder point is meaningful.
+
+    `half` is chosen by RATE, not by index along the path, so it lands
+    near the middle of the R-D span rather than the middle of the list --
+    the path is front-loaded with cheap coarse steps.
+    """
     mins = mins or [1] + [0] * (len(specs) - 1)
 
     def cascade(start):
@@ -30,18 +43,39 @@ def canonical_tuples(specs, mins=None, path=False):
             L = min(prev, sp.depth); out.append(L); prev = L
         return out
     d0 = specs[0].depth
-    if path:
-        from georvq.model.codec import path_tuples
-        p = path_tuples(specs, mins)
-        pts = {"min": list(p[0]),
-               "coarse_only": [d0] + [0] * (len(specs) - 1),
-               "half": list(p[len(p) // 2]),
-               "full": cascade(d0)}
+    full = cascade(d0)
+
+    if sampling == "path":
+        from georvq.model.codec import path_tuples, tuple_bits
+        path = [list(t) for t in path_tuples(specs, mins)]
+        target = tuple_bits(specs, full) / 2.0
+        half = min(path, key=lambda t: abs(tuple_bits(specs, t) - target))
+        # the last point before any finer tier opens: the coarse tier
+        # carrying the reconstruction on its own
+        coarse = max((t for t in path if all(L == 0 for L in t[1:])),
+                     key=lambda t: t[0], default=path[0])
+        pts = {"min": path[0], "coarse_only": coarse,
+               "half": half, "full": path[-1]}
+        # One named point per active-tier count, so a decoder bank has a
+        # rung for every member. Without this the canonical set can skip
+        # a member entirely -- with 1/4/16 tiers, `half` lands past the
+        # point where tier 2 opens, so the two-tier decoder is trained on
+        # sampled rows but never validated, and a member that lags would
+        # not show up anywhere.
+        for n in range(2, len(specs)):
+            sat = [t for t in path
+                   if all(L > 0 for L in t[:n]) and all(L == 0
+                                                        for L in t[n:])]
+            if sat and not any(
+                    all(v > 0 for v in t[:n]) and all(v == 0 for v in t[n:])
+                    for t in pts.values()):
+                pts[f"tier{n - 1}_full"] = max(
+                    sat, key=lambda t: tuple_bits(specs, t))
     else:
-        half = [max(L // 2, m) for L, m in zip(cascade(d0), mins)]
+        half = [max(L // 2, m) for L, m in zip(full, mins)]
         pts = {"min": list(mins),
                "coarse_only": [d0] + list(mins[1:]),
-               "half": half, "full": cascade(d0)}
+               "half": half, "full": full}
     return {k: v for k, v in pts.items()}
 
 

@@ -9,6 +9,7 @@ keywords: [codebook, sizing, K, sample-budget, reset]
 imported: true
 related:
   - clashes: bigger-k-beats-more-levels
+  - supports: batch-past-the-knee-buys-codebook-health
 ---
 
 A codebook needs roughly 450 vectors per codeword inside its EMA window,

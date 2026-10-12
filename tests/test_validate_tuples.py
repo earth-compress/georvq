@@ -25,7 +25,7 @@ def _saturated(t, specs):
 def test_path_canonical_points_lie_on_the_path():
     specs, mins = _specs(), [2, 0, 0]
     path = {tuple(p) for p in path_tuples(specs, mins)}
-    canon = canonical_tuples(specs, mins, path=True)
+    canon = canonical_tuples(specs, mins, "path")
     assert canon["min"] == [2, 0, 0]
     assert canon["coarse_only"] == [8, 0, 0]
     assert canon["full"] == [8, 8, 8]

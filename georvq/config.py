@@ -64,6 +64,32 @@ class TokenizerConfig(StrictModel):
     # layer). High-frequency content is local: a few joint layers suffice
     # and the coarse-only prefix runs at a fraction of the sequence length
     late_join: int = 0
+    # One conv pyramid instead of an independent patch embed per tier and
+    # a CLS parameter for the coarsest. The coarse token then arrives with
+    # a convolutional read of the image rather than as a constant the
+    # trunk has to fill by attention. Off by default: it renames the
+    # tokenizer's parameters, so every existing checkpoint needs the
+    # other path.
+    stem_pyramid: bool = False
+
+
+class DecoderStageConfig(StrictModel):
+    """One member of a decoder bank: the decoder used when exactly
+    `tiers` tiers carry codes.
+
+    A rung that only sends the coarse tier does not need the compute that
+    decodes 273 tokens to 96 px. Each member covers a prefix of the tier
+    list and emits at `out_px`, which the codec resamples to the model's
+    window so the loss and every metric stay at full resolution.
+    """
+    tiers: int                     # how many tiers this member decodes
+    out_px: int                    # its native output edge, in window px
+    dim: int = 384
+    depth: int = 12
+    heads: int = 8
+    head_feat: int = 64
+    cls_bridge: bool = True
+    ff_ratio: Optional[float] = None
 
 
 class DecoderConfig(StrictModel):
@@ -73,6 +99,13 @@ class DecoderConfig(StrictModel):
     head_feat: int = 64
     cls_bridge: bool = True
     late_join: int = 0             # same contract as tokenizer.late_join
+    # Decoder-only FFN width multiplier. None = share `model.ff_ratio`
+    # with the tokenizer, which is the historical behaviour. Set it to
+    # widen the DECODER's MLPs without touching the encoder -- required
+    # when the encoder is frozen (a decoder-capacity experiment, or
+    # training from cached latents), because a wider encoder FFN is a
+    # different encoder and its cached latents would no longer apply.
+    ff_ratio: Optional[float] = None
     head_dw: bool = False          # depthwise-separable head convs (8x fewer
                                    # MACs; smooths intra-window tile seams)
 
@@ -280,6 +313,9 @@ class ModelConfig(StrictModel):
     norm_latents: bool = False
     tokenizer: TokenizerConfig = Field(default_factory=TokenizerConfig)
     decoder: DecoderConfig = Field(default_factory=DecoderConfig)
+    # Resolution-matched decoders, one per tier prefix. None keeps the
+    # single decoder every existing preset and checkpoint uses.
+    decoder_bank: Optional[list[DecoderStageConfig]] = None
     vq: Optional[VQConfig] = Field(default_factory=VQConfig)
     # Emit L2-normalized * sqrt(dim) latents from encode_levels, i.e. the
     # geometry encode_stage1 (and therefore stage-1 training) uses. Set
@@ -289,6 +325,13 @@ class ModelConfig(StrictModel):
     # and the bitstream contract are unaffected. (Named `norm_latents`;
     # `normalize_latents` in older checkpoints is migrated on load.)
     norm_latents: bool = False
+    # PCA basis for a source NORMALIZER's stats side channel, fitted by
+    # scripts/fit_stats_pca_s2.py. Distinct from `stats_cond`, which
+    # transmits a mean the model is also conditioned on; a normalizer's
+    # stats are removed before the encoder and merely shipped. It defines
+    # part of the bitstream (docs/BITSTREAM.md), hence model-level. None
+    # ships them raw as f16, which is ~5x larger.
+    stats_pca: Optional[Path] = None
     sigma: Optional[SigmaConfig] = None
     stats_cond: Optional[StatsCondConfig] = None
     conditioning: Optional[Conditioning] = None
@@ -332,6 +375,33 @@ class ModelConfig(StrictModel):
         for m, t in zip(self.min_depths, self.tiers):
             assert 0 <= m <= t.depth, f"min depth {m} > tier depth {t.depth}"
         assert 0.0 <= self.full_frac <= 1.0
+        if self.decoder_bank is not None:
+            b = sorted(self.decoder_bank, key=lambda s: s.tiers)
+            assert [s.tiers for s in b] == list(range(1, len(self.tiers) + 1)), \
+                ("decoder_bank needs one entry per tier prefix, 1..n: got "
+                 f"{[s.tiers for s in b]} for {len(self.tiers)} tiers")
+            assert b[-1].out_px == self.window, \
+                (f"the last decoder_bank entry decodes every tier, so its "
+                 f"out_px must be the window {self.window}, not {b[-1].out_px}")
+            for s in b:
+                g = self.tiers[s.tiers - 1].grid
+                assert s.out_px % g == 0, \
+                    (f"decoder_bank[{s.tiers}]: out_px {s.out_px} not "
+                     f"divisible by that prefix's finest grid {g}")
+                assert self.window % s.out_px == 0, \
+                    (f"decoder_bank[{s.tiers}]: window {self.window} not "
+                     f"divisible by out_px {s.out_px}; the resample back to "
+                     "full resolution has to be an integer factor")
+            if self.stats_cond is not None and self.stats_cond.cond_decoder:
+                # the patch-mean embedding is added to each member's AdaLN
+                # conditioning, and one StatsEmbed serves them all, so the
+                # members have to agree on width
+                bad = [s.tiers for s in b if s.dim != self.decoder.dim]
+                assert not bad, (
+                    "stats_cond.cond_decoder is on, so every decoder_bank "
+                    f"member must use decoder.dim {self.decoder.dim}; "
+                    f"entries {bad} differ")
+            self.decoder_bank = b
         assert (self.vq is None) != (self.sigma is None), \
             "set exactly one of model.vq (quantized) / model.sigma (stage-1 continuous)"
         if self.sigma is not None:
@@ -368,6 +438,10 @@ class PoolConfig(StrictModel):
 class DataConfig(StrictModel):
     source: str = "ae"              # key into georvq.sources.SOURCES
     store_dir: Path
+    # How to read store_dir. "auto" detects a chip store, a live_dem store
+    # or a Major-TOM Sentinel-2 root; pin it when a run must not depend on
+    # what happens to be on disk. Live readers copy no pixels.
+    reader: Literal["auto", "chipstore", "live_s2"] = "auto"
     val_frac: float = 0.04
     split_seed: int = 0
     limit_chips: Optional[int] = None   # data-scaling probes: train on a
