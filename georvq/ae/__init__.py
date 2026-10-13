@@ -10,3 +10,10 @@ lives in georvq.inference; new sources should build their own release
 layer on top of that, using this package as the worked example — not as
 a template to inherit blindly.
 """
+
+
+def open(path_or_url, **kw):
+    """Open an AE v2 .gvq file as a rasterio-like dataset; see
+    georvq.ae.v2.open_dataset."""
+    from georvq.ae.v2 import open_dataset
+    return open_dataset(path_or_url, **kw)
