@@ -1,4 +1,9 @@
+Draft for review: the pointer to the v2 release and the install line are new and not yet approved.
+
 # The AlphaEarth release codec
+
+This is the v1 release (`ae-beta-v1`). The v2 release is described in
+`docs/AE_V2_RELEASE.md`.
 
 The frozen, shippable codec for the AlphaEarth Foundations embedding
 tiles. Everything documented here is release policy for this source
