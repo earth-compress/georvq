@@ -1,4 +1,4 @@
-Draft for review: new or changed are the georvq/inference and georvq/ae module-map rows, the install line, the AlphaEarth CLI examples, the data end user line and the preset sentence that pointed to SOURCES.md.
+Warning for humans: this document is more geared towards agents. There is some useful info here if you're interested, but it's by the bots and for the bots, so don't spend your precious human time on it unless you're really invested in this. 
 
 # Codebase overview
 
