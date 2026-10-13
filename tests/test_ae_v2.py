@@ -259,6 +259,30 @@ def test_point_read_is_one_request_per_tier_then_cached(setup):
         assert rd.plan(6, 7, 4, 5, quality=True) == []
 
 
+def test_empty_chunk_reads_as_nodata_without_a_request(setup):
+    # the fixture's corner widened to cover fine chunk (0, 0), north-up
+    # rows 0..31 and columns 0..31
+    src, out = setup["tmp"] / "corner.tif", setup["tmp"] / "corner.georvq.parquet"
+    with rasterio.open(setup["src"]) as s:
+        a, prof = s.read(), s.profile
+    a[:, H - 32:, :50] = v2.NODATA
+    with rasterio.open(src, "w", **prof) as d:
+        d.write(a)
+    v2.encode_tile(src, out, setup["codec"], stats=True, chunk_px=CHUNK_PX,
+                   strip_px=48, batch=256)
+    with v2.open_dataset(out, codec=setup["codec"], first_read=4096,
+                         gap=0) as ds:
+        rd = ds.reader
+        assert rd.empty["fine"] == {(0, 0)} and not rd.empty["mid"]
+        before = dict(rd.stats)
+        got = ds.read(window=Window(3, 170, 20, 30))
+        assert rd.stats == before
+        assert (got == v2.NODATA).all()
+        full = ds.read()
+        assert np.array_equal(got, full[:, 170:200, 3:23])
+        assert np.array_equal(full == v2.NODATA, a == v2.NODATA)
+
+
 def test_reconstruct_keeps_the_source_profile(setup):
     out = setup["tmp"] / "recon.tif"
     with v2.open_dataset(setup["file"], codec=setup["codec"]) as ds:
