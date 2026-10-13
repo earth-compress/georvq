@@ -75,6 +75,14 @@ empty, and a reader does not fetch the others. A window with no valid
 pixel is not encoded: its records are zero and a reader fills it with
 nodata.
 
+From version 1.1, a chunk none of whose windows has a valid pixel is
+empty: every data column of its row is null, so it stores no code
+bytes, and the header lists it under its kind's `empty_chunks`. A
+reader fetches no empty chunk, nor a chunk of another kind whose
+windows in the read all lie in empty chunks, and fills those windows
+with nodata. A chunk with some valid windows is stored in full, with
+zero records for the others.
+
 ## Writer settings
 
 Code columns (`base`, the level columns, `quality`) and `mask` are
@@ -105,9 +113,11 @@ order on close, so the file does not depend on encoding order.
 
 Fields marked * are required.
 
-- `format`*, `version`*, `status`*: `georvq-parquet`, `1.0`,
+- `format`*, `version`*, `status`*: `georvq-parquet`, `1.1`,
   `placeholder`. A reader refuses an unknown major version. Minor
   versions only add fields; a reader ignores fields it does not know.
+  Version 1.1 added empty chunks, whose null values a 1.0 reader
+  does not accept.
 - `codec`*: `bitstream_id`, `decoder_id`, the tier specs
   (`grid:dim:codes:depth`), the window size in pixels, `min_depths`,
   the mean channel's kind and bits, and the model release the file was
@@ -125,7 +135,8 @@ Fields marked * are required.
 - `layout`*: `window_px`, `window_grid`, `product_px`, chunk and window
   order (row-major); `groups`, the kinds in file order, each with its
   `chunk_px`, `chunk_windows`, `chunk_grid`, its data `columns` in file
-  order and its `row_groups` as `[first, count]`; `mask` (column, the
+  order, its `row_groups` as `[first, count]` and its `empty_chunks`,
+  the positions of its empty chunks; `mask` (column, the
   kind holding it, codec, and `chunks`, the positions of non-empty
   masks); the record layout of each code column (`name`,
   `record_bytes`, `fields` as a list of `{name, count, bits}`); and the

@@ -8,9 +8,11 @@ coarsest tier's levels), each finer tier by its name, and `quality`
 group, is one chunk of one kind: its footprint as a WKB polygon with a
 GeoParquet 1.1 bbox covering, and its windows' records as binary
 values, one column per tier level. The pixel validity mask is a column
-of the base chunks, after `base`. Row groups are ordered by kind, then
-row-major over that kind's chunk grid. The codec header is JSON in the
-file's key-value metadata under `georvq`.
+of the base chunks, after `base`. A chunk none of whose windows has a
+valid pixel is empty: its data columns are null and the header lists
+it. Row groups are ordered by kind, then row-major over that kind's
+chunk grid. The codec header is JSON in the file's key-value metadata
+under `georvq`.
 
 Code columns are written uncompressed and without dictionary encoding,
 so each column chunk is one data page around one value and its byte
@@ -18,7 +20,9 @@ range follows from the footer. The reader opens a file with one suffix
 read, plans the byte ranges a window region needs at a depth tuple from
 the footer, merges adjacent ranges and small gaps, fetches them (in
 parallel over HTTP), and keeps the decoded values per (chunk, column)
-in a cache, so later reads fetch only what they lack. The file is a
+in a cache, so later reads fetch only what they lack. A read fetches
+no empty chunk, and no chunk of another kind whose windows in the read
+all lie in empty chunks. The file is a
 standard Parquet file, so pyarrow or DuckDB can read it without this
 module.
 
@@ -48,7 +52,7 @@ from georvq.inference.bitpack import pack, record_bytes, unpack
 
 FORMAT = "georvq-parquet"
 MAJOR = 1
-MINOR = 0
+MINOR = 1
 STATUS = "placeholder"
 SUFFIX = ".georvq.parquet"
 FIRST_READ = 256 * 1024
@@ -324,7 +328,9 @@ class RVQParquetWriter:
     """Writes one product. Window regions can be added in any order,
     from independent encoders; `close` writes the row groups in file
     order, so the file does not depend on the order of `add_windows`
-    calls. Every window of the product must be added.
+    calls. Every window of the product must be added. A chunk none of
+    whose windows has a valid pixel is written with null data columns,
+    so records given for those windows are not stored.
 
     header: the codec, product, rungs and quality entries of the
     `georvq` metadata. transform: the north-up affine (a, b, c, d, e, f)
@@ -420,12 +426,26 @@ class RVQParquetWriter:
             self._valid[py:py + shape[0], px:px + shape[1]] = True
         self._filled[wy:wy + h, wx:wx + w] = True
 
+    def _live(self) -> np.ndarray:
+        """(window rows, window cols) True where a window has a valid
+        pixel."""
+        gy, gx = self.window_grid
+        if self._valid is None:
+            return np.ones((gy, gx), bool)
+        W = self.layout.window_px
+        v = np.zeros((gy * W, gx * W), bool)
+        v[:self.height, :self.width] = self._valid
+        return v.reshape(gy, W, gx, W).any((1, 3))
+
     def _rows(self):
-        """Row dicts in file order, and the chunks with a non-empty mask."""
-        lay, rows, masked = self.layout, [], []
+        """Row dicts in file order, the chunks with a non-empty mask, and
+        the empty chunks of each kind."""
+        lay, rows, masked, empty = self.layout, [], [], {}
+        live = self._live()
         for g in lay.groups.values():
             ny, nx = self.chunk_grids[g.kind]
             n, p = g.chunk_windows, g.chunk_px
+            empty[g.kind] = []
             for i in range(ny):
                 for j in range(nx):
                     ring, bb = chunk_footprint(self.transform, i, j, p,
@@ -434,6 +454,10 @@ class RVQParquetWriter:
                            "chunk_row": i, "chunk_col": j,
                            "geometry": wkb_polygon(ring),
                            "bbox": dict(zip(_BBOX, bb))}
+                    if not live[i * n:(i + 1) * n, j * n:(j + 1) * n].any():
+                        empty[g.kind].append([i, j])
+                        rows.append(row)
+                        continue
                     for c in g.columns:
                         if c == "mask":
                             v = b"" if self._valid is None else encode_mask(
@@ -445,9 +469,9 @@ class RVQParquetWriter:
                                              j * n:(j + 1) * n].tobytes()
                         row[c] = v
                     rows.append(row)
-        return rows, masked
+        return rows, masked, empty
 
-    def _schema(self, masked):
+    def _schema(self, masked, empty):
         bbox_t = pa.struct([(k, pa.float64()) for k in _BBOX])
         fields = [pa.field("kind", pa.string(), nullable=False),
                   pa.field("product_id", pa.string(), nullable=False),
@@ -470,6 +494,7 @@ class RVQParquetWriter:
             ny, nx = self.chunk_grids[g["kind"]]
             g["chunk_grid"] = [ny, nx]
             g["row_groups"] = [first, ny * nx]
+            g["empty_chunks"] = empty[g["kind"]]
             first += ny * nx
         lay["mask"]["chunks"] = masked
         lay["window_grid"] = list(self.window_grid)
@@ -490,11 +515,11 @@ class RVQParquetWriter:
             ys, xs = np.nonzero(~self._filled)
             raise ValueError(f"{len(ys)} windows were not added, first "
                              f"({ys[0]}, {xs[0]})")
-        rows, masked = self._rows()
-        schema, meta = self._schema(masked)
+        rows, masked, empty = self._rows()
+        schema, meta = self._schema(masked, empty)
         names = schema.names
-        largest = max(len(r[c]) for r in rows for c in self.layout.column_order
-                      if c in r)
+        largest = max([len(r[c]) for r in rows for c in self.layout.column_order
+                       if c in r] + [0])
         with pq.ParquetWriter(
                 self.path, schema, compression="NONE", use_dictionary=False,
                 write_statistics=_STAT_COLUMNS,
@@ -701,10 +726,17 @@ class RVQParquetReader:
         lay = self.header["layout"]
         self.layout = Layout.from_json(lay)
         self.window_grid = tuple(int(v) for v in lay["window_grid"])
-        self.chunk_grids, self._first = {}, {}
+        self.chunk_grids, self._first, self.empty = {}, {}, {}
         for g in lay["groups"]:
             self.chunk_grids[g["kind"]] = tuple(int(v) for v in g["chunk_grid"])
             self._first[g["kind"]] = int(g["row_groups"][0])
+            self.empty[g["kind"]] = {tuple(c) for c in g.get("empty_chunks", [])}
+        # windows of empty chunks have no valid pixel, whatever their kind
+        self.dead = np.zeros(self.window_grid, bool)
+        for kind, chunks in self.empty.items():
+            n = self.layout.groups[kind].chunk_windows
+            for i, j in chunks:
+                self.dead[i * n:(i + 1) * n, j * n:(j + 1) * n] = True
         self.masked = {tuple(c) for c in lay["mask"].get("chunks", [])}
         self.height, self.width = (int(v) for v in lay["product_px"])
         n_rg = sum(a * b for a, b in self.chunk_grids.values())
@@ -878,13 +910,27 @@ class RVQParquetReader:
         return [(i, j) for i in range(wy0 // n, (wy1 - 1) // n + 1)
                 for j in range(wx0 // n, (wx1 - 1) // n + 1)]
 
+    def skipped(self, kind, i, j, wy0, wy1, wx0, wx1) -> bool:
+        """True when chunk (i, j) of `kind` is empty, or when none of its
+        windows inside [wy0:wy1, wx0:wx1] has a valid pixel as known from
+        the empty chunks of any kind. A read does not fetch it."""
+        if (i, j) in self.empty[kind]:
+            return True
+        n = self.layout.groups[kind].chunk_windows
+        return bool(self.dead[max(wy0, i * n):min(wy1, (i + 1) * n),
+                              max(wx0, j * n):min(wx1, (j + 1) * n)].all())
+
     def needs(self, wy0, wy1, wx0, wx1, columns) -> list:
         """(column, chunk_row, chunk_col) values that a read of `columns`
-        over the windows needs; masks known to be empty are left out."""
+        over the windows needs. Masks known to be empty, and chunks that
+        `skipped` rules out, are left out."""
         out = []
         for c in columns:
-            for ch in self.chunks_of(self.layout.kind_of[c], wy0, wy1, wx0, wx1):
+            kind = self.layout.kind_of[c]
+            for ch in self.chunks_of(kind, wy0, wy1, wx0, wx1):
                 if c == "mask" and ch not in self.masked:
+                    continue
+                if self.skipped(kind, *ch, wy0, wy1, wx0, wx1):
                     continue
                 out.append((c,) + ch)
         return out
@@ -952,7 +998,8 @@ class RVQParquetReader:
         Returns {"base": (h, w, n), tier name: (h, w, L, n) for each
         tier outside base read at L > 0, "quality": (h, w, n), "valid":
         (h * W, w * W) pixel validity, False beyond the product}, with
-        only the parts asked for."""
+        only the parts asked for. Windows without a valid pixel that were
+        not fetched have zero records."""
         if depths is None:
             depths = [t.levels for t in self.layout.tiers]
         cols = self.columns_for(depths, base, mask, quality)
@@ -966,6 +1013,8 @@ class RVQParquetReader:
             n = self.layout.groups[kind].chunk_windows
             arr = np.zeros((gh, gw, col.n_values), np.int64)
             for i, j in self.chunks_of(kind, wy0, wy1, wx0, wx1):
+                if (name, i, j) not in vals:
+                    continue
                 y0, x0 = i * n, j * n
                 sy0, sy1 = max(wy0, y0), min(wy1, y0 + n)
                 sx0, sx1 = max(wx0, x0), min(wx1, x0 + n)
@@ -996,6 +1045,8 @@ class RVQParquetReader:
                 sy0, sy1 = max(y0, py0), min(y0 + gh * W, py0 + bh)
                 sx0, sx1 = max(x0, px0), min(x0 + gw * W, px0 + bw)
                 if sy1 <= sy0 or sx1 <= sx0:
+                    continue
+                if self.skipped(kind, i, j, wy0, wy1, wx0, wx1):
                     continue
                 if (i, j) in self.masked:
                     blk = decode_mask(vals[("mask", i, j)], (bh, bw))

@@ -286,7 +286,7 @@ def test_geo_metadata_and_header(tmp_path, mask):
     assert g["covering"]["bbox"]["xmin"] == ["bbox", "xmin"]
     assert g["bbox"] == [500000.0, 4000000.0 - H * 10, 500000.0 + W * 10, 4000000.0]
     hdr = json.loads(md[b"georvq"])
-    assert hdr["version"] == "1.0"
+    assert hdr["version"] == "1.1"
     lay = gp.Layout.from_json(hdr["layout"])
     assert lay.to_json() == _layout().to_json()
     groups = {x["kind"]: x for x in hdr["layout"]["groups"]}
@@ -300,6 +300,91 @@ def test_geo_metadata_and_header(tmp_path, mask):
     m = hdr["layout"]["mask"]
     assert m["kind"] == "base" and m["codec"] == "packbits-zlib"
     assert m["chunks"] == [[0, 0]]
+
+
+# --------------------------------------------------------------------------
+# empty chunks
+# --------------------------------------------------------------------------
+
+@pytest.fixture
+def east_nodata():
+    """Valid west of column 24 only: window columns 6..12 have no valid
+    pixel, so fine chunk columns 3..6 and mid chunk columns 2..3 are
+    empty, and mid chunk column 1 is partial."""
+    valid = np.ones((H, W), bool)
+    valid[:, 24:] = False
+    return valid
+
+
+def test_empty_chunks_are_null(tmp_path, east_nodata):
+    vals = _write(tmp_path / "a.parquet", valid=east_nodata)
+    _write(tmp_path / "dense.parquet")
+    size = os.path.getsize(tmp_path / "a.parquet")
+    dense = os.path.getsize(tmp_path / "dense.parquet")
+    fine_bytes = sum(_layout().columns[f"fine_{l}"].record_bytes
+                     for l in (1, 2, 3)) * 4
+    mid_bytes = sum(_layout().columns[f"mid_{l}"].record_bytes
+                    for l in (1, 2)) * 16
+    assert dense - size >= 20 * fine_bytes + 6 * mid_bytes
+    md = pq.read_metadata(tmp_path / "a.parquet")
+    hdr = json.loads(md.metadata[b"georvq"])
+    empty = {g["kind"]: g["empty_chunks"] for g in hdr["layout"]["groups"]}
+    assert empty == {"base": [], "quality": [],
+                     "mid": [[i, j] for i in range(3) for j in (2, 3)],
+                     "fine": [[i, j] for i in range(5) for j in range(3, 7)]}
+    t = pq.read_table(tmp_path / "a.parquet", filters=[("kind", "=", "fine")])
+    for row in t.to_pylist():
+        null = row["chunk_col"] >= 3
+        assert all((row[f"fine_{l}"] is None) == null for l in (1, 2, 3))
+    t = pq.read_table(tmp_path / "a.parquet", filters=[("kind", "=", "mid")])
+    assert [r["mid_1"] is None for r in t.to_pylist()] == [
+        j >= 2 for i in range(3) for j in range(4)]
+    with gp.RVQParquetReader(tmp_path / "a.parquet") as r:
+        assert r.empty["fine"] == {(i, j) for i in range(5) for j in range(3, 7)}
+        assert r.dead[:, 6:].all() and not r.dead[:, :6].any()
+        got = r.read(0, 10, 0, 13, quality=True)
+        live = np.zeros((10, 13), bool)
+        live[:, :6] = True
+        for k, v in vals.items():
+            t, _, l = k.partition("_")
+            g = got[t][:, :, int(l) - 1] if l else got[k]
+            assert (g[live] == v[live]).all(), k
+        assert not got["fine"][:, 6:].any() and not got["mid"][:, 8:].any()
+        # windows 6 and 7 are dead in the partial mid chunk column 1, and
+        # keep the records they were given
+        assert (got["mid"][:, 6:8, 0] == vals["mid_1"][:, 6:8]).all()
+        assert (got["valid"][:H, :W] == east_nodata).all()
+
+
+def test_reads_over_empty_chunks_fetch_nothing(tmp_path, east_nodata):
+    _write(tmp_path / "a.parquet", valid=east_nodata)
+    with gp.RVQParquetReader(tmp_path / "a.parquet", first_read=1024) as r:
+        # windows (2..5, 7..12) lie in empty fine chunks; base, mid and the
+        # mask are not fetched for them either
+        assert r.plan(2, 5, 7, 13, depths=FULL, quality=True) == []
+        before = dict(r.stats)
+        got = r.read(2, 5, 7, 13, depths=FULL, quality=True)
+        assert r.stats == before
+        assert not got["valid"].any()
+        assert not got["base"].any() and not got["fine"].any()
+        # a region touching one live window fetches its chunks only
+        needs = r.needs(2, 3, 5, 7, r.columns_for(FULL))
+        assert {(n[0], n[1], n[2]) for n in needs if n[0].startswith("fine")} \
+            == {(f"fine_{l}", 1, 2) for l in (1, 2, 3)}
+        # a whole-product read is still one range
+        assert len(r.plan(0, 10, 0, 13, depths=FULL, quality=True)) == 1
+
+
+def test_wholly_invalid_product(tmp_path):
+    _write(tmp_path / "a.parquet", valid=np.zeros((H, W), bool))
+    t = pq.read_table(tmp_path / "a.parquet")
+    for c in _layout().column_order:
+        assert set(t.column(c).to_pylist()) == {None}, c
+    with gp.RVQParquetReader(tmp_path / "a.parquet", first_read=1024) as r:
+        assert r.dead.all() and r.plan(0, 10, 0, 13, quality=True) == []
+        got = r.read(0, 10, 0, 13, quality=True)
+        assert not got["valid"].any() and not got["base"].any()
+        assert not r.read_mask(0, H, 0, W).any()
 
 
 # --------------------------------------------------------------------------
