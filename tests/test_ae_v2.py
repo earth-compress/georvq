@@ -259,6 +259,17 @@ def test_point_read_is_one_request_per_tier_then_cached(setup):
         assert rd.plan(6, 7, 4, 5, quality=True) == []
 
 
+def test_header_records_the_given_source(setup):
+    with v2.open_dataset(setup["file"], codec=setup["codec"]) as ds:
+        assert ds.product["source"] == str(setup["src"])
+    out = setup["tmp"] / "named.georvq.parquet"
+    url = "https://data.source.coop/tge-labs/aef/v1/annual/tile.tiff"
+    v2.encode_tile(setup["src"], out, setup["codec"], stats=False,
+                   chunk_px=CHUNK_PX, strip_px=48, batch=256, source=url)
+    with v2.open_dataset(out, codec=setup["codec"]) as ds:
+        assert ds.product["source"] == url
+
+
 def test_empty_chunk_reads_as_nodata_without_a_request(setup):
     # the fixture's corner widened to cover fine chunk (0, 0), north-up
     # rows 0..31 and columns 0..31

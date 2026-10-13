@@ -20,6 +20,7 @@ dependencies = [
     "pydantic>=2.5",
     "pyyaml",
     "rasterio",   # AE release layer: tile encode, GeoTIFF and COG output
+    "huggingface_hub",   # release bundles named by a file's header
 ]
 
 [project.optional-dependencies]
