@@ -1,5 +1,13 @@
 # The .gvq format (draft for review)
 
+**Status: placeholder.** Version 1 is a first, deliberately simple
+format, written to ship the AE v2 release. It is expected to be
+replaced or substantially revised, for example to add entropy coding of
+the code indices or to change the chunk layout once real access
+patterns are measured. Files carry their major version in the preamble,
+so a later reader can refuse or convert a version 1 file, but nothing
+about this layout should be treated as a long-term standard.
+
 A `.gvq` file holds one source data product compressed by a georvq
 codec: one AlphaEarth tile, one Tessera tile, one Sentinel-2 SAFE. It is
 built so that a reader can turn "this window, at this rate" into a few
