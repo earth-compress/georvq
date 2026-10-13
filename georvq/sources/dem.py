@@ -76,6 +76,13 @@ class DEMSource(Source):
     def normalizer(self, model_cfg):
         return self._norm
 
+    def side_bits(self, cfg) -> float:
+        """The window's mean and std, sent as two float32 values, which is
+        how decode uses them. A cheaper encoding is a separate decision:
+        float16 spaces values 8 m apart above 8,192 m, which would land
+        directly in the reconstructed elevations."""
+        return 64.0
+
     def recon_stats(self, out, x, valid):
         mse, _ = masked_recon_stats(out, x, valid)
         return mse, {"mse": mse, "r2": masked_r2(out, x, valid)}

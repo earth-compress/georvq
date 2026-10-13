@@ -26,8 +26,9 @@ def canonical_tuples(specs, mins=None, sampling="nested"):
     - "path": the truncation path fills each tier to its depth before the
       next begins -- (4,0,0)...(8,0,0),(8,1,0)...(8,8,0),(8,8,1)... A
       balanced tuple like 4-4-4 is not on it and is never trained. It is
-      also strictly dominated in rate-distortion terms (`docs/FINDINGS.md`
-      on the efficient ladder), so it is not a point anyone would ship.
+      also strictly dominated in rate-distortion terms
+      (lab/findings/rate-ladder-asymmetry.md), so it is not a point
+      anyone would ship.
     - "nested": any monotone tuple is trainable, and the historical
       half-ladder point is meaningful.
 
