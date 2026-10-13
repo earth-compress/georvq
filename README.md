@@ -1,7 +1,5 @@
 # georvq
 
-Draft for review: the AlphaEarth quickstart, its paragraph under Ship, the install block and the Tests note are new and not yet approved.
-
 Pyramidal residual-VQ compression for geospatial datasets.
 
 Prefix-able bitstreams that offer the entire rate–distortion front from a single encode and write: georvq trains
@@ -67,9 +65,8 @@ pip install -e ".[train,loc,archive,eval,viz,dev]"  # everything
 
 ## Quickstart: the AlphaEarth release codec
 
-AE v2 codes each source tile as one `{stem}.georvq.parquet` file that
-reads like the source tile, at 23 rates; full contract in
-`docs/AE_RELEASE.md`.
+The most mature part of the codebase currently is the AlphaEarth release. Working with the AE codec to get real data and decode it
+takes five steps. For more detailed information about the release, see `docs/AE_RELEASE.md`.
 
 ```bash
 # 1. install (add ".[onnx]" for torch-free decode)
@@ -88,11 +85,13 @@ ds = georvq.ae.open("<url or path>/annual/2021/44N/<stem>.georvq.parquet")
 a = ds.read(window=((0, 1024), (0, 1024)), quality="p99<=0.02")
 ```
 
-The file names the release that decodes it; `open` finds that release's
-bundle in a local cache or downloads it from Hugging Face. Decoding runs
+The file names the release that decodes it, so when you first `open` a file that uses the codec, the
+bundle will be automatically downloaded from Hugging Face. Decoding runs
 on torch, or on ONNX Runtime when torch is not installed.
 
 ## Train
+
+Training of models with georvq, as with any repo, requires a lot of data set up before it can run. If you're interested in training a georvq model for new sources, check out the section below that has some details about the data format used during training.
 
 ```bash
 # standard 64px 3-tier pyramid on an AlphaEarth chip store
