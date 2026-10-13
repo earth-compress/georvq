@@ -1,6 +1,6 @@
-"""AE v2 release layer: a synthetic bottom-up tile through encode, the
-rasterio-like reader and reconstruction, against a tiny stats_cond model
-trained for a few steps on CPU."""
+"""AE v2 release layer: a synthetic bottom-up tile through encode to a
+georvq GeoParquet file, the rasterio-like reader and reconstruction,
+against a tiny stats_cond model trained for a few steps on CPU."""
 import numpy as np
 import pytest
 import torch
@@ -14,7 +14,7 @@ from georvq.ae.cli import requant_ae_np  # noqa: E402
 from georvq.config import TierSpec, load_config  # noqa: E402
 from georvq.factory import build_model  # noqa: E402
 from georvq.inference.api import Codec  # noqa: E402
-from georvq.inference.gvq import GVQReader  # noqa: E402
+from georvq.inference.georvq_parquet import RVQParquetReader  # noqa: E402
 from georvq.inference.mean_codec import RVQPCAMeanChannel  # noqa: E402
 from georvq.model.codec import sample_path_depths  # noqa: E402
 
@@ -22,7 +22,7 @@ H, WD, WIN = 200, 168, 16
 TIERS = "model.tiers=['1:16:32:3','2:8:32:2','4:8:16:2']"
 STATS = ("model.stats_cond={subtract_mean: true, cond_encoder: true, "
          "cond_decoder: true, bits_per_band: 6}")
-CHUNK_PX = {"base": 64, "mid": 32, "fine": 32, "quality": 64}
+BLOCK_PX = 64
 
 
 def _field(h, w, seed=0):
@@ -109,9 +109,9 @@ def setup(tmp_path_factory):
         ds.update_tags(AREA_OR_POINT="Area")
         for b in range(1, 65):
             ds.set_band_description(b, f"A{b - 1:02d}")
-    out = tmp / "tile.gvq"
-    v2.encode_tile(src, out, codec, stats=True, chunk_px=CHUNK_PX, batch=256)
-    return {"codec": codec, "src": src, "gvq": out, "north": north,
+    out = tmp / "tile.georvq.parquet"
+    v2.encode_tile(src, out, codec, stats=True, block_px=BLOCK_PX, batch=256)
+    return {"codec": codec, "src": src, "file": out, "north": north,
             "valid": valid, "t_north": t_north, "tmp": tmp}
 
 
@@ -137,7 +137,7 @@ def _direct(setup, depths):
 
 
 def test_full_depth_read_equals_direct_decode(setup):
-    with v2.open_dataset(setup["gvq"], codec=setup["codec"]) as ds:
+    with v2.open_dataset(setup["file"], codec=setup["codec"]) as ds:
         got = ds.read()
     want = _direct(setup, setup["codec"].full)[:, ::-1]
     assert got.dtype == np.int8 and got.shape == (64, H, WD)
@@ -145,14 +145,14 @@ def test_full_depth_read_equals_direct_decode(setup):
 
 
 def test_rung_read_equals_direct_decode(setup):
-    with v2.open_dataset(setup["gvq"], codec=setup["codec"]) as ds:
+    with v2.open_dataset(setup["file"], codec=setup["codec"]) as ds:
         got = ds.read(quality="3-1-0")
     assert np.array_equal(got, _direct(setup, (3, 1, 0))[:, ::-1])
 
 
 def test_georeferencing_matches_the_source(setup):
     with rasterio.open(setup["src"]) as s, \
-            v2.open_dataset(setup["gvq"]) as ds:
+            v2.open_dataset(setup["file"]) as ds:
         assert ds.transform == s.transform
         assert ds.crs == s.crs
         assert (ds.width, ds.height, ds.count) == (s.width, s.height, s.count)
@@ -165,7 +165,7 @@ def test_georeferencing_matches_the_source(setup):
 
 def test_orientation_and_nodata_follow_the_source(setup):
     with rasterio.open(setup["src"]) as s, \
-            v2.open_dataset(setup["gvq"], codec=setup["codec"]) as ds:
+            v2.open_dataset(setup["file"], codec=setup["codec"]) as ds:
         src = s.read()
         got = ds.read()
         assert np.array_equal(ds.read_masks(), src[0] != v2.NODATA)
@@ -183,7 +183,7 @@ def test_orientation_and_nodata_follow_the_source(setup):
 
 
 def test_window_read_is_a_crop_of_the_full_read(setup):
-    with v2.open_dataset(setup["gvq"], codec=setup["codec"]) as ds:
+    with v2.open_dataset(setup["file"], codec=setup["codec"]) as ds:
         full = ds.read(quality=(3, 2, 1))
         part = ds.read(window=Window(19, 37, 50, 70), quality="3-2-1")
         band = ds.read(5, window=((150, 200), (100, 168)), quality="3-2-1")
@@ -194,11 +194,10 @@ def test_window_read_is_a_crop_of_the_full_read(setup):
 def test_quality_codes_fall_along_the_ladder(setup):
     codec = setup["codec"]
     n = len(codec.rungs)
-    with GVQReader(setup["gvq"]) as rd:
-        q = rd.read_records("quality", 1, 0, *rd.window_grid[:1], 0,
-                            rd.window_grid[1])[:, :, 0]
-        live = rd.read_records("base", 1, 0, rd.window_grid[0], 0,
-                               rd.window_grid[1])[:, :, 0].any(-1)
+    with RVQParquetReader(setup["file"]) as rd:
+        got = rd.read(0, rd.window_grid[0], 0, rd.window_grid[1],
+                      depths=(0, 0, 0), mask=False, quality=True)
+        q, live = got["quality"], got["base"].any(-1)
     mean = q[live][:, :n].astype(int)
     assert (mean > 0).all()
     steps = np.diff(mean, axis=1)
@@ -209,14 +208,14 @@ def test_quality_codes_fall_along_the_ladder(setup):
 
 
 def test_quality_bound_picks_rungs_per_window(setup):
-    with v2.open_dataset(setup["gvq"], codec=setup["codec"]) as ds:
+    with v2.open_dataset(setup["file"], codec=setup["codec"]) as ds:
         loose = ds.read(quality="mean<=1.0")
         cheapest = ds.read(quality=ds.rungs[0])
         assert np.array_equal(loose, cheapest)
         assert np.array_equal(ds.read(quality="p99<=0"), ds.read())
-        q = v2.quality_value(ds.reader.read_records(
-            "quality", 1, 0, ds.reader.window_grid[0], 0,
-            ds.reader.window_grid[1])[:, :, 0, :len(ds.rungs)])
+        q = v2.quality_value(ds.quality_codes(
+            0, ds.reader.window_grid[0], 0,
+            ds.reader.window_grid[1])[..., :len(ds.rungs)])
         bound = float(np.median(q[..., 3]))
         pick = ds.window_rungs(f"mean<={bound}")
         assert len(np.unique(pick)) > 1
@@ -233,18 +232,21 @@ def test_quality_bound_picks_rungs_per_window(setup):
         assert np.array_equal(north[sl], full[k][sl])
 
 
-def test_partial_read_fetches_only_its_chunks(setup):
-    with v2.open_dataset(setup["gvq"], codec=setup["codec"]) as ds:
+def test_partial_read_is_one_request_per_block(setup):
+    with v2.open_dataset(setup["file"], codec=setup["codec"], first_read=4096,
+                         gap=0) as ds:
         before = dict(ds.reader.stats)
         ds.read(window=Window(64, H - 16, 16, 16), quality="3-1-0")
-        req = ds.reader.stats["requests"] - before["requests"]
-    # base and mid chunk, the mask table and one mask block; fine not read
-    assert req <= 5
+        assert ds.reader.stats["requests"] - before["requests"] == 1
+        # a window across four blocks, at a rung with fine levels
+        before = dict(ds.reader.stats)
+        ds.read(window=Window(60, 60, 10, 20), quality="3-2-1")
+        assert ds.reader.stats["requests"] - before["requests"] == 4
 
 
 def test_reconstruct_keeps_the_source_profile(setup):
     out = setup["tmp"] / "recon.tif"
-    with v2.open_dataset(setup["gvq"], codec=setup["codec"]) as ds:
+    with v2.open_dataset(setup["file"], codec=setup["codec"]) as ds:
         v2.reconstruct(ds, out, quality="3-2-1", rows=64)
         want = ds.read(quality="3-2-1")
     with rasterio.open(setup["src"]) as s, rasterio.open(out) as r:
@@ -265,13 +267,27 @@ def test_ae_instance_layout_matches_the_spec():
     ch = RVQPCAMeanChannel(np.zeros((2, 4096, 64)), np.zeros(64), np.eye(64),
                            np.ones(64), bits, np.ones(64))
     assert ch.cost_bits() == 440
-    secs = {s.name: s for s in v2.layout(specs, 64, ch, n_rungs=23,
-                                         window_grid=(128, 128))}
-    assert [(s.chunk_windows, s.levels, s.record_bytes, s.chunk_bytes)
-            for s in secs.values()] == [
-        ((64, 64), 1, 66, 270336), ((32, 32), 8, 26, 212992),
-        ((16, 16), 8, 448, 917504), ((64, 64), 1, 46, 188416)]
+    lay = v2.layout(specs, 64, ch, n_rungs=23)
+    assert lay.block_windows == 16
+    assert lay.column_order == (["base", "mask"] + [f"mid_{i}" for i in range(1, 9)]
+                                + [f"fine_{i}" for i in range(1, 9)] + ["quality"])
+    rb = {n: c.record_bytes for n, c in lay.columns.items()}
+    assert (rb["base"], rb["mid_1"], rb["fine_8"], rb["quality"]) == (66, 26, 448, 46)
+    # bytes of one block's value per column
+    assert [rb[n] * 256 for n in ("base", "mid_1", "fine_1", "quality")] == [
+        16896, 6656, 114688, 11776]
+    assert [t.name for t in lay.tiers] == ["coarse", "mid", "fine"]
+    assert lay.tiers[0].in_base
     assert v2.rung_bits(specs, (8, 8, 2), ch) == 440 + 88 + 8 * 16 * 13 + 2 * 256 * 14
+
+
+def test_output_name_and_info(setup, capsys):
+    from georvq.inference.georvq_parquet import output_name
+    assert output_name("/x/y/x21yf-0000008192-0000000000.tiff") == \
+        "x21yf-0000008192-0000000000.georvq.parquet"
+    assert v2.main(["info", str(setup["file"])]) == 0
+    out = capsys.readouterr().out
+    assert "georvq-parquet" in out and "fine" in out and "footer" in out
 
 
 def test_quality_code_round_trip():

@@ -1,23 +1,25 @@
-"""AlphaEarth v2 release layer: annual tiles in the .gvq container.
+"""AlphaEarth v2 release layer: annual tiles as georvq GeoParquet files.
 
 An AE v2 file holds one AlphaEarth annual tile (64-band int8, nodata
 -128) coded by a `stats_cond` model whose per-window mean travels through
 an `RVQPCAMeanChannel`. The layout is the "AE v2 instance" of
-docs/GVQ_FORMAT.md:
+docs/GEORVQ_PARQUET.md: one row and one row group per 1024 px block,
+with columns
 
-- `base`, window-major: the mean channel's fields and every level of the
-  coarsest tier, one record per window;
-- one level-major section per finer tier (`mid`, `fine` for a
-  three-tier pyramid), so a depth prefix is one byte range per chunk;
-- `quality`, window-major and optional: per window and per rung, the
-  mean and p99 of per-pixel `1 - cos` measured at encode time;
-- variable sections `mask` (pixel validity, north-up) and `aux` (a
-  `source.json` member with the source's profile, tags and orientation).
+- `base`: per window, the mean channel's fields and every level of the
+  coarsest tier;
+- `mask`: the block's pixel validity (north-up), empty when fully valid;
+- `mid_1..mid_8`, `fine_1..fine_8` for a three-tier pyramid (otherwise
+  `tier1_*` and up): per level, the block's windows' codes, so a depth
+  prefix of a block is one contiguous byte range;
+- `quality`, optional: per window and per rung, the mean and p99 of
+  per-pixel `1 - cos` measured at encode time.
 
-Coded data is north-up. A bottom-up source (transform.e > 0, as the AEF
-tiles are stored) is flipped on encode, and `GVQDataset.read` returns
-rows in the source's own order, so it can stand in for the rasterio
-dataset of the source tile.
+The source's profile, tags and orientation are JSON in the file's
+`georvq_aux` metadata. Coded data is north-up. A bottom-up source
+(transform.e > 0, as the AEF tiles are stored) is flipped on encode, and
+`AEV2Dataset.read` returns rows in the source's own order, so it can
+stand in for the rasterio dataset of the source tile.
 
 Both ends condition on the coded mean: the encoder is run against
 `channel.round_trip(exact mean)`, and the decoder reads the same vector
@@ -31,7 +33,6 @@ from __future__ import annotations
 import argparse
 import contextlib
 import json
-import math
 import os
 import re
 import sys
@@ -41,17 +42,15 @@ import numpy as np
 import torch
 
 from georvq.inference.api import Codec
-from georvq.inference.gvq import GVQReader, GVQWriter, SectionSpec
+from georvq.inference.georvq_parquet import (Layout, RVQParquetReader,
+                                             RVQParquetWriter, output_name,
+                                             tier_names)
 from georvq.inference.mean_codec import RVQPCAMeanChannel
 
 NODATA = -128
 KIND = "aef-annual-tile"
 FORMAT = "georvq-ae/v2"
-AUX_MEMBER = "source.json"
-MASK_BLOCK_PX = 1024
-# Chunk side in pixels per section. For 64 px windows this gives the
-# chunk shapes of the AE v2 instance in docs/GVQ_FORMAT.md.
-CHUNK_PX = {"base": 4096, "mid": 2048, "fine": 1024, "quality": 4096}
+BLOCK_PX = 1024
 QUALITY_STATS = ("mean", "p99")
 # quality code = round(Q_SCALE * (log10(e) + Q_OFFSET)), clipped to 0..255
 Q_SCALE, Q_OFFSET, Q_FLOOR = 32.0, 6.0, 1e-6
@@ -70,13 +69,6 @@ def _index_bits(codes: int) -> int:
     return b
 
 
-def tier_sections(n_tiers: int) -> list:
-    """Section holding each tier: the coarsest rides in `base`."""
-    if n_tiers == 3:
-        return ["base", "mid", "fine"]
-    return ["base"] + [f"tier{i}" for i in range(1, n_tiers)]
-
-
 def mean_fields(channel) -> list:
     """The mean channel's record fields: the RVQ indices, then runs of
     PCA components sharing a bit width, named by their first component."""
@@ -93,31 +85,19 @@ def mean_fields(channel) -> list:
     return out
 
 
-def layout(specs, window: int, channel, n_rungs: int = 0, window_grid=None,
-           chunk_px=None) -> list:
-    """SectionSpecs of an AE v2 file. `n_rungs` 0 leaves out the quality
-    section. Chunks are `chunk_px // window` windows on a side, clipped
-    to `window_grid` when one is given so a small tile is not padded out
-    to a full chunk."""
-    px = dict(CHUNK_PX, **(chunk_px or {}))
-    names = tier_sections(len(specs))
-
-    def cw(name):
-        c = max(1, int(px.get(name, px["fine"])) // int(window))
-        if window_grid is None:
-            return (c, c)
-        return (min(c, int(window_grid[0])), min(c, int(window_grid[1])))
-
+def layout(specs, window: int, channel, n_rungs: int = 0,
+           block_px: int = BLOCK_PX) -> Layout:
+    """Columns of an AE v2 file. `n_rungs` 0 leaves out the quality
+    column. The coarsest tier's levels follow the mean in `base`."""
+    names = tier_names(len(specs))
     sp0 = specs[0]
-    out = [SectionSpec("base", cw("base"), 1, mean_fields(channel) + [
-        ("coarse", sp0.cells * sp0.depth, _index_bits(sp0.codes))])]
-    for name, sp in zip(names[1:], specs[1:]):
-        out.append(SectionSpec(name, cw(name), sp.depth,
-                               [(name, sp.cells, _index_bits(sp.codes))]))
-    if n_rungs:
-        out.append(SectionSpec("quality", cw("quality"), 1,
-                               [(s, n_rungs, 8) for s in QUALITY_STATS]))
-    return out
+    base = mean_fields(channel) + [
+        ("coarse", sp0.cells * sp0.depth, _index_bits(sp0.codes))]
+    tiers = [(names[0], sp0.depth, None)] + [
+        (name, sp.depth, [(name, sp.cells, _index_bits(sp.codes))])
+        for name, sp in zip(names[1:], specs[1:])]
+    quality = [(st, n_rungs, 8) for st in QUALITY_STATS] if n_rungs else None
+    return Layout(window, block_px, base, tiers, quality)
 
 
 def rung_bits(specs, depths, channel) -> int:
@@ -168,27 +148,48 @@ def _flip_rows(t, height):
 # --------------------------------------------------------------------------
 
 class BlockRecords:
-    """Records of the windows of one block, in block window coordinates.
+    """Records of the windows of an encoded pixel region, in the
+    region's own window coordinates.
 
-    rows, cols: (n,) window positions; records: {section: (levels, n,
-    n_values)} ready for `GVQWriter.write_records`; valid: the block's
-    pixel validity (unpadded); grid: the block's window grid. Windows
-    with no valid pixel are left out (their records stay zero)."""
+    rows, cols: (n,) positions of the coded windows; records: {group:
+    (levels, n, n_values)} for the groups `base`, each finer tier's name
+    and `quality`; valid: the region's pixel validity (unpadded); grid:
+    the region's window grid. Windows with no valid pixel are left out
+    and their records are zero."""
 
     def __init__(self, rows, cols, records, valid, grid):
         self.rows, self.cols = rows, cols
         self.records, self.valid, self.grid = records, valid, grid
 
-    def write(self, writer, row0=0, col0=0):
+    def dense(self) -> dict:
+        """{group: (rows, cols, n_values)} for base and quality, and
+        (rows, cols, levels, n_values) for a tier."""
+        gh, gw = self.grid
+        out = {}
         for name, arr in self.records.items():
-            for lev in range(arr.shape[0]):
-                writer.write_records(name, lev, self.rows + row0,
-                                     self.cols + col0, arr[lev])
+            L, _, nv = arr.shape
+            d = np.zeros((gh, gw, L, nv), np.int64)
+            d[self.rows, self.cols] = arr.transpose(1, 0, 2)
+            out[name] = d[:, :, 0] if name in ("base", "quality") else d
+        return out
+
+    def add_to(self, writer, block_row=0, block_col=0):
+        """Add the region's blocks to an RVQParquetWriter. The region's
+        top-left pixel is the corner of block (block_row, block_col)."""
+        n, b = writer.layout.block_windows, writer.layout.block_px
+        d = self.dense()
+        gh, gw = self.grid
+        for i in range(-(-gh // n)):
+            for j in range(-(-gw // n)):
+                sl = np.s_[i * n:(i + 1) * n, j * n:(j + 1) * n]
+                writer.add_block(block_row + i, block_col + j,
+                                 {k: v[sl] for k, v in d.items()},
+                                 self.valid[i * b:(i + 1) * b, j * b:(j + 1) * b])
 
 
 class AEV2Codec:
     """A stats_cond AE model with its mean channel, as used by the v2
-    container. Encoder passes run in fp32; decoder passes run in bf16 on
+    files. Encoder passes run in fp32; decoder passes run in bf16 on
     CUDA unless `bf16=False` (on CPU always fp32)."""
 
     def __init__(self, model, channel, bf16=None, rungs=None):
@@ -213,7 +214,7 @@ class AEV2Codec:
             self.specs, model.cfg.min_depths))]
         cuda = self.device.type == "cuda"
         self.bf16 = cuda if bf16 is None else (bool(bf16) and cuda)
-        self.names = tier_sections(len(self.specs))
+        self.names = tier_names(len(self.specs))
         self.n_mean = len(channel.field_widths())
         self.bitstream_id = bitstream_id(model, extra=channel.id_state())
         self.decoder_id = decoder_id(model)
@@ -233,9 +234,9 @@ class AEV2Codec:
         return (torch.autocast("cuda", dtype=torch.bfloat16) if self.bf16
                 else contextlib.nullcontext())
 
-    def layout(self, window_grid=None, quality=True, chunk_px=None):
+    def layout(self, quality=True, block_px=BLOCK_PX) -> Layout:
         return layout(self.specs, self.window, self.channel,
-                      len(self.rungs) if quality else 0, window_grid, chunk_px)
+                      len(self.rungs) if quality else 0, block_px)
 
     def header_codec(self, release=None) -> dict:
         return {"format": FORMAT, "bitstream_id": self.bitstream_id,
@@ -255,7 +256,7 @@ class AEV2Codec:
                 for r in self.rungs]
 
     def header_quality(self) -> dict:
-        return {"section": "quality", "stats": list(QUALITY_STATS),
+        return {"column": "quality", "stats": list(QUALITY_STATS),
                 "error": "1 - cos(decoded, source) per valid pixel, "
                          "decoded float field against the prepared source",
                 "encoding": "code = round(32 * (log10(e) + 6)) clipped to "
@@ -268,7 +269,7 @@ class AEV2Codec:
 
     @torch.no_grad()
     def encode_windows(self, raw, stats=True):
-        """raw: (B, C, W, W) int8 north-up windows. Returns ({section:
+        """raw: (B, C, W, W) int8 north-up windows. Returns ({group:
         (levels, B, n_values)}, x, valid) with x, valid the prepared
         device input."""
         dev = self.device
@@ -419,10 +420,21 @@ def _source_meta(ds) -> dict:
             "image_structure": ds.tags(ns="IMAGE_STRUCTURE")}
 
 
+def _projjson(crs):
+    if crs is None:
+        return None
+    try:
+        return crs.to_dict(projjson=True)
+    except (TypeError, AttributeError):
+        from pyproj import CRS
+        return CRS.from_wkt(crs.to_wkt()).to_json_dict()
+
+
 def encode_tile(src_path, out_path, codec: AEV2Codec, stats=True,
-                block_px=1024, batch=256, release=None, chunk_px=None,
-                log=None) -> dict:
-    """Encode one AE tile (GeoTIFF) to `out_path`. Returns timings."""
+                block_px=BLOCK_PX, batch=256, release=None, log=None) -> dict:
+    """Encode one AE tile (GeoTIFF) to `out_path`, conventionally
+    `output_name(src_path)`. Strips of `block_px` rows are encoded in
+    turn and split into blocks. Returns timings."""
     import rasterio
     from rasterio.windows import Window
     W = codec.window
@@ -438,13 +450,12 @@ def encode_tile(src_path, out_path, codec: AEV2Codec, stats=True,
         H, Wd = ds.height, ds.width
         bottom_up = ds.transform.e > 0
         north = _flip_rows(ds.transform, H) if bottom_up else ds.transform
-        grid = (-(-H // W), -(-Wd // W))
         meta = _source_meta(ds)
+        pid = os.path.splitext(os.path.basename(os.fspath(src_path)))[0]
         header = {
             "codec": codec.header_codec(release),
             "product": {
-                "kind": KIND,
-                "id": os.path.splitext(os.path.basename(os.fspath(src_path)))[0],
+                "kind": KIND, "id": pid,
                 "source": os.fspath(src_path),
                 "crs_wkt": ds.crs.to_wkt() if ds.crs else None,
                 "epsg": ds.crs.to_epsg() if ds.crs else None,
@@ -455,43 +466,47 @@ def encode_tile(src_path, out_path, codec: AEV2Codec, stats=True,
             "rungs": codec.header_rungs()}
         if stats:
             header["quality"] = codec.header_quality()
-        sections = codec.layout(grid, quality=stats, chunk_px=chunk_px)
-        valid = np.zeros((H, Wd), bool)
-        t_read = t_enc = 0.0
-        with GVQWriter(out_path, header, grid, sections) as w:
-            for y0 in range(0, H, block_px):
-                y1 = min(H, y0 + block_px)
-                s0, s1 = (H - y1, H - y0) if bottom_up else (y0, y1)
-                ta = time.time()
-                a = ds.read(window=Window(0, s0, Wd, s1 - s0))
-                if bottom_up:
-                    a = a[:, ::-1]
-                tb = time.time()
-                rec = codec.encode_block(a, stats=stats, batch=batch)
-                rec.write(w, row0=y0 // W)
-                valid[y0:y1] = rec.valid
-                t_read += tb - ta
-                t_enc += time.time() - tb
-                if log:
-                    log(f"rows {y1}/{H}: {len(rec.rows)} windows")
-            w.set_mask(valid, MASK_BLOCK_PX)
-            w.set_aux({AUX_MEMBER: json.dumps(meta, default=str).encode()})
-    return {"read_s": t_read, "encode_s": t_enc, "total_s": time.time() - t0}
+        lay = codec.layout(quality=stats, block_px=block_px)
+        t_read = t_enc = t_write = 0.0
+        w = RVQParquetWriter(out_path, header, lay, pid, list(north)[:6], H, Wd,
+                             crs=_projjson(ds.crs),
+                             aux=json.dumps(meta, default=str))
+        for y0 in range(0, H, block_px):
+            y1 = min(H, y0 + block_px)
+            s0, s1 = (H - y1, H - y0) if bottom_up else (y0, y1)
+            ta = time.time()
+            a = ds.read(window=Window(0, s0, Wd, s1 - s0))
+            if bottom_up:
+                a = a[:, ::-1]
+            tb = time.time()
+            rec = codec.encode_block(a, stats=stats, batch=batch)
+            tc = time.time()
+            rec.add_to(w, block_row=y0 // block_px)
+            t_read += tb - ta
+            t_enc += tc - tb
+            t_write += time.time() - tc
+            if log:
+                log(f"rows {y1}/{H}: {len(rec.rows)} windows")
+        tc = time.time()
+        w.close()
+        t_write += time.time() - tc
+    return {"read_s": t_read, "encode_s": t_enc, "write_s": t_write,
+            "total_s": time.time() - t0}
 
 
 # --------------------------------------------------------------------------
 # reading
 # --------------------------------------------------------------------------
 
-class GVQDataset:
+class AEV2Dataset:
     """Read-only, rasterio-like view of an AE v2 file.
 
     Georeferencing, shape and `read` follow the SOURCE tile, including a
     bottom-up row order, so code written against the source dataset can
     read this instead. `read` needs a codec; the metadata does not."""
 
-    def __init__(self, path_or_url, codec: AEV2Codec | None = None):
-        self.reader = GVQReader(path_or_url)
+    def __init__(self, path_or_url, codec: AEV2Codec | None = None, **reader_kw):
+        self.reader = RVQParquetReader(path_or_url, **reader_kw)
         self.name = self.reader.source
         h = self.header = self.reader.header
         p = self.product = h["product"]
@@ -514,7 +529,7 @@ class GVQDataset:
                           else north)
         self.rungs = [tuple(r["tuple"]) for r in h["rungs"]]
         self.full = tuple(int(t.split(":")[3]) for t in h["codec"]["tiers"])
-        self.names = tier_sections(len(self.full))
+        self.names = tier_names(len(self.full))
         self._meta = None
         self._crs = None
 
@@ -528,8 +543,7 @@ class GVQDataset:
     @property
     def source_meta(self) -> dict:
         if self._meta is None:
-            self._meta = (json.loads(self.reader.read_aux(AUX_MEMBER))
-                          if AUX_MEMBER in self.reader.aux_names() else {})
+            self._meta = json.loads(self.reader.aux) if self.reader.aux else {}
         return self._meta
 
     @property
@@ -596,18 +610,24 @@ class GVQDataset:
         return np.full(shape, self.rungs.index(t), np.int64)
 
     def _resolve_bound(self, stat, bound, wy0, wy1, wx0, wx1):
-        if "quality" not in self.reader.sections:
-            raise ValueError(f"{self.name}: no quality section to resolve a "
+        if self.reader.layout.quality is None:
+            raise ValueError(f"{self.name}: no quality column to resolve a "
                              "bound against")
         stats = self.header["quality"]["stats"]
         if stat not in stats:
             raise ValueError(f"quality stat {stat!r} not in {stats}")
         n = len(self.rungs)
-        q = self.reader.read_records("quality", 1, wy0, wy1, wx0, wx1)[:, :, 0]
+        q = self.quality_codes(wy0, wy1, wx0, wx1)
         k = stats.index(stat)
         ok = quality_value(q[..., k * n:(k + 1) * n]) <= bound
         first = np.where(ok.any(-1), ok.argmax(-1), n - 1)
         return first.astype(np.int64)
+
+    def quality_codes(self, wy0, wy1, wx0, wx1) -> np.ndarray:
+        """(rows, cols, stats * rungs) quality codes of windows
+        [wy0:wy1, wx0:wx1], in the north-up window grid."""
+        return self.reader.read(wy0, wy1, wx0, wx1, depths=[0] * len(self.full),
+                                base=False, mask=False, quality=True)["quality"]
 
     def window_rungs(self, quality, window=None) -> np.ndarray:
         """Rung index chosen for each coded window under `window`."""
@@ -651,21 +671,18 @@ class GVQDataset:
         rung_of = self._depth_map(quality, wy0, wy1, wx0, wx1)
         depth_of = np.array(self.rungs)[rung_of]           # (gh, gw, tiers)
 
-        valid = np.zeros((gh * W, gw * W), bool)
-        py1, px1 = min(self.height, wy1 * W), min(self.width, wx1 * W)
-        valid[:py1 - wy0 * W, :px1 - wx0 * W] = self.reader.read_mask(
-            wy0 * W, py1, wx0 * W, px1)
-        vwin = valid.reshape(gh, W, gw, W).transpose(0, 2, 1, 3)
+        # One fetch covers the mask, base and every level any window
+        # needs. Windows without valid pixels resolve to the cheapest
+        # rung, so they do not raise the depth read.
+        need = depth_of.reshape(-1, depth_of.shape[-1]).max(0)
+        got = self.reader.read(wy0, wy1, wx0, wx1, depths=[int(v) for v in need])
+        vwin = got["valid"].reshape(gh, W, gw, W).transpose(0, 2, 1, 3)
         live = vwin.any((2, 3))
 
         out = np.full((self.count, gh * W, gw * W), NODATA, np.int8)
         if live.any():
-            base = self.reader.read_records("base", 1, wy0, wy1, wx0, wx1)[:, :, 0]
-            tiers = []
-            for t, name in enumerate(self.names[1:], start=1):
-                need = int(depth_of[..., t][live].max())
-                tiers.append(None if need == 0 else self.reader.read_records(
-                    name, need, wy0, wy1, wx0, wx1))
+            base = got["base"]
+            tiers = [got.get(name) for name in self.names[1:]]
             for k in np.unique(rung_of[live]):
                 r = self.rungs[k]
                 ys, xs = np.nonzero(live & (rung_of == k))
@@ -694,15 +711,16 @@ class GVQDataset:
 
 
 def open_dataset(path_or_url, model=None, channel=None, device="cpu",
-                 bf16=None, codec=None) -> GVQDataset:
-    """Open an AE v2 .gvq file. `model` (a checkpoint path or a model)
+                 bf16=None, codec=None, **reader_kw) -> "AEV2Dataset":
+    """Open an AE v2 file (a local path or an http(s) URL). `model` (a checkpoint path or a model)
     and `channel` (a .npz path or a channel) are needed to read pixels;
-    `codec` passes an AEV2Codec instead."""
+    `codec` passes an AEV2Codec instead. `reader_kw` go to
+    RVQParquetReader (`first_read`, `gap`)."""
     if codec is None and model is not None:
         if channel is None:
             raise ValueError("a model needs its mean channel")
         codec = AEV2Codec.load(model, channel, device=device, bf16=bf16)
-    return GVQDataset(path_or_url, codec)
+    return AEV2Dataset(path_or_url, codec, **reader_kw)
 
 
 open = open_dataset
@@ -710,7 +728,7 @@ open = open_dataset
 
 def reconstruct(src, out_path, quality=None, rows=1024, creation_options=None):
     """Decode a whole file into a GeoTIFF with the source's profile,
-    tags and band descriptions. `src` is an open GVQDataset."""
+    tags and band descriptions. `src` is an open AEV2Dataset."""
     import rasterio
     from rasterio.windows import Window
     prof = src.profile
@@ -728,9 +746,18 @@ def reconstruct(src, out_path, quality=None, rows=1024, creation_options=None):
             dst.write(src.read(window=win, quality=quality), window=win)
 
 
-def section_bytes(reader: GVQReader) -> dict:
-    out = {n: s.size(reader.window_grid) for n, s in reader.sections.items()}
-    out.update({n: int(d["length"]) for n, d in reader.variable.items()})
+def column_bytes(reader: RVQParquetReader) -> dict:
+    """Bytes per column group: the block metadata columns, `base`,
+    `mask`, each tier outside base, `quality`, and the footer."""
+    out = {}
+    tier_of = {c: t.name for t in reader.layout.tiers for c in t.columns
+               if not t.in_base}
+    for name, b in reader.column_bytes().items():
+        key = tier_of.get(name, name)
+        if key in ("product_id", "block_row", "block_col", "geometry", "bbox"):
+            key = "block_meta"
+        out[key] = out.get(key, 0) + b
+    out["footer"] = reader.metadata.serialized_size + 8
     return out
 
 
@@ -748,7 +775,8 @@ def _window_arg(s):
 def main(argv=None):
     ap = argparse.ArgumentParser(
         prog="python -m georvq.ae.v2",
-        description="AlphaEarth v2 codec: one annual tile <-> one .gvq file.")
+        description="AlphaEarth v2 codec: one annual tile <-> one "
+                    "georvq GeoParquet file.")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     def model_args(p):
@@ -760,54 +788,61 @@ def main(argv=None):
                        help="fp32 decoder passes on CUDA (default bf16)")
         p.add_argument("--batch", type=int, default=256)
 
-    e = sub.add_parser("encode", help="GeoTIFF tile -> .gvq")
+    e = sub.add_parser("encode", help="GeoTIFF tile -> .georvq.parquet")
     e.add_argument("src")
-    e.add_argument("out")
+    e.add_argument("out", nargs="?", default=None,
+                   help="output file or directory (default: "
+                        "{source stem}.georvq.parquet in the current directory)")
     model_args(e)
     e.add_argument("--no-quality", action="store_true",
-                   help="skip the per-rung quality section (one decode per rung)")
+                   help="skip the per-rung quality column (one decode per rung)")
     e.add_argument("--release", default=None)
 
-    d = sub.add_parser("decode", help=".gvq window -> .npy (source row order)")
+    d = sub.add_parser("decode", help="window -> .npy (source row order)")
     d.add_argument("src")
     d.add_argument("out")
     model_args(d)
     d.add_argument("--window", default=None, help="row,col,height,width")
     d.add_argument("--quality", default=None, help="e.g. 8-8-2 or p99<=0.02")
 
-    r = sub.add_parser("reconstruct", help=".gvq -> GeoTIFF with source profile")
+    r = sub.add_parser("reconstruct", help="file -> GeoTIFF with source profile")
     r.add_argument("src")
     r.add_argument("out")
     model_args(r)
     r.add_argument("--quality", default=None)
 
-    i = sub.add_parser("info", help="header summary and section sizes")
+    i = sub.add_parser("info", help="header summary and column sizes")
     i.add_argument("src")
     args = ap.parse_args(argv)
 
     if args.cmd == "info":
-        with GVQReader(args.src) as rd:
+        with RVQParquetReader(args.src) as rd:
             h = rd.header
-            print(json.dumps({k: h[k] for k in ("codec", "product", "windows")},
-                             indent=1))
+            print(json.dumps({k: h[k] for k in ("format", "version", "status",
+                                                "codec", "product")}, indent=1))
+            print(f"  blocks {rd.block_grid}, windows {rd.window_grid}, "
+                  f"{rd.layout.block_px} px blocks")
             for rr in h["rungs"]:
                 print(f"  {'-'.join(map(str, rr['tuple'])):>8}  "
                       f"{rr['bits_window']:>7} b/window  {rr['bits_px']:.4f} b/px")
-            for n, b in section_bytes(rd).items():
-                print(f"  {n:<8} {b:>12,} B")
-            print(f"  file     {os.path.getsize(args.src) if not rd._url else '?':>12} B")
+            for n, b in column_bytes(rd).items():
+                print(f"  {n:<10} {b:>12,} B")
+            print(f"  {'file':<10} {rd.size:>12,} B")
         return 0
 
     codec = AEV2Codec.load(args.model, args.channel, device=args.device,
                            bf16=not args.fp32)
     t0 = time.time()
     if args.cmd == "encode":
-        t = encode_tile(args.src, args.out, codec, stats=not args.no_quality,
+        out = args.out
+        if out is None or os.path.isdir(out):
+            out = os.path.join(out or ".", output_name(args.src))
+        t = encode_tile(args.src, out, codec, stats=not args.no_quality,
                         batch=args.batch, release=args.release,
                         log=lambda s: print(s, file=sys.stderr))
-        print(json.dumps(t))
+        print(json.dumps(dict(t, out=out)))
     elif args.cmd == "decode":
-        with GVQDataset(args.src, codec) as ds:
+        with AEV2Dataset(args.src, codec) as ds:
             a = ds.read(window=_window_arg(args.window), quality=args.quality,
                         batch=args.batch)
             np.save(args.out, a)
@@ -815,7 +850,7 @@ def main(argv=None):
                   f"{ds.reader.stats['requests']} requests, "
                   f"{ds.reader.stats['bytes']:,} B")
     elif args.cmd == "reconstruct":
-        with GVQDataset(args.src, codec) as ds:
+        with AEV2Dataset(args.src, codec) as ds:
             reconstruct(ds, args.out, quality=args.quality)
         print(f"{args.out} in {time.time() - t0:.1f}s")
     return 0
