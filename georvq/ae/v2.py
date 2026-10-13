@@ -61,7 +61,7 @@ from georvq.ae.v2_resolve import (RELEASE_NAME, RELEASE_URI, BundleError,
                                   resolve_codec)
 from georvq.inference.georvq_parquet import (Layout, RVQParquetReader,
                                              RVQParquetWriter, output_name,
-                                             tier_names)
+                                             span, tier_names)
 from georvq.inference.mean_codec import RVQPCAMeanChannel
 
 NODATA = -128
@@ -387,36 +387,49 @@ class AEV2Codec:
     # ---- decode ----
 
     @_no_grad
-    def decode_records(self, base, tiers, depths, valid):
+    def decode_records(self, base, tiers, depths, valid, trace=None):
         """base: (n, n_values) base records; tiers: per finer tier (n,
         levels_read, cells) codes, or None at depth 0; depths: the tuple; valid: (n, W, W)
-        bool. -> (n, C, W, W) int8 with invalid pixels at -128."""
-        out, v = self.decode_field(base, tiers, depths, valid)
-        return requant(out, v)
+        bool. -> (n, C, W, W) int8 with invalid pixels at -128. `trace`,
+        a georvq_parquet.Trace, records the decode stages; on CUDA each
+        stage then waits for the device before it ends."""
+        out, v = self.decode_field(base, tiers, depths, valid, trace)
+        with span(trace, "decode", "requantize", sync=self._sync(trace)):
+            return requant(out, v)
+
+    def _sync(self, trace):
+        if trace is None or self.device.type != "cuda":
+            return None
+        import torch
+        return torch.cuda.synchronize
 
     @_no_grad
-    def decode_field(self, base, tiers, depths, valid):
+    def decode_field(self, base, tiers, depths, valid, trace=None):
         """As decode_records, but returns the decoded float field (n, C,
         W, W) on the codec's device before requantization, and the
         validity as a device tensor."""
         import torch
         dev = self.device
+        sync = self._sync(trace)
         n = base.shape[0]
         sp0 = self.specs[0]
-        mean = torch.from_numpy(
-            self.channel.decode(base[:, :self.n_mean])).to(dev)
+        with span(trace, "decode", "mean channel", sync=sync):
+            mean = torch.from_numpy(
+                self.channel.decode(base[:, :self.n_mean])).to(dev)
         coarse = base[:, self.n_mean:].reshape(n, sp0.depth, sp0.cells)
         idx = [coarse.transpose(0, 2, 1)] + [
             None if t is None else t.transpose(0, 2, 1) for t in tiers]
         zqs = []
-        for rvq, sp, i, L in zip(self.model.rvqs, self.specs, idx, depths):
-            if int(L) == 0:
-                zqs.append(torch.zeros(n, sp.cells, sp.dim, device=dev))
-                continue
-            i = torch.from_numpy(np.ascontiguousarray(i)).to(dev)
-            zqs.append(_cumulative(rvq, i, int(L))[int(L)])
-        v = torch.from_numpy(np.ascontiguousarray(valid)).to(dev)
-        return self._forward(zqs, depths, mean, v), v
+        with span(trace, "decode", "codebook lookup", sync=sync):
+            for rvq, sp, i, L in zip(self.model.rvqs, self.specs, idx, depths):
+                if int(L) == 0:
+                    zqs.append(torch.zeros(n, sp.cells, sp.dim, device=dev))
+                    continue
+                i = torch.from_numpy(np.ascontiguousarray(i)).to(dev)
+                zqs.append(_cumulative(rvq, i, int(L))[int(L)])
+            v = torch.from_numpy(np.ascontiguousarray(valid)).to(dev)
+        with span(trace, "decode", "decoder forward", sync=sync):
+            return self._forward(zqs, depths, mean, v), v
 
 
 def requant(out, valid):
@@ -514,18 +527,23 @@ class AEV2OnnxCodec:
         self.decoder_id = meta["decoder_id"]
         self.bf16 = False
 
-    def decode_records(self, base, tiers, depths, valid):
-        """As AEV2Codec.decode_records."""
+    def decode_records(self, base, tiers, depths, valid, trace=None):
+        """As AEV2Codec.decode_records. The trace records the mean
+        channel, the ONNX graphs (codebook lookup and decoder together)
+        and requantization."""
         from georvq.ae.cli import requant_ae_np
         n = base.shape[0]
         sp0 = self.specs[0]
-        mean = self.channel.decode(base[:, :self.n_mean])
+        with span(trace, "decode", "mean channel"):
+            mean = self.channel.decode(base[:, :self.n_mean])
         coarse = base[:, self.n_mean:].reshape(n, sp0.depth, sp0.cells)
         idx = [coarse.transpose(0, 2, 1)] + [
             None if t is None else t.transpose(0, 2, 1) for t in tiers]
         valid = np.ascontiguousarray(valid, dtype=bool)
-        out = self.ort.decode(idx, depths, mean, valid)
-        return requant_ae_np(out, valid)
+        with span(trace, "decode", "lookup + decoder (onnx)"):
+            out = self.ort.decode(idx, depths, mean, valid)
+        with span(trace, "decode", "requantize"):
+            return requant_ae_np(out, valid)
 
 
 def load_codec(model=None, channel=None, device="cpu", bf16=None,
@@ -834,7 +852,9 @@ class AEV2Dataset:
         wy0, wy1 = ny0 // W, -(-ny1 // W)
         wx0, wx1 = nx0 // W, -(-nx1 // W)
         gh, gw = wy1 - wy0, wx1 - wx0
-        rung_of = self._depth_map(quality, wy0, wy1, wx0, wx1)
+        trace = self.reader.trace
+        with span(trace, "cpu", "resolve rungs"):
+            rung_of = self._depth_map(quality, wy0, wy1, wx0, wx1)
         depth_of = np.array(self.rungs)[rung_of]           # (gh, gw, tiers)
 
         # One fetch covers the mask, base and every level any window
@@ -856,10 +876,13 @@ class AEV2Dataset:
                     y, x = ys[i:i + batch], xs[i:i + batch]
                     fin = [tiers[t - 1][y, x, :r[t]] if r[t] else None
                            for t in range(1, len(r))]
+                    kw = {} if trace is None else {"trace": trace}
                     dec = self.codec.decode_records(base[y, x], fin, r,
-                                                    vwin[y, x])
-                    for d, yy, xx in zip(dec, y, x):
-                        out[:, yy * W:(yy + 1) * W, xx * W:(xx + 1) * W] = d
+                                                    vwin[y, x], **kw)
+                    with span(trace, "cpu", "assemble"):
+                        for d, yy, xx in zip(dec, y, x):
+                            out[:, yy * W:(yy + 1) * W,
+                                xx * W:(xx + 1) * W] = d
         out = out[:, ny0 - wy0 * W:ny1 - wy0 * W, nx0 - wx0 * W:nx1 - wx0 * W]
         if self.bottom_up:
             out = out[:, ::-1]
@@ -901,7 +924,8 @@ def open_dataset(path_or_url, model=None, channel=None, bundle=None,
     when `onnx_dir` is given). device: default cuda when the torch
     backend sees a GPU, else cpu. `record_cache_dir` is the
     RVQParquetReader's on-disk record cache; `reader_kw` go to it too
-    (`first_read`, `gap`, `concurrency`, `cache`, `cache_bytes`)."""
+    (`first_read`, `gap`, `concurrency`, `cache`, `cache_bytes`, and
+    `trace`, a georvq_parquet.Trace that also records the decode stages)."""
     if record_cache_dir is not None:
         reader_kw["cache_dir"] = record_cache_dir
     explicit = codec is not None
