@@ -91,6 +91,7 @@ from matplotlib.patches import Rectangle
 import rasterio
 from rasterio.warp import transform_bounds
 import rasterio.windows
+from rasterio.enums import Resampling
 
 import georvq.ae
 from georvq.ae.v2 import quality_value
@@ -685,7 +686,12 @@ file stores the tile's validity mask once, losslessly, and the reader
 writes -128 back wherever it is unset, so nodata comes back exactly. A
 window with no valid pixel is not coded, and a chunk with none is
 stored empty, which makes partial tiles smaller. The block shown is the
-one whose valid share is closest to one half.
+one whose valid share is closest to one half. In the AlphaEarth tiles
+nodata starts offshore, so the valid part of such a block is open sea,
+where the embeddings are close to constant. The colours are therefore
+fitted on the whole tile, which also holds land; fitted on the block
+alone they would stretch the small variation over the sea, down to the
+int8 steps of the source, across the full colour range.
 """)
 
 code("""
@@ -713,15 +719,16 @@ print(f"block ({ci}, {cj}), {frac[ci, cj]:.1%} valid: nodata pixels {nod_ref.sum
 print(f"reading an all-nodata block at 8-8-8: {empty_read[0]} requests, {mb(empty_read[1])}")
 
 cu = unit(c_ref)
-cp = PCARGB().fit(cu)
+c_over = csrc.read(out_shape=(csrc.count, 1024, 1024), resampling=Resampling.nearest)
+cu_over = unit(c_over)
+cp = PCARGB().fit(cu_over)                                   # colours from the whole tile
 cwin_t = rasterio.windows.transform(CWIN, cds.transform)
 fig, ax = plt.subplots(1, 3, figsize=(13, 4.6), constrained_layout=True)
-show(ax[0], cmask[::8, ::8], cds.transform * cds.transform.scale(8, 8), cmap="Greys_r",
-     vmin=-0.3, vmax=1.2, interpolation="nearest")
+show(ax[0], cp(cu_over), cds.transform * cds.transform.scale(8, 8), interpolation="nearest")
 x0, y0, x1, y1 = corners(cwin_t, 1024, 1024)
 ax[0].add_patch(Rectangle((x0 / 1e3, y0 / 1e3), (x1 - x0) / 1e3, (y1 - y0) / 1e3,
                           fill=False, ec=ORANGE, lw=1.5))
-ax[0].set_title(f"validity mask (white = valid)\\n{lonlat(cds.crs, cds.transform, cds.height, cds.width)}")
+ax[0].set_title(f"source tile, 1 px in 8 (grey = nodata)\\n{lonlat(cds.crs, cds.transform, cds.height, cds.width)}")
 show(ax[1], cp(cu), cwin_t); ax[1].set_title("source block (grey = nodata)")
 show(ax[2], cp(unit(c_dec)), cwin_t); ax[2].set_title("decoded at 8-8-2")
 plt.show()
@@ -776,15 +783,22 @@ except ImportError:
     print("duckdb is not installed; the same query works with read_parquet() in DuckDB")
 
 fig, ax = plt.subplots(figsize=(9, 4.4), constrained_layout=True)
+try:
+    import geopandas as gpd
+    land = gpd.read_file("https://naciscdn.org/naturalearth/110m/physical/ne_110m_land.zip")
+    land.plot(ax=ax, color="#e9e7e1", edgecolor="#c9c6bd", lw=0.4, zorder=0)
+except Exception as e:                       # no geopandas or no network: points only
+    print(f"no basemap ({type(e).__name__})")
 ax.scatter(tiles["lon"], tiles["lat"], s=tiles["file MB"] * 1.5, color=BLUE, alpha=0.85)
 for _, t in tiles.iterrows():
     ax.annotate(f"{t['year']} {t['zone']}\\n{t['file MB']:.0f} MB", (t["lon"], t["lat"]),
                 textcoords="offset points", xytext=(7, -4), fontsize=8, color=INK)
 ax.set_xlim(-180, 180); ax.set_ylim(-90, 90)
 ax.set_xticks(range(-180, 181, 60)); ax.set_yticks(range(-90, 91, 30))
-ax.grid(True, color="#e4e3df", lw=0.6)
+ax.grid(True, color="#e4e3df", lw=0.6, zorder=-1)
+ax.set_aspect("equal")
 ax.set_xlabel("longitude"); ax.set_ylabel("latitude")
-ax.set_title("tiles in the index (marker area by file size)")
+ax.set_title("tiles in the index (marker area by file size; land from Natural Earth)")
 plt.show()
 tiles.round(2)
 """)
