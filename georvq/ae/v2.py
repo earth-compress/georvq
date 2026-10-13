@@ -594,13 +594,15 @@ def _projjson(crs):
 def encode_tile(src_path, out_path, codec: AEV2Codec, stats=True,
                 chunk_px=None, strip_px=STRIP_PX, batch=256,
                 release=RELEASE_NAME, uri=RELEASE_URI, revision=None,
-                log=None) -> dict:
+                source=None, log=None) -> dict:
     """Encode one AE tile (GeoTIFF) to `out_path`, conventionally
     `output_name(src_path)`. Strips of `strip_px` rows are encoded in
     turn. chunk_px: per-kind chunk sizes, `chunk_sizes` by default.
     `release`, `uri` and `revision` are written to the header's
     `codec.release` (see georvq.ae.v2_resolve); `release=None` writes
-    none. Returns timings."""
+    none. `source` is recorded as the header's `product.source`, the
+    path or URL a reader is pointed to for the source tile (default
+    `src_path`). Returns timings."""
     import rasterio
     from rasterio.windows import Window
     W = codec.window
@@ -623,7 +625,7 @@ def encode_tile(src_path, out_path, codec: AEV2Codec, stats=True,
                 release_record(codec, release, uri, revision)),
             "product": {
                 "kind": KIND, "id": pid,
-                "source": os.fspath(src_path),
+                "source": os.fspath(src_path if source is None else source),
                 "crs_wkt": ds.crs.to_wkt() if ds.crs else None,
                 "epsg": ds.crs.to_epsg() if ds.crs else None,
                 "transform": list(north)[:6],
@@ -1074,6 +1076,9 @@ def main(argv=None):
     e.add_argument("--revision", default=None,
                    help="revision of the release's bundle (default: none, "
                         "the repository's default branch)")
+    e.add_argument("--source", default=None,
+                   help="path or URL of the source tile to record in the "
+                        "header (default: SRC as given)")
 
     d = sub.add_parser("decode", help="window -> .npy (source row order)")
     d.add_argument("src")
@@ -1188,7 +1193,7 @@ def main(argv=None):
     t = encode_tile(args.src, out, codec, stats=not args.no_quality,
                     batch=args.batch, release=args.release or None,
                     uri=args.release_uri, revision=args.revision,
-                    log=lambda s: print(s, file=sys.stderr))
+                    source=args.source, log=lambda s: print(s, file=sys.stderr))
     print(json.dumps(dict(t, out=out)))
     return 0
 
