@@ -64,7 +64,7 @@ submodules exist. Everything is assembled from one validated `Config`
 | `georvq/eval/` | Held-out extraction, probes, benchmark registry, codec A/B helpers |
 | `georvq/viz/` | Panel/GIF styling and builders |
 | `georvq/inference/` | Source-agnostic deployment machinery: `api.py` Codec/Packet, `stats_codec.py`, `archive.py` rANS (research tool), `refine.py` additive residual refinements, `mean_codec.py` the `stats_cond` channel on the wire, `release.py` bundles + bitstream/decoder ids, `onnx_backend.py` ONNX export + torch-free runtime, `georvq_parquet.py` the GeoParquet release container (layout, writer, range reader, record cache), `bitpack.py` fixed-width records, `onnx_stats.py` ONNX for transmitted-mean models |
-| `georvq/ae/` | **The AlphaEarth release codec** — AE-specific policy (pixel prep, 8* coarse sidecar, quality ladder, COG asset container, executables). See `docs/AE_RELEASE.md`. v2: `v2.py` (codec, `georvq.ae.open`, CLI), `v2_bundle.py`, `v2_resolve.py` (finding the bundle a file names), `index.py`; see `docs/AE_V2_RELEASE.md` |
+| `georvq/ae/` | **The AlphaEarth release codec**: `v2.py` (codec, `georvq.ae.open`, CLI), `v2_bundle.py`, `v2_resolve.py` (finding the bundle a file names), `index.py`. See `docs/AE_RELEASE.md`. `cli.py`, `cog.py` and `deblock.py` are the earlier release, kept so its bundles still load |
 | `georvq/tessera/` | **The Tessera release codec** — Tessera-specific policy (transmitted mean, rate ladder, fine-tier refinement). See `docs/TESSERA_RELEASE.md` |
 | `scripts/` | Thin drivers over the above (train, store builders, eval, archive, GIFs) |
 | `analysis/` | Source-characterisation and codec-diagnostic probes (`analysis/README.md`) |
@@ -129,9 +129,9 @@ python scripts/build_archive.py --ckpt <ckpt> --store-dir <dir> --out <dir>  # r
 
 
 # AlphaEarth release codec (georvq/ae — see docs/AE_RELEASE.md)
-georvq-ae-tile encode --model <bundle> src.tiff out_dir/    # -> COG assets
-georvq-ae-tile decode --model <bundle> out_dir/ recon.tif --quality "p90<=0.02"
-georvq-ae-export-onnx --ckpt <bundle> --out <onnx-dir>      # torch-free decode
+python -m georvq.ae.v2 encode src.tif out_dir/ --bundle <bundle>   # -> {stem}.georvq.parquet
+python -m georvq.ae.v2 decode tile.georvq.parquet out.npy --quality 8-8-2
+python -m georvq.ae.v2 export-onnx <onnx-dir> --bundle <bundle>   # torch-free decode
 
 # Tessera release codec (georvq/tessera — see docs/TESSERA_RELEASE.md)
 python scripts/build_release_tessera.py --ckpt <ckpt> --out <bundle>
@@ -151,9 +151,9 @@ python scripts/build_release_tessera.py --ckpt <ckpt> --out <bundle>
   is sent at all, on which tier carries a refinement, and on whether that
   refinement is a default or an opt-in — each difference measured, in
   `docs/AE_RELEASE.md` and `docs/TESSERA_RELEASE.md`.
-- **Data end user** (decode compressed data): for AlphaEarth, the
-  `georvq-ae-*` executables and the COG assets, with `docs/AE_RELEASE.md`
-  as the complete contract; for Tessera, `georvq.tessera` and
+- **Data end user** (decode compressed data): for AlphaEarth,
+  `georvq.ae.open` and the `{stem}.georvq.parquet` files, with
+  `docs/AE_RELEASE.md` as the complete contract; for Tessera, `georvq.tessera` and
   `docs/TESSERA_RELEASE.md`. Nothing in training concerns them.
 
 Smoke config for cheap end-to-end checks: `configs/smoke.yaml` (synthetic
@@ -186,8 +186,7 @@ cycle, with its settings verified against the original runs' logged argv:
   historically, and a short attempt here diverged. Don't present it as a
   working recipe.
 
-The S2, DEM and ERA5 presets are for sources still in development;
-`docs/SOURCES.md` names the current one for each.
+The S2, DEM and ERA5 presets are for sources still in development.
 
 Treat preset edits like code changes: they are claims about what
 reproduces a result.
