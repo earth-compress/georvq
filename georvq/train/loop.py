@@ -294,10 +294,6 @@ def train(cfg: Config, gpu=0):
               f"(last {cfg.train.freeze_head_blocks} blocks + head) for "
               f"{cfg.train.freeze_head_steps} steps", flush=True)
 
-    book_sync = (D.BookSync(model)
-                 if ddp_world > 1 and getattr(model, "rvqs", None) is not None
-                 and not (cfg.model.vq is not None and cfg.model.vq.freeze_books)
-                 else None)
     if ddp_world > 1:
         # Absorb prefill skew explicitly before the first real collective:
         # ranks reach this point many minutes apart because each fills its
@@ -502,9 +498,6 @@ def train(cfg: Config, gpu=0):
                           flush=True)
                     del zi
                 torch.cuda.empty_cache()
-            if ddp_world > 1:
-                # each rank fit its books on its own samples
-                D.broadcast_state(model)
             print(f"step {step}: codebooks fit via residual "
                   f"{v.init_mode} init", flush=True)
 
@@ -572,11 +565,7 @@ def train(cfg: Config, gpu=0):
             with amp:
                 zs = model.encode_levels(x, st, valid)
             mark_resets(model, step, first_reset)
-            if book_sync is not None:
-                book_sync.snapshot()
             zqs, commit, select = model.quantize(zs, Ls, loc=loc)
-            if book_sync is not None:
-                book_sync.sync()
             if pt is not None:
                 # straight replacement, not straight-through: these rows
                 # carry a clean gradient to the encoder
@@ -771,11 +760,6 @@ def train(cfg: Config, gpu=0):
             if use_wandb:
                 wandb.log(log, step=step + step0)
 
-        if ddp_world > 1 and step % cfg.train.val_interval == 0:
-            drift = D.state_checksum(model)
-            if D.is_main() and drift > 0:
-                print(f"step {step}: WARNING ranks disagree, max checksum "
-                      f"diff {drift:.3e}", flush=True)
         if (step % cfg.train.val_interval == 0
                 or step == cfg.train.steps) and D.is_main():
             canon_ts = list(canon.values())
