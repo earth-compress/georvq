@@ -1,11 +1,13 @@
 # Sources
 
+Draft for review: the AlphaEarth row's v2 mention is new and not yet approved.
+
 Where each data source currently stands. The repository does not rank
 sources; this table tracks maturity, not priority.
 
 | source | status | adapter | preset | release layer and contract |
 |---|---|---|---|---|
-| AlphaEarth | beta release (`ae-beta-v1`) | `georvq/sources/ae.py` | `configs/ae/pyr64.yaml` | `georvq/ae/`, `docs/AE_RELEASE.md` |
+| AlphaEarth | beta release (`ae-beta-v1`); v2 release in preparation | `georvq/sources/ae.py` | `configs/ae/pyr64.yaml` | `georvq/ae/`, `docs/AE_RELEASE.md`; v2 `georvq/ae/v2.py`, `docs/AE_V2_RELEASE.md` |
 | Tessera | beta release (`tessera-beta-v1`) | `georvq/sources/tessera.py` | `configs/tessera/tessera_vq8_k256_statscond.yaml` | `georvq/tessera/`, `docs/TESSERA_RELEASE.md` |
 | Sentinel-2 L1C | beta | `georvq/sources/s2.py` | `configs/s2/s2_pyr96.yaml` | none |
 | COPDEM | in development | `georvq/sources/dem.py` | `configs/dem/dem128.yaml` | none |

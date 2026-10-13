@@ -1,5 +1,7 @@
 # georvq
 
+Draft for review: the AE v2 quickstart, the AE v2 paragraph under Ship and its Docs entry are new and not yet approved.
+
 Pyramidal residual-VQ compression for geospatial datasets.
 
 Prefix-able bitstreams that offer the entire rate–distortion front from a single encode and write: georvq trains
@@ -100,6 +102,38 @@ is only the notebooks' default); decode-only use needs no GPU — pass
 `--backend onnx --model .../ae-beta-v1/onnx` for the torch-free path;
 `bundle/model.pt` is a torch pickle, so always verify the checksum.
 
+## Quickstart: the AlphaEarth v2 release codec
+
+AE v2 codes each source tile as one `{stem}.georvq.parquet` file that
+reads like the source tile, at 23 rates; full contract in
+`docs/AE_V2_RELEASE.md`. v1 above is unchanged.
+
+```bash
+# 1. install
+git clone <this repo> && cd georvq
+pip install -e ".[eval]"
+
+# 2. get the weights from Hugging Face   [pending: hosting]
+huggingface-cli download earth-compress/georvq-ae-v2 --local-dir georvq-ae-v2
+
+# 3. use it (--model/--channel until the bundle loader lands   [pending: bundle])
+python -m georvq.ae.v2 info   tile.georvq.parquet
+python -m georvq.ae.v2 decode tile.georvq.parquet out.npy \
+    --model <checkpoint> --channel <mean channel .npz> --quality 8-8-2
+python -m georvq.ae.v2 encode src.tif out_dir/ \
+    --model <checkpoint> --channel <mean channel .npz> --device cuda
+```
+
+```python
+import georvq.ae
+ds = georvq.ae.open("<url or path>/annual/2021/44N/<stem>.georvq.parquet",
+                    model="<checkpoint>", channel="<mean channel .npz>")
+a = ds.read(window=((0, 1024), (0, 1024)), quality="p99<=0.02")
+```
+
+Decoding needs torch for now; torch-free decode through ONNX is
+planned `[pending: onnx]`.
+
 ## Train
 
 ```bash
@@ -170,6 +204,19 @@ georvq-ae-tile encode --model <bundle> src.tiff out_dir/
 georvq-ae-tile decode --model <bundle> out_dir/ recon.tiff --quality "p90<=0.02"
 ```
 
+AE v2 (`georvq/ae/v2.py`, `docs/AE_V2_RELEASE.md`) codes the same tiles
+with a model that transmits each window's mean (440 bits per window),
+into one GeoParquet file per tile (`docs/GEORVQ_PARQUET.md`). The
+reader stands in for the source tile's rasterio dataset, fetches only
+the byte ranges a window and rate need, and picks a rate from 23 rungs
+(0.11-7.5 b/px) or from a bound on encode-time measured error:
+
+```python
+import georvq.ae
+ds = georvq.ae.open(url, model=ckpt, channel=mean_npz)   # [pending: bundle]
+a = ds.read(window=((0, 1024), (0, 1024)), quality="8-8-2")
+```
+
 The Tessera release (`georvq/tessera/`, `docs/TESSERA_RELEASE.md`) codes
 128-band embedding windows across 0.23–10.9 b/px, transmitting the patch
 mean as a side channel and offering an opt-in fine-tier refinement:
@@ -184,6 +231,7 @@ recon = R.decode(R.encode(x, valid=v), depths=[20, 20, 5], valid=v)
 
 - `docs/OVERVIEW.md` — codebase map, invariants, personas, working knowledge
 - `docs/AE_RELEASE.md` — the shipped AlphaEarth codec's complete contract
+- `docs/AE_V2_RELEASE.md` — the AlphaEarth v2 codec's contract (draft)
 - `docs/TESSERA_RELEASE.md` — the shipped Tessera codec's complete contract
 - `docs/ADDING_A_SOURCE.md` — the plug-point for new datasets
 - `docs/SOURCE_ONBOARDING.md` — measuring a new source into an architecture
