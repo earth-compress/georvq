@@ -29,12 +29,19 @@ Both ends condition on the coded mean: the encoder is run against
 back from the base record. Windows are coded independently, so any
 window can be decoded from its own records.
 
+Reading can also run without torch: `export_onnx` writes the model's
+graphs, codebooks and mean channel to a directory, and
+`open_dataset(path, backend="onnx", onnx_dir=...)` decodes through
+`AEV2OnnxCodec` with onnxruntime and numpy. This module imports torch
+only when the torch codec is used.
+
 The v1 release (georvq.ae.cli, georvq.ae.cog) is separate and unchanged.
 """
 from __future__ import annotations
 
 import argparse
 import contextlib
+import functools
 import json
 import os
 import re
@@ -42,9 +49,7 @@ import sys
 import time
 
 import numpy as np
-import torch
 
-from georvq.inference.api import Codec
 from georvq.inference.georvq_parquet import (Layout, RVQParquetReader,
                                              RVQParquetWriter, output_name,
                                              tier_names)
@@ -60,6 +65,17 @@ QUALITY_STATS = ("mean", "p99")
 Q_SCALE, Q_OFFSET, Q_FLOOR = 32.0, 6.0, 1e-6
 
 _GDAL_ENV = {"GDAL_NUM_THREADS": "ALL_CPUS"}
+
+
+def _no_grad(fn):
+    """torch.no_grad, imported on call: reading with the ONNX backend
+    (AEV2OnnxCodec) does not import torch."""
+    @functools.wraps(fn)
+    def run(*a, **kw):
+        import torch
+        with torch.no_grad():
+            return fn(*a, **kw)
+    return run
 
 
 # --------------------------------------------------------------------------
@@ -201,6 +217,7 @@ class AEV2Codec:
     CUDA unless `bf16=False` (on CPU always fp32)."""
 
     def __init__(self, model, channel, bf16=None, rungs=None):
+        from georvq.inference.api import Codec
         from georvq.inference.release import bitstream_id, decoder_id
         from georvq.model.codec import path_tuples
         self.model = model.eval()
@@ -239,6 +256,7 @@ class AEV2Codec:
         return cls(model, channel, bf16=bf16)
 
     def _ac(self):
+        import torch
         return (torch.autocast("cuda", dtype=torch.bfloat16) if self.bf16
                 else contextlib.nullcontext())
 
@@ -275,11 +293,12 @@ class AEV2Codec:
 
     # ---- encode ----
 
-    @torch.no_grad()
+    @_no_grad
     def encode_windows(self, raw, stats=True):
         """raw: (B, C, W, W) int8 north-up windows. Returns ({group:
         (levels, B, n_values)}, x, valid) with x, valid the prepared
         device input."""
+        import torch
         dev = self.device
         x, valid = self.model.source.prep(
             torch.from_numpy(np.ascontiguousarray(raw)), dev)
@@ -298,6 +317,7 @@ class AEV2Codec:
 
     def _quality(self, stacked, mean, x, valid):
         """(B, 2 * n_rungs) codes: per rung, mean and p99 of 1 - cos."""
+        import torch
         dev = self.device
         idx = [torch.from_numpy(s).to(dev) for s in stacked]
         cums = [_cumulative(rvq, t, sp.depth)
@@ -316,6 +336,7 @@ class AEV2Codec:
         return np.concatenate([m, p], 1).astype(np.int64)
 
     def _forward(self, zqs, depths, mean, valid):
+        import torch
         B = mean.shape[0]
         Ls = torch.tensor(list(depths), device=self.device)[None].expand(B, -1)
         with self._ac():
@@ -356,7 +377,7 @@ class AEV2Codec:
 
     # ---- decode ----
 
-    @torch.no_grad()
+    @_no_grad
     def decode_records(self, base, tiers, depths, valid):
         """base: (n, n_values) base records; tiers: per finer tier (n,
         levels_read, cells) codes, or None at depth 0; depths: the tuple; valid: (n, W, W)
@@ -364,11 +385,12 @@ class AEV2Codec:
         out, v = self.decode_field(base, tiers, depths, valid)
         return requant(out, v)
 
-    @torch.no_grad()
+    @_no_grad
     def decode_field(self, base, tiers, depths, valid):
         """As decode_records, but returns the decoded float field (n, C,
         W, W) on the codec's device before requantization, and the
         validity as a device tensor."""
+        import torch
         dev = self.device
         n = base.shape[0]
         sp0 = self.specs[0]
@@ -397,6 +419,7 @@ def requant(out, valid):
     if out.device.type != "cuda":
         from georvq.ae.cli import requant_ae_np
         return requant_ae_np(out.cpu().numpy(), valid.cpu().numpy())
+    import torch
     q = torch.clamp(torch.round(torch.sign(out) * torch.sqrt(out.abs())
                                 * 127.5), -127, 127).to(torch.int8)
     q = torch.where(valid[:, None], q, torch.full_like(q, NODATA))
@@ -406,6 +429,7 @@ def requant(out, valid):
 def _cumulative(rvq, idx, L):
     """Partial codebook sums at depths 0..L for (B, cells, >=L) indices,
     added level by level in the order Codec.decode adds them."""
+    import torch
     B, cells = idx.shape[:2]
     out = [torch.zeros(B, cells, rvq.levels[0].dim, device=idx.device)]
     z = None
@@ -414,6 +438,101 @@ def _cumulative(rvq, idx, L):
         z = v if z is None else z + v
         out.append(z)
     return out
+
+
+# --------------------------------------------------------------------------
+# ONNX
+# --------------------------------------------------------------------------
+
+ONNX_CHANNEL_NAME = "mean_channel.npz"
+
+
+def _channel_sha(channel) -> str:
+    import hashlib
+    h = hashlib.sha256()
+    for a in channel.id_state():
+        h.update(np.asarray(a).tobytes())
+    return h.hexdigest()[:16]
+
+
+def export_onnx(codec: AEV2Codec, out_dir, opset=17) -> dict:
+    """Export an AEV2Codec for `AEV2OnnxCodec`: the stats_cond graphs and
+    codebooks (georvq.inference.onnx_stats) and the mean channel's
+    tables, under the codec's bitstream id. Returns the meta dict."""
+    from georvq.inference.onnx_stats import export_stats_onnx
+    os.makedirs(out_dir, exist_ok=True)
+    codec.channel.save(os.path.join(out_dir, ONNX_CHANNEL_NAME))
+    extra = {"ae_v2": {"format": FORMAT, "mean_channel": ONNX_CHANNEL_NAME,
+                       "mean_channel_sha": _channel_sha(codec.channel),
+                       "min_depths": list(codec.model.cfg.min_depths),
+                       "rungs": [list(r) for r in codec.rungs]}}
+    meta = export_stats_onnx(codec.model, out_dir,
+                             extra_id=codec.channel.id_state(),
+                             meta_extra=extra, opset=opset)
+    if meta["bitstream_id"] != codec.bitstream_id:
+        raise RuntimeError(f"export bitstream id {meta['bitstream_id']} != "
+                           f"codec {codec.bitstream_id}")
+    return meta
+
+
+class AEV2OnnxCodec:
+    """Decode side of AEV2Codec over an `export_onnx` directory, with
+    onnxruntime and numpy only. Decoding runs in fp32 on any device, so
+    on CPU it agrees with the torch fp32 decode up to float rounding in
+    the graphs, which can move a rare int8 value by one step."""
+
+    def __init__(self, onnx_dir, device="cpu", threads=None):
+        from georvq.inference.onnx_stats import OnnxStatsCodec
+        self.ort = OnnxStatsCodec(onnx_dir, device=device, threads=threads)
+        meta = self.ort.meta
+        ae = meta.get("ae_v2")
+        if ae is None or ae.get("format") != FORMAT:
+            raise ValueError(f"{onnx_dir}: not an AE v2 ONNX export")
+        self.channel = RVQPCAMeanChannel.load(
+            os.path.join(onnx_dir, ae["mean_channel"]))
+        if _channel_sha(self.channel) != ae["mean_channel_sha"]:
+            raise ValueError(f"{onnx_dir}: mean channel tables do not match "
+                             "the export's record of them")
+        from georvq.config import TierSpec
+        self.specs = [TierSpec(**t) for t in meta["tiers"]]
+        self.window = int(meta["window"])
+        self.bands = int(meta["bands"])
+        self.full = tuple(sp.depth for sp in self.specs)
+        self.rungs = [tuple(r) for r in ae["rungs"]]
+        self.names = tier_names(len(self.specs))
+        self.n_mean = len(self.channel.field_widths())
+        self.bitstream_id = meta["bitstream_id"]
+        self.decoder_id = meta["decoder_id"]
+        self.bf16 = False
+
+    def decode_records(self, base, tiers, depths, valid):
+        """As AEV2Codec.decode_records."""
+        from georvq.ae.cli import requant_ae_np
+        n = base.shape[0]
+        sp0 = self.specs[0]
+        mean = self.channel.decode(base[:, :self.n_mean])
+        coarse = base[:, self.n_mean:].reshape(n, sp0.depth, sp0.cells)
+        idx = [coarse.transpose(0, 2, 1)] + [
+            None if t is None else t.transpose(0, 2, 1) for t in tiers]
+        valid = np.ascontiguousarray(valid, dtype=bool)
+        out = self.ort.decode(idx, depths, mean, valid)
+        return requant_ae_np(out, valid)
+
+
+def load_codec(model=None, channel=None, device="cpu", bf16=None,
+               backend="torch", onnx_dir=None, threads=None):
+    """An AEV2Codec (backend "torch": `model` and `channel` as for
+    AEV2Codec.load) or an AEV2OnnxCodec (backend "onnx": `onnx_dir`, an
+    `export_onnx` directory, which holds the mean channel too)."""
+    if backend == "onnx":
+        if onnx_dir is None:
+            raise ValueError("backend 'onnx' needs onnx_dir")
+        return AEV2OnnxCodec(onnx_dir, device=device, threads=threads)
+    if backend != "torch":
+        raise ValueError(f"unknown backend {backend!r}")
+    if model is None or channel is None:
+        raise ValueError("backend 'torch' needs a model and its mean channel")
+    return AEV2Codec.load(model, channel, device=device, bf16=bf16)
 
 
 # --------------------------------------------------------------------------
@@ -522,7 +641,7 @@ class AEV2Dataset:
     bottom-up row order, so code written against the source dataset can
     read this instead. `read` needs a codec; the metadata does not."""
 
-    def __init__(self, path_or_url, codec: AEV2Codec | None = None, **reader_kw):
+    def __init__(self, path_or_url, codec=None, **reader_kw):
         self.reader = RVQParquetReader(path_or_url, **reader_kw)
         self.name = self.reader.source
         h = self.header = self.reader.header
@@ -678,8 +797,9 @@ class AEV2Dataset:
         the cheapest rung meeting it, full depth where none does), or
         None for full depth."""
         if self.codec is None:
-            raise ValueError("reading pixels needs a codec: "
-                             "open(path, model=..., channel=...)")
+            raise ValueError("reading pixels needs a codec: open(path, "
+                             "model=..., channel=...) or open(path, "
+                             "backend='onnx', onnx_dir=...)")
         W = self.window_px
         ny0, ny1, nx0, nx1 = self._north_px(window)
         wy0, wy1 = ny0 // W, -(-ny1 // W)
@@ -728,16 +848,19 @@ class AEV2Dataset:
 
 
 def open_dataset(path_or_url, model=None, channel=None, device="cpu",
-                 bf16=None, codec=None, **reader_kw) -> "AEV2Dataset":
-    """Open an AE v2 file (a local path or an http(s) URL). `model` (a checkpoint path or a model)
-    and `channel` (a .npz path or a channel) are needed to read pixels;
-    `codec` passes an AEV2Codec instead. `reader_kw` go to
-    RVQParquetReader (`first_read`, `gap`, `concurrency`, `cache`,
-    `cache_bytes`, `cache_dir`)."""
-    if codec is None and model is not None:
-        if channel is None:
+                 bf16=None, codec=None, backend="torch", onnx_dir=None,
+                 **reader_kw) -> "AEV2Dataset":
+    """Open an AE v2 file (a local path or an http(s) URL). Reading pixels
+    needs a codec: `model` (a checkpoint path or a model) and `channel` (a
+    .npz path or a channel) for the torch backend, `onnx_dir` with
+    backend="onnx", or an AEV2Codec / AEV2OnnxCodec as `codec`.
+    `reader_kw` go to RVQParquetReader (`first_read`, `gap`,
+    `concurrency`, `cache`, `cache_bytes`, `cache_dir`)."""
+    if codec is None and (model is not None or backend == "onnx"):
+        if backend == "torch" and channel is None:
             raise ValueError("a model needs its mean channel")
-        codec = AEV2Codec.load(model, channel, device=device, bf16=bf16)
+        codec = load_codec(model, channel, device=device, bf16=bf16,
+                           backend=backend, onnx_dir=onnx_dir)
     return AEV2Dataset(path_or_url, codec, **reader_kw)
 
 
@@ -798,14 +921,23 @@ def main(argv=None):
                     "georvq GeoParquet file.")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    def model_args(p):
-        p.add_argument("--model", required=True, help="checkpoint path")
-        p.add_argument("--channel", required=True, help="mean channel .npz")
-        p.add_argument("--device", default="cuda" if torch.cuda.is_available()
-                       else "cpu")
+    def model_args(p, onnx=False):
+        p.add_argument("--model", default=None, help="checkpoint path")
+        p.add_argument("--channel", default=None, help="mean channel .npz")
+        p.add_argument("--device", default=None,
+                       help="default: cuda when torch sees one, else cpu "
+                            "(onnx backend: cpu)")
         p.add_argument("--fp32", action="store_true",
                        help="fp32 decoder passes on CUDA (default bf16)")
         p.add_argument("--batch", type=int, default=256)
+        if onnx:
+            p.add_argument("--backend", choices=["torch", "onnx"],
+                           default="torch")
+            p.add_argument("--onnx-dir", default=None,
+                           help="export-onnx directory (backend onnx)")
+            p.add_argument("--threads", type=int, default=None,
+                           help="onnxruntime threads (default: the CPUs "
+                                "this process may use)")
 
     e = sub.add_parser("encode", help="GeoTIFF tile -> .georvq.parquet")
     e.add_argument("src")
@@ -820,15 +952,21 @@ def main(argv=None):
     d = sub.add_parser("decode", help="window -> .npy (source row order)")
     d.add_argument("src")
     d.add_argument("out")
-    model_args(d)
+    model_args(d, onnx=True)
     d.add_argument("--window", default=None, help="row,col,height,width")
     d.add_argument("--quality", default=None, help="e.g. 8-8-2 or p99<=0.02")
 
     r = sub.add_parser("reconstruct", help="file -> GeoTIFF with source profile")
     r.add_argument("src")
     r.add_argument("out")
-    model_args(r)
+    model_args(r, onnx=True)
     r.add_argument("--quality", default=None)
+
+    x = sub.add_parser("export-onnx", help="checkpoint + channel -> ONNX dir "
+                                           "for the onnx backend")
+    x.add_argument("out")
+    model_args(x)
+    x.add_argument("--opset", type=int, default=17)
 
     i = sub.add_parser("info", help="header summary and column sizes")
     i.add_argument("src")
@@ -853,8 +991,28 @@ def main(argv=None):
             print(f"  {'file':<10} {rd.size:>12,} B")
         return 0
 
-    codec = AEV2Codec.load(args.model, args.channel, device=args.device,
-                           bf16=not args.fp32)
+    backend = getattr(args, "backend", "torch")
+    device = args.device
+    if device is None:
+        if backend == "onnx":
+            device = "cpu"
+        else:
+            import torch
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+    if backend == "torch" and (args.model is None or args.channel is None):
+        ap.error("--model and --channel are needed (or --backend onnx "
+                 "--onnx-dir DIR)")
+    if args.cmd == "export-onnx":
+        codec = AEV2Codec.load(args.model, args.channel, device="cpu",
+                               bf16=False)
+        meta = export_onnx(codec, args.out, opset=args.opset)
+        print(json.dumps({k: meta[k] for k in ("format", "bitstream_id",
+                                               "decoder_id")}))
+        return 0
+    codec = load_codec(args.model, args.channel, device=device,
+                       bf16=not args.fp32, backend=backend,
+                       onnx_dir=getattr(args, "onnx_dir", None),
+                       threads=getattr(args, "threads", None))
     t0 = time.time()
     if args.cmd == "encode":
         out = args.out
