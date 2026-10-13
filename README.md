@@ -63,8 +63,9 @@ exactly by `georvq.from_checkpoint()`. Compare any two runs with
 ## Install
 
 ```bash
-pip install -e .                              # core
-pip install -e ".[loc,archive,eval,viz,dev]"  # everything
+pip install -e .                                    # decoding
+pip install -e ".[train]"                           # + training
+pip install -e ".[train,loc,archive,eval,viz,dev]"  # everything
 ```
 
 ## Quickstart: the AlphaEarth release codec

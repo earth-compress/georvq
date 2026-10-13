@@ -1,28 +1,21 @@
 # The georvq GeoParquet layout (draft for review)
 
-**Status: placeholder.** Version 1 is a first, deliberately simple
+**Status: placeholder.** This data standard is deliberately simple
 format, written to ship the AE v2 release. It is expected to be
-replaced or substantially revised, for example to add entropy coding of
-the code indices or to change the chunk layout once real access
-patterns are measured. Files carry their format version in the
-`georvq` metadata, so a later reader can refuse or convert a version 1
-file, but nothing about this layout should be treated as a long-term
-standard.
+replaced during the Earth Compress project.
 
 A georvq GeoParquet file holds one source data product compressed by a
-georvq codec: one AlphaEarth tile, one Tessera tile, one Sentinel-2
+georvq codec, as defined by the parent source's most convenient or well-used packet/tile/product of data: one AlphaEarth tile, one Tessera tile, one Sentinel-2
 SAFE. It is named `{source stem}.georvq.parquet`. It is a standard
-GeoParquet 1.1 file: pyarrow and DuckDB read its rows directly (for
-example `WHERE kind = 'fine'`), and DuckDB's spatial extension reads
-`geometry` as a geometry column. For decoding, a reader turns "these
+GeoParquet 1.1 file, so pyarrow and DuckDB can read and query its rows directly, and DuckDB's spatial extension reads
+`geometry` as a geometry column. 
+
+In practice, we have designed a reader that makes requesting and decoding windows from cloud storage more convenient. For decoding, a reader turns "these
 windows, at this rate" into byte ranges using the column-chunk offsets
 in the Parquet footer, which one suffix read fetches.
 
-Every code index has a fixed bit width and every per-window record a
-fixed byte length, and the code columns are stored uncompressed, so the
-size of every value follows from a handful of numbers in the header.
 
-## Kinds, chunks and file order
+## Chunking, kinds, row groups and file order
 
 The windows of the product are grouped into square chunks, with a
 chunk size chosen per kind of record:
@@ -35,13 +28,12 @@ chunk size chosen per kind of record:
 - `quality`: optional per-window quality bytes, chunked as `base`.
 
 Each kind's chunk size is a whole number of windows, not necessarily a
-power of two (960 px chunks of 96 px windows are allowed). Chunks are
+power of two, but something sensible for the data source, aiming in our design for roughly order-of-magnitude 1 MB per chunk. Chunks are
 counted from the product's top-left corner; edge chunks are padded to
 the full chunk size with zero records, so every value of a column has
 the same length.
 
-One row, and one row group, per chunk. Row groups are in kind order
-(`base`, the tiers coarsest first, `quality`), and within a kind
+Row groups are single rows, so that a single chunk can be fetched. Row groups are in kind order, and within a kind, they are
 row-major over that kind's chunk grid. Each kind's row groups are
 therefore consecutive in the file, so a read of every chunk of a kind
 at full depth is one contiguous byte range, and so is `base` followed
@@ -232,10 +224,9 @@ records the decode precision used for the quality stats.
 
 ### Read cost
 
-Requests and kB (1000 B) for the tile above with a cold cache, read over HTTP
-from a local Range server with parallel fetch; reading the local file
-costs the same requests and bytes. The block is one fine chunk, and
-the point a window inside it, both in the first mid chunk. "Previous
+This section shows the number of separate requests and the total size in kB for the tile above with a cold cache, read over HTTP
+from a local Range server with parallel fetch. The block is one fine chunk (1024 pixels across), and
+the point is some subset window inside it. "Previous
 layout" is one row group per 1024 px block holding every column, as
 measured before this layout replaced it.
 

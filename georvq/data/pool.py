@@ -18,10 +18,15 @@ from __future__ import annotations
 import os
 import threading
 import time
+from typing import TYPE_CHECKING
 
 import numpy as np
-import pandas as pd
 import torch
+
+if TYPE_CHECKING:
+    # annotations only; GroupBatch is on the decode path of S2 models,
+    # which is installed without pandas
+    import pandas as pd
 
 
 class GroupBatch(dict):

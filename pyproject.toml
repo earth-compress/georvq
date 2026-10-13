@@ -9,33 +9,36 @@ description = "Pyramidal residual-VQ compression for geospatial datasets: variab
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
+# The base install is the decode path: georvq.inference, the release
+# layers (georvq.ae, georvq.tessera), georvq.factory/model/sources.
+# tests/test_install_boundary.py checks that it imports and runs without
+# the [train] packages.
 dependencies = [
     "torch>=2.1",
     "numpy",
-    "pandas",
     "pyarrow",
     "pydantic>=2.5",
     "pyyaml",
-    "matplotlib",
-    "scikit-learn",
-    "wandb",
+    "rasterio",   # AE release layer: tile encode, GeoTIFF and COG output
 ]
 
 [project.optional-dependencies]
+# training, stores, evaluation and figures
+train = ["pandas", "matplotlib", "scikit-learn", "wandb"]
 tessera = ["geotessera"]   # fetch Tessera tiles: the demo notebook, a store build
 # the tessera-vq baseline the demo compares against (Yang, Feng & Keshav)
 baseline = ["tessera-vq @ git+https://github.com/sk818/tessera-vq.git@v0.3.1"]
 # SatCLIP location conditioning (cascade / codebook-select)
 loc = ["huggingface_hub"]
 # Real entropy-coded archives (rANS via compressai)
-archive = ["compressai"]
+archive = ["compressai", "pandas"]
 # Downstream eval benchmarks (AEF extraction, ASTER GED, LUCAS/LCMAP)
-eval = ["rasterio", "h5py", "requests", "pyproj", "shapely"]
+eval = ["georvq[train]", "h5py", "requests", "pyproj", "shapely"]
 # Rate-sweep GIF rendering
-viz = ["imageio", "pillow"]
+viz = ["georvq[train]", "imageio", "pillow"]
 # ONNX export + torch-free CPU/GPU inference for the codec executables
 onnx = ["onnx", "onnxruntime"]
-dev = ["pytest"]
+dev = ["georvq[train]", "pytest"]   # the suite covers training
 
 [project.scripts]
 georvq-train = "georvq.cli:train_pyramid"
