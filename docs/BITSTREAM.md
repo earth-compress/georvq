@@ -42,9 +42,10 @@ Nominal cost: `sum_tiers cells * depth_used * log2(codes)` bits
 ## Carriers
 
 `Packet` is the abstract unit; how packets are containerized is a
-per-release decision. The AlphaEarth release stores them as
-georeferenced COG assets (bands = RVQ levels — see `docs/AE_RELEASE.md`);
-the patch dev tool uses a flat npz. Both stamp `bitstream_id` so
+per-release decision. The AlphaEarth release stores them in one
+GeoParquet file per source tile, a column per RVQ level
+(`docs/GEORVQ_PARQUET.md`, `docs/AE_RELEASE.md`); the patch dev tool
+uses a flat npz. Both stamp `bitstream_id` so
 mismatched models are refused.
 
 ## Entropy-coded archives (research capability, not shipped)

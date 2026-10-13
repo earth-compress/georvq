@@ -1,6 +1,6 @@
 # georvq
 
-Draft for review: the AE v2 quickstart, the AE v2 paragraph under Ship and its Docs entry are new and not yet approved.
+Draft for review: the AlphaEarth quickstart, its paragraph under Ship, the install block and the Tests note are new and not yet approved.
 
 Pyramidal residual-VQ compression for geospatial datasets.
 
@@ -52,9 +52,6 @@ embedding fields (e.g. AlphaEarth, Tessera), multispectral imagery
   codebooks + stats codec only; decoders can be upgraded forever without
   re-encoding (docs/BITSTREAM.md).
 
-Which of these a shipped release depends on, and which are exploratory,
-is tracked per feature in `docs/SOURCES.md`.
-
 Everything is driven by validated pydantic configs; every checkpoint embeds
 its full resolved config (plus git state and config hash) and is rebuilt
 exactly by `georvq.from_checkpoint()`. Compare any two runs with
@@ -70,44 +67,9 @@ pip install -e ".[train,loc,archive,eval,viz,dev]"  # everything
 
 ## Quickstart: the AlphaEarth release codec
 
-Working with the shipped AE codec (decode archive tiles, run the demos)
-takes five steps; full contract in `docs/AE_RELEASE.md`.
-
-```bash
-# 1. install (any env with torch; on the group server one is already set up)
-git clone <this repo> && cd georvq
-pip install -e ".[eval,onnx]"
-
-# 2. get the weights (NOT in git)
-#    on the group server they are already at /data/georvq-releases/ae-beta-v1
-#    elsewhere: download ae-beta-v1.tar.gz from the Drive link (ask Ali /
-#    see the release thread), then verify before use:
-sha256sum -c <<< "d535fe3c692327acbafcfd8816be9d776d4596fe02ea18e6963759fbbbf969b5  ae-beta-v1.tar.gz"
-
-# 3. extract ANYWHERE and point the env var at it
-tar xzf ae-beta-v1.tar.gz
-export GEORVQ_AE_BUNDLE=$PWD/ae-beta-v1/bundle   # add to your shell rc
-
-# 4. use it
-georvq-ae-tile info   some_tile_assets/                       # inspect a blob
-georvq-ae-tile decode --model "$GEORVQ_AE_BUNDLE" some_tile_assets/ recon.tiff \
-    --quality "p90<=0.02"                                     # or --tuple 8,8,2
-georvq-ae-tile encode --model "$GEORVQ_AE_BUNDLE" --device cuda src.tiff out/
-
-# 5. demos (pre-executed with figures — readable without any data)
-jupyter lab notebooks/demo_ae_codec.ipynb notebooks/demo_downstream_eval.ipynb
-```
-
-Notes: every CLI also accepts `--model path/...` directly (the env var
-is only the notebooks' default); decode-only use needs no GPU — pass
-`--backend onnx --model .../ae-beta-v1/onnx` for the torch-free path;
-`bundle/model.pt` is a torch pickle, so always verify the checksum.
-
-## Quickstart: the AlphaEarth v2 release codec
-
 AE v2 codes each source tile as one `{stem}.georvq.parquet` file that
 reads like the source tile, at 23 rates; full contract in
-`docs/AE_V2_RELEASE.md`. v1 above is unchanged.
+`docs/AE_RELEASE.md`.
 
 ```bash
 # 1. install (add ".[onnx]" for torch-free decode)
@@ -148,8 +110,7 @@ Presets live in `configs/<source>/`: `ae/` (`pyr64` the standard
 recipe, plus the exploratory `stage1`, `hybrid_rate`, `cascade` and
 `satclip_select`), `tessera/` (the lineage ending at the released
 `tessera_vq8_k256_statscond`), `s2/`, `dem/` and `era5/`, with
-`smoke.yaml` (CI) at the top level. `docs/SOURCES.md` names the current
-preset for each source. A preset's `data.store_dir` points at the
+`smoke.yaml` (CI) at the top level. A preset's `data.store_dir` points at the
 group server; override it for your own store.
 
 ## Data
@@ -190,18 +151,8 @@ On top of the generic machinery, each shipped source gets its own
 executables. Two are shipped, and they differ in every place the data
 differs.
 
-The AlphaEarth release (`georvq/ae/`, `docs/AE_RELEASE.md`) turns a
-2.25 GB source tile into ~58 MB of georeferenced COG assets with
-progressive rate, quality-controlled decode against encode-time
-measured error stats, and torch-free ONNX decoding:
-
-```bash
-georvq-ae-tile encode --model <bundle> src.tiff out_dir/
-georvq-ae-tile decode --model <bundle> out_dir/ recon.tiff --quality "p90<=0.02"
-```
-
-AE v2 (`georvq/ae/v2.py`, `docs/AE_V2_RELEASE.md`) codes the same tiles
-with a model that transmits each window's mean (440 bits per window),
+The AlphaEarth release (`georvq/ae/v2.py`, `docs/AE_RELEASE.md`) codes
+each source tile with a model that transmits each window's mean (440 bits per window),
 into one GeoParquet file per tile (`docs/GEORVQ_PARQUET.md`). The
 reader stands in for the source tile's rasterio dataset, fetches only
 the byte ranges a window and rate need, and picks a rate from 23 rungs
@@ -227,13 +178,11 @@ recon = R.decode(R.encode(x, valid=v), depths=[20, 20, 5], valid=v)
 
 - `docs/OVERVIEW.md` — codebase map, invariants, personas, working knowledge
 - `docs/AE_RELEASE.md` — the shipped AlphaEarth codec's complete contract
-- `docs/AE_V2_RELEASE.md` — the AlphaEarth v2 codec's contract (draft)
 - `docs/TESSERA_RELEASE.md` — the shipped Tessera codec's complete contract
 - `docs/ADDING_A_SOURCE.md` — the plug-point for new datasets
 - `docs/SOURCE_ONBOARDING.md` — measuring a new source into an architecture
 - `docs/BITSTREAM.md` — what defines a bitstream; decoder-upgrade contract
 - `docs/DESIGN.md` — how the method works and why it is built that way
-- `docs/SOURCES.md` — where each data source currently stands
 - `lab/` — the findings ledger: empirical results with their provenance (`lab/query.py` filters them)
 
 ## Tests
@@ -243,6 +192,7 @@ pytest -m "not slow and not gpu"   # fast suite
 pytest                             # everything (training smokes included)
 ```
 
-The golden-checkpoint gate (`tests/test_compat.py`) verifies the released
-weights still decode bit-faithfully; it self-skips where the release
-bundle isn't present (`GEORVQ_AE_BUNDLE`).
+The golden decode tests (`tests/test_ae_v2_bundle.py` for the AlphaEarth
+release, `tests/test_compat.py` for older bundles) verify that released
+weights still decode bit-faithfully; they self-skip where the bundle
+isn't present (`GEORVQ_AE_V2_BUNDLE`, `GEORVQ_AE_BUNDLE`).
