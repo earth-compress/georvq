@@ -35,8 +35,9 @@ and, for every source so far, the whole header.
 | 8-11 | header JSON length in bytes, uint32 little-endian |
 | 12-15 | header region size `H` in bytes, uint32 little-endian |
 
-A reader refuses an unknown major version. Minor versions only add
-header fields; a reader ignores fields it does not know.
+The first version is 1.0. A reader refuses an unknown major version.
+Minor versions only add header fields; a reader ignores fields it does
+not know.
 
 ## Header
 
@@ -106,19 +107,28 @@ per window or per region, the cheapest rung meeting a quality bound.
 
 ### Variable sections
 
-- `mask`: validity at pixel resolution. The product is split into
-  blocks (1024 px for AE); each block's bits (row-major, 1 = valid) are
-  packed with `numpy.packbits` and compressed with zlib. The section
-  begins with a uint32 little-endian block count and a table of
-  `(offset, length)` uint64 pairs relative to the section start; a block
-  with length 0 is fully valid. A product with no invalid pixels has an
-  empty section.
-- `aux`: a zip archive of everything the product carries that the codec
-  does not code, in the product's own paths. Members that are already
-  compressed are stored, others deflated. A reader can fetch one member
-  by reading the zip's central directory at the end of the section.
+- `mask` (codec `packbits-zlib`): validity at pixel resolution. Square
+  blocks of `block_px` (1024 for AE) tile the product's pixel array
+  row-major, with edge blocks clipped to the product, not padded. Each
+  block's bits (row-major, 1 = valid) are packed with `numpy.packbits`
+  and compressed with zlib. The section begins with a uint32
+  little-endian block count `n` and a table of `(offset, length)` uint64
+  little-endian pairs, offsets relative to the section start (the first
+  block's data sits at `4 + 16 n` or later). A block with length 0 is
+  fully valid and has offset 0. The section's entry in
+  `variable_sections` also carries `block_px` and `shape` (`[height,
+  width]` in pixels). A product with no invalid pixels keeps the entry
+  with length 0; a file with no `mask` entry reads as fully valid.
+- `aux` (codec `zip`): a zip archive of everything the product carries
+  that the codec does not code, in the product's own paths. Members
+  whose names end in an already-compressed suffix (`.jp2`, `.png`,
+  `.jpg`, `.jpeg`, `.zip`, `.gz`, `.bz2`, `.xz`, `.zst`, `.7z`) are
+  stored, others deflated. Member timestamps are fixed, so the archive's
+  bytes depend only on its content. A reader can fetch one member by
+  reading the zip's central directory at the end of the section.
 
-`sha256` covers each variable section's bytes.
+`sha256` covers each variable section's bytes (the digest of empty bytes
+for an empty section).
 
 ## AE v2 instance
 
