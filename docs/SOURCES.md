@@ -7,8 +7,8 @@ sources; this table tracks maturity, not priority.
 |---|---|---|---|---|
 | AlphaEarth | beta release (`ae-beta-v1`) | `georvq/sources/ae.py` | `configs/ae/pyr64.yaml` | `georvq/ae/`, `docs/AE_RELEASE.md` |
 | Tessera | beta release (`tessera-beta-v1`) | `georvq/sources/tessera.py` | `configs/tessera/tessera_vq8_k256_statscond.yaml` | `georvq/tessera/`, `docs/TESSERA_RELEASE.md` |
-| Sentinel-2 L1C | trained, no release layer | `georvq/sources/s2.py` | `configs/s2/s2_pyr96.yaml` | none |
-| COPDEM | in development | `georvq/sources/dem.py` | `configs/dem/dem128_graded.yaml` | none |
+| Sentinel-2 L1C | beta | `georvq/sources/s2.py` | `configs/s2/s2_pyr96.yaml` | none |
+| COPDEM | in development | `georvq/sources/dem.py` | `configs/dem/dem128.yaml` | none |
 | ERA5 | exploratory, separate track | `georvq/sources/era5.py` | `configs/era5/era5_t64.yaml` | none |
 | Sentinel-1 RTC | not started; characterised in the five-source measurement table (`docs/SOURCE_ONBOARDING.md`) | none | none | none |
 
