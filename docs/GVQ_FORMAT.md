@@ -106,7 +106,8 @@ each `bits` wide, MSB-first. A field with `count` 1 is a single value.
 ### Quality section
 
 Optional, fixed-size, window-major (`levels` 1). Per window, one byte
-per statistic per rung: for each rung in `rungs` order, the window's
+per statistic per rung, stat-major (every rung of the first statistic,
+then every rung of the next), rungs in `rungs` order: the window's
 measured error under that rung's decode at encode time. Statistics and
 their encoding are named in the header's `quality` field; for AE v2,
 mean and p99 of per-pixel `1 - cos`, as `code = round(32 * (log10(e) +
@@ -148,13 +149,20 @@ For an 8192 x 8192 AlphaEarth tile (128 x 128 windows of 64 px; tiers
 | `base` | 64 x 64 windows (4096 px) | 1 | mean: 2 x 12-bit RVQ + PCA components (416 bits); coarse: 8 x 11 bits | 66 | 270,336 |
 | `mid` | 32 x 32 windows (2048 px) | 8 | 16 x 13 bits | 26 | 212,992 |
 | `fine` | 16 x 16 windows (1024 px) | 8 | 256 x 14 bits | 448 | 917,504 |
-| `quality` | 64 x 64 windows | 1 | 2 statistics x 24 rungs x 8 bits | 48 | 196,608 |
+| `quality` | 64 x 64 windows | 1 | 2 statistics x 23 rungs x 8 bits | 46 | 188,416 |
 
-The `base` record holds the mean (55 bytes) and the 8 coarse levels (11
-bytes); it is always read whole, so the coarse tier needs no level
-order. `aux` holds the source GeoTIFF's tags and creation profile, so
-reconstruction writes a file with the source's block size, compression
-and band metadata.
+The `base` record holds the mean (55 bytes; fields `mean_rvq`, then
+`mean_pca_<k>`) and the 8 coarse levels (11 bytes, level 0 first); it is
+always read whole. The 23 rungs are the strict fill-order ladder from
+`2-0-0` to `8-8-8`. Quality bytes are stat-major: all rungs' mean error,
+then all rungs' p99. The mask, like the coded sections, is stored
+north-up. Windows with no valid pixel are not encoded; their records are
+zero and a reader fills them with nodata from the mask. `aux` holds one member, `source.json`: the source GeoTIFF's tags,
+creation profile and orientation, so reconstruction writes a tiled
+GeoTIFF with the source's block size, compression and band metadata (COG
+layout and overviews are not reproduced). `codec` also records
+`decoder_id`, `min_depths`, the mean channel's bits and the decode
+precision used for the quality stats.
 
 A window at depth `8-8-L` costs three ranges: its base chunk, the first 8
 slabs of its mid chunk, and the first `L` slabs of its fine chunk. A
