@@ -272,9 +272,12 @@ plug point.
 One checkpoint serves every rate because training samples monotone
 per-tier depth tuples and conditions the decoder on the tuple. Minimum
 depths concentrate capacity on the operating points that get used
-([`matryoshka-min-depths`](../lab/findings/matryoshka-min-depths.md)), and depth is sampled uniformly along the
-truncation path so that deep fine-tier levels see enough training
-traffic ([`depth-sampling-along-path`](../lab/findings/depth-sampling-along-path.md)).
+([`matryoshka-min-depths`](../lab/findings/matryoshka-min-depths.md)). The current recipe (`depth_sampling: path`,
+used by the Tessera release and the S2, DEM and ERA5 presets) samples
+depth uniformly along the truncation path so that deep fine-tier levels
+see enough training traffic ([`depth-sampling-along-path`](../lab/findings/depth-sampling-along-path.md)). The schema
+default is still `nested`, which the older AE presets, including the one
+behind the AE release, were trained with.
 
 ## Quantization
 

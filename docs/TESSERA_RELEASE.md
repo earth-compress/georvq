@@ -84,8 +84,8 @@ hardware is whatever it already was.
 
 The two variants deliberately carry different `bitstream_id`s. The id
 hashes the weights that ship, so rehashing a bundle reproduces its
-stated id, and the tile backends recompute it from the weights they
-loaded and refuse a mismatch. An fp16 bundle's codebooks hold different
+stated id, and `georvq.tessera.load` recomputes it from the files it
+loaded and refuses a mismatch. An fp16 bundle's codebooks hold different
 values, so the same indices decode to a very slightly different field
 and it is treated as a different bitstream. Pick one variant per
 archive and stay on it.
@@ -240,8 +240,8 @@ the suite can currently resolve.
   that gives AE its `--quality p90<=0.02` control is source-agnostic and
   could be turned on here; it has not been, because no consumer has
   asked for it.
-- **No `use_std`.** The config validator refuses it rather than leaving
-  it defaulted off, because matching the reconstructed standard deviation
+- **No `use_std`.** The release does not use it, and a model trained
+  with it should not be shipped, because matching the reconstructed standard deviation
   to the source's was measured to hurt: the decoder is already smoother
   than the truth, so rescaling amplifies its error instead of restoring
   detail. The numbers are in `lab/findings/stats-channel-is-per-field.md`.

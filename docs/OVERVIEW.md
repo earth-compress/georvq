@@ -21,6 +21,8 @@ chip store (sharded memmaps + parquet index + manifest)
       [CodebookSelector]            # optional: location-gated codebook subset
       [PyramidRateModel]            # optional: learned entropy model
       PyramidAttnDecoder            # AdaLN attention trunk, all tiers → fine tokens
+                                    #   (exploratory alternatives: decoder bank,
+                                    #   ladder, tiersum)
       source head                   # fine tokens → pixel plane(s)
       [stats_cond]                  #   ...and add the mean back
   → Source.recon_stats              # loss + metrics in model space
@@ -48,13 +50,15 @@ submodules exist. Everything is assembled from one validated `Config`
 | `georvq/model/vq_quant.py` | b-bit quantization-aware codebooks (`vq.book_bits`) — int8 books are ~4x smaller to download |
 | `georvq/model/stats_cond.py` | The transmitted-mean side channel: centre before the encoder, condition both ends, restore after the decoder |
 | `georvq/model/codec.py` | `PyramidCodec`, matryoshka depth sampling, `level_cumsums`/`eval_tuple` (encode once, decode any rate) |
-| `georvq/model/tokenizer.py`, `decoder.py`, `layers.py` | ViT encoder, AdaLN attention decoder + `DenseHead`, shared blocks |
+| `georvq/model/tokenizer.py`, `decoder.py`, `layers.py` | ViT encoder, AdaLN attention decoder + `DenseHead` + `DecoderBank`, shared blocks |
+| `georvq/model/ladder.py`, `tiersum.py` | Exploratory decoders with early exits per tier prefix (ERA5, Tessera presets) |
+| `georvq/model/attnmask.py` | Local attention masks (`model.local_attn`) |
 | `georvq/model/rate.py` | `ContextRateModel`, `PyramidRateModel`, `soft_rate`, `calib_tau` |
 | `georvq/model/conditioning.py` | `TierPredictor` (cascade), `CodebookSelector` (gated subset) |
 | `georvq/model/location.py` | SatCLIP clone-on-demand loader, location tables, location→latent prior MLPs |
-| `georvq/data/` | `store.py` chip-store v1 + `geographic_split`; `pool.py` resident pools; `build.py` `ShardWriter` |
-| `georvq/sources/` | `Source` interface + registry; `ae.py` (minimal reference), `tessera.py` (dense embeddings with a per-pixel scale), `s2.py` (multi-resolution example); `report.py` the per-source reporting surface (metrics, baselines, figures, previews) |
-| `georvq/train/` | `loop.py` the one trainer; `stage1.py` σ-conditioned pretrain; `dist.py` data-parallel launch; `validate.py`, `figures.py`, `warmstart.py` |
+| `georvq/data/` | `store.py` chip-store v1 + `open_store` + `geographic_split`; `pool.py` resident pools and `GroupBatch`; `build.py` `ShardWriter`; live readers `live_dem.py`, `live_s2.py`, `era5.py`; `sampler.py` sample geometry |
+| `georvq/sources/` | `Source` interface + registry; `ae.py` (minimal reference), `tessera.py` (dense embeddings with a per-pixel scale), `s2.py` (multi-resolution example), `dem.py` (one band with a mean/std side channel), `era5.py` (gridded physical variables); `prep.py` fitted model-space transforms; `report.py` the per-source reporting surface (metrics, baselines, figures, previews) |
+| `georvq/train/` | `loop.py` the one trainer (it also owns the dead-code reset schedule, `mark_resets`); `stage1.py` σ-conditioned pretrain; `grow.py` grown training; `dist.py` data parallelism for frozen codebooks; `trap.py` a flight recorder and tripwire for gradient spikes; `validate.py`, `figures.py`, `report.py`, `warmstart.py` |
 | `georvq/eval/` | Held-out extraction, probes, benchmark registry, codec A/B helpers |
 | `georvq/viz/` | Panel/GIF styling and builders |
 | `georvq/inference/` | Source-agnostic deployment machinery: `api.py` Codec/Packet, `stats_codec.py`, `archive.py` rANS (research tool), `refine.py` additive residual refinements, `mean_codec.py` the `stats_cond` channel on the wire, `release.py` bundles + bitstream/decoder ids, `onnx_backend.py` ONNX export + torch-free runtime |
@@ -114,14 +118,13 @@ pip install -e ".[loc,archive,eval,viz,dev]"
 georvq-train -c configs/ae/pyr64.yaml --gpu 0 log.run_tag=my_run   # train
 georvq-train -c configs/ae/pyr64.yaml train.steps=2000 ...          # any override
 
-pytest -m "not slow and not gpu"    # fast suite (~20 s) — run on every change
-pytest                              # + training smokes (GPU, minutes)
+pytest -m "not slow and not gpu"    # fast suite (~40 s) — run on every change
+pytest                              # + training smokes (CPU, seconds) and GPU tests
 
 python scripts/eval_run_ab.py --dataset <ds> --sanity identity   # eval harness sanity
 python scripts/eval_rate_sweep.py --dataset <ds> --ckpt <ckpt>   # Pareto-front A/B
 python scripts/build_archive.py --ckpt <ckpt> --store-dir <dir> --out <dir>  # research rANS archives
 
-torchrun --nproc_per_node 2 -m georvq.train.dist -c <cfg>       # data-parallel
 
 # AlphaEarth release codec (georvq/ae — see docs/AE_RELEASE.md)
 georvq-ae-tile encode --model <bundle> src.tiff out_dir/    # -> COG assets
@@ -146,10 +149,10 @@ python scripts/build_release_tessera.py --ckpt <ckpt> --out <bundle>
   is sent at all, on which tier carries a refinement, and on whether that
   refinement is a default or an opt-in — each difference measured, in
   `docs/AE_RELEASE.md` and `docs/TESSERA_RELEASE.md`.
-- **Data end user** (decode archive tiles): the `georvq-ae-*`
-  executables and the COG assets only — `docs/AE_RELEASE.md` is the
-  complete contract; nothing in training or `georvq/inference` concerns
-  them.
+- **Data end user** (decode compressed data): for AlphaEarth, the
+  `georvq-ae-*` executables and the COG assets, with `docs/AE_RELEASE.md`
+  as the complete contract; for Tessera, `georvq.tessera` and
+  `docs/TESSERA_RELEASE.md`. Nothing in training concerns them.
 
 Smoke config for cheap end-to-end checks: `configs/smoke.yaml` (synthetic
 store, CPU-friendly). Prefer it — or a few hundred steps with overrides —
@@ -161,7 +164,9 @@ short smoke catches nearly everything.
 Each preset encodes a recipe that actually ran and worked in the research
 cycle, with its settings verified against the original runs' logged argv:
 
-- `pyr64.yaml` — the flagship codec (incl. its k-means warmup).
+- `pyr64.yaml` — the standard AE recipe (incl. its k-means warmup). The
+  released AE weights came from a warm-start chain on this geometry that
+  no single preset reproduces.
 - `stage1.yaml` — σ-conditioned continuous pretrain.
 - `hybrid_rate.yaml` — frozen stage-1 encoder + fresh smaller-deeper
   codebooks + entropy model (its small 256-slot pool is historical).
@@ -178,6 +183,9 @@ cycle, with its settings verified against the original runs' logged argv:
   **unvalidated research direction**: it never trained past k-means
   historically, and a short attempt here diverged. Don't present it as a
   working recipe.
+
+The S2, DEM and ERA5 presets are for sources still in development;
+`docs/SOURCES.md` names the current one for each.
 
 Treat preset edits like code changes: they are claims about what
 reproduces a result.
