@@ -125,7 +125,7 @@ python -m georvq.ae.v2 fetch tile.georvq.parquet          # download the release
 python -m georvq.ae.v2 decode tile.georvq.parquet out.npy \
     --window 0,0,1024,1024 --quality 8-8-2                 # or --quality "p99<=0.02"
 python -m georvq.ae.v2 reconstruct tile.georvq.parquet recon.tif --quality 8-8-2
-python -m georvq.ae.v2 encode src.tif out_dir/ --device cuda
+python -m georvq.ae.v2 encode src.tif out_dir/ --bundle <bundle dir> --device cuda
 ```
 
 `decode` writes a `.npy` in source row order and prints the requests
