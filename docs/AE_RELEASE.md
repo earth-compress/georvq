@@ -22,7 +22,7 @@ own version of this document.
   decode each other's indices into plausible garbage).
 - Backends: PyTorch (CPU/CUDA) or ONNX (torch-free at run time; the
   `[onnx]` extra). `pip install` still pulls torch, a core dependency,
-  and `georvq-ae-tile` needs the `[eval]` extra for rasterio.
+  and rasterio, which `georvq-ae-tile` needs.
   Encoders are backend-consistent, not bit-identical (fp32 vs bf16
   assignment flips ~13% of near-tie deep indices at equal quality);
   decode is deterministic everywhere.
