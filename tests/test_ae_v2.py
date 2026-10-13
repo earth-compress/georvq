@@ -314,3 +314,74 @@ def test_quality_code_round_trip():
     c = v2.quality_code(e)
     assert list(c[:3]) == [0, 0, 0] and c[-1] == 0
     assert np.allclose(v2.quality_value(c[3:6]), e[3:6], rtol=0.04)
+
+
+@pytest.fixture(scope="module")
+def onnx_export(setup):
+    pytest.importorskip("onnxruntime")
+    out = setup["tmp"] / "onnx"
+    meta = v2.export_onnx(setup["codec"], str(out))
+    return str(out), meta
+
+
+def test_onnx_backend_reads_as_torch(setup, onnx_export):
+    out, meta = onnx_export
+    assert meta["bitstream_id"] == setup["codec"].bitstream_id
+    with v2.open_dataset(setup["file"], backend="onnx", onnx_dir=out) as ds:
+        assert isinstance(ds.codec, v2.AEV2OnnxCodec)
+        for q in (None, "3-1-0", "1-0-0"):
+            got = ds.read(quality=q)
+            with v2.open_dataset(setup["file"], codec=setup["codec"]) as dt:
+                want = dt.read(quality=q)
+            assert ((got == v2.NODATA) == (want == v2.NODATA)).all()
+            d = np.abs(got.astype(int) - want.astype(int))
+            assert d.max() <= 1 and (d > 0).mean() < 1e-3, q
+
+
+def test_onnx_backend_read_without_torch(setup, onnx_export, tmp_path):
+    import os
+    import subprocess
+    import sys
+    from tests.test_onnx_stats import NO_TORCH
+    out, _ = onnx_export
+    with v2.open_dataset(setup["file"], backend="onnx", onnx_dir=out) as ds:
+        want = ds.read(window=Window(10, 20, 60, 50), quality="3-2-1")
+    np.save(tmp_path / "want.npy", want)
+    code = NO_TORCH + f"""
+import numpy as np
+from rasterio.windows import Window
+from georvq.ae import v2
+with v2.open_dataset({str(setup["file"])!r}, backend="onnx",
+                     onnx_dir={out!r}) as ds:
+    got = ds.read(window=Window(10, 20, 60, 50), quality="3-2-1")
+assert np.array_equal(got, np.load({str(tmp_path / "want.npy")!r}))
+assert "torch" not in sys.modules
+print("ok")
+"""
+    r = subprocess.run([sys.executable, "-c", code], capture_output=True,
+                       text=True, cwd=os.getcwd())
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.strip() == "ok"
+
+
+def test_onnx_export_refuses_a_swapped_channel(setup, onnx_export, tmp_path):
+    import shutil
+    out, _ = onnx_export
+    bad = tmp_path / "bad"
+    shutil.copytree(out, bad)
+    ch = RVQPCAMeanChannel.load(str(bad / v2.ONNX_CHANNEL_NAME))
+    ch.mu0 = ch.mu0 + 0.01
+    ch.save(str(bad / v2.ONNX_CHANNEL_NAME))
+    with pytest.raises(ValueError, match="mean channel"):
+        v2.AEV2OnnxCodec(str(bad))
+
+
+def test_cli_decode_with_the_onnx_backend(setup, onnx_export, tmp_path):
+    out, _ = onnx_export
+    a, b = tmp_path / "onnx.npy", tmp_path / "ref.npy"
+    assert v2.main(["decode", str(setup["file"]), str(a), "--backend", "onnx",
+                    "--onnx-dir", out, "--window", "16,0,40,64",
+                    "--quality", "3-2-1"]) == 0
+    with v2.open_dataset(setup["file"], backend="onnx", onnx_dir=out) as ds:
+        np.save(b, ds.read(window=((16, 56), (0, 64)), quality="3-2-1"))
+    assert np.array_equal(np.load(a), np.load(b))

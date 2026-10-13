@@ -31,6 +31,7 @@ import os
 import numpy as np
 
 from georvq.inference.api import Packet
+from georvq.inference.onnx_stats import rvq_assign_np, rvq_lookup_np  # noqa: F401
 
 META_NAME = "meta.json"
 CODEBOOKS_NAME = "codebooks.npz"
@@ -165,36 +166,6 @@ def export_onnx(model, out_dir, opset=17):
     with open(os.path.join(out_dir, META_NAME), "w") as f:
         json.dump(meta, f, indent=1)
     return meta
-
-
-# --------------------------------------------------------------------------
-# numpy RVQ (backend-shared math)
-# --------------------------------------------------------------------------
-
-def rvq_assign_np(z, books, return_residual=False):
-    """z: (B, cells, dim) fp32; books: list of (K, dim) codebooks.
-    Greedy residual assignment -> (B, cells, depth) int64 indices
-    (+ the final residual when return_residual)."""
-    residual = np.ascontiguousarray(z, dtype=np.float32)
-    idxs = []
-    for cb in books:
-        d = ((residual ** 2).sum(-1, keepdims=True)
-             - 2.0 * residual @ cb.T + (cb ** 2).sum(-1))
-        idx = d.argmin(-1)
-        residual = residual - cb[idx]
-        idxs.append(idx)
-    out = np.stack(idxs, -1)
-    return (out, residual) if return_residual else out
-
-
-def rvq_lookup_np(indices, books, L=None):
-    """(B, cells, depth) indices -> (B, cells, dim) summed vectors at depth
-    L (default: full)."""
-    L = indices.shape[-1] if L is None else L
-    zq = np.zeros((*indices.shape[:2], books[0].shape[1]), np.float32)
-    for lev in range(L):
-        zq += books[lev][indices[..., lev]]
-    return zq
 
 
 # --------------------------------------------------------------------------
