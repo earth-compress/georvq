@@ -1238,7 +1238,8 @@ def codec_tile_main(argv=None):
                    default="plain",
                    help="decoder variant: plain (default) or deblock — "
                         "the canonical seam-removal recipe (bundle must "
-                        "carry decoders/deblock.pt; torch backend only)")
+                        "carry decoders/deblock.pt; with --backend onnx, "
+                        "the ONNX dir must carry deblock.onnx)")
 
     r = sub.add_parser("restat", help="mint a decoder's quality stats + "
                                       "quality/<decoder_id>.tif against "

@@ -173,6 +173,17 @@ class TesseraRelease:
 # building and loading a bundle
 # --------------------------------------------------------------------------
 
+def _id_state(ch, table, spec):
+    """The release state a decoder must agree on beyond the weights: the
+    mean channel's constants and, when present, the refinement table and
+    its spec. Written into `bitstream_id` by `build_bundle` and checked
+    against it by `load`, so both go through here."""
+    extra = [ch.mu0, ch.scale, np.int32(ch.bits), np.float32(ch.clip)]
+    if table is not None:
+        extra += [table, json.dumps(spec.to_json(), sort_keys=True).encode()]
+    return extra
+
+
 def build_bundle(out_dir, model, cfg, means, refine_residuals=None,
                  step=0, notes="", fp16=False):
     """Write a release bundle: weights, mean channel, refinement table.
@@ -195,13 +206,9 @@ def build_bundle(out_dir, model, cfg, means, refine_residuals=None,
                  **{"spec_" + k: v for k, v in REFINEMENT.to_json().items()
                     if v is not None})
 
-    # the mean channel and the refinement table are things the decoder
-    # must agree on, so they belong in the id -- see bitstream_id
-    extra = [ch.mu0, ch.scale, np.int32(ch.bits), np.float32(ch.clip)]
-    if table is not None:
-        extra += [table, json.dumps(REFINEMENT.to_json(), sort_keys=True).encode()]
     bid = save_release(
-        out_dir, model, cfg, step=step, notes=notes, extra_id=extra,
+        out_dir, model, cfg, step=step, notes=notes,
+        extra_id=_id_state(ch, table, REFINEMENT),
         fp16=fp16,
         meta={"source": "tessera",
               "bands": model.bands,
@@ -241,6 +248,18 @@ def load(release_dir, device="cpu") -> TesseraRelease:
         # fallback for bundles cut before it was recorded.
         spec = (RefinementSpec.from_json(bundle["refinement"])
                 if bundle.get("refinement") else REFINEMENT)
+    want = bundle.get("bitstream_id")
+    if want:
+        # same layout with different codebooks, mean constants or table
+        # decodes to plausible garbage rather than failing, so a bundle
+        # whose files disagree with its own id is refused here
+        got = bitstream_id(model, extra=_id_state(ch, table, spec))
+        if got != want:
+            raise ValueError(
+                f"{release_dir}: bundle.json declares bitstream "
+                f"{want} but its files hash to {got}; the weights, "
+                "mean_channel.npz or refine_table.npz do not belong to "
+                "this bundle")
     return TesseraRelease(Codec(model), ch, spec, table, bundle)
 
 
