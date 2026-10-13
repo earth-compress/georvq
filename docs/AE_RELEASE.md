@@ -141,20 +141,23 @@ mid from 1 to 8, then fine from 1 to 8. A level costs 11 bits per
 window in the coarse tier, 208 in mid and 3,584 in fine, and every rung
 also carries the 440-bit mean. Cosine is on the held-out validation
 windows through the training run's own validation harness, with the
-coded mean at both ends.
+coded mean at both ends. "Real tiles" is the int8 reconstruction
+against the int8 source over the valid pixels of 16 held-out 8192 px
+tiles (2018-2025, latitudes -75 to 75, valid fraction 0.51 to 1.00),
+pixel-weighted; at full depth the tiles range from 0.9963 to 0.9995.
 
 | rung | bits/window | b/px | val cos | real tiles |
 |---|---|---|---|---|
-| 2-0-0 | 462 | 0.113 | 0.9722 | `[pending: measurements]` |
-| 8-0-0 | 528 | 0.129 | 0.9798 | `[pending: measurements]` |
-| 8-1-0 | 736 | 0.180 | 0.9858 | `[pending: measurements]` |
-| 8-2-0 | 944 | 0.230 | 0.9886 | `[pending: measurements]` |
-| 8-4-0 | 1,360 | 0.332 | 0.9912 | `[pending: measurements]` |
-| 8-8-0 | 2,192 | 0.535 | 0.9932 | `[pending: measurements]` |
-| 8-8-1 | 5,776 | 1.410 | 0.9951 | `[pending: measurements]` |
-| 8-8-2 | 9,360 | 2.285 | 0.9962 | `[pending: measurements]` |
-| 8-8-4 | 16,528 | 4.035 | 0.9973 | `[pending: measurements]` |
-| 8-8-8 | 30,864 | 7.535 | 0.9981 | `[pending: measurements]` |
+| 2-0-0 | 462 | 0.113 | 0.9722 | 0.9733 |
+| 8-0-0 | 528 | 0.129 | 0.9798 | 0.9805 |
+| 8-1-0 | 736 | 0.180 | 0.9858 | – |
+| 8-2-0 | 944 | 0.230 | 0.9886 | – |
+| 8-4-0 | 1,360 | 0.332 | 0.9912 | 0.9913 |
+| 8-8-0 | 2,192 | 0.535 | 0.9932 | 0.9933 |
+| 8-8-1 | 5,776 | 1.410 | 0.9951 | – |
+| 8-8-2 | 9,360 | 2.285 | 0.9962 | 0.9963 |
+| 8-8-4 | 16,528 | 4.035 | 0.9973 | 0.9974 |
+| 8-8-8 | 30,864 | 7.535 | 0.9981 | 0.9981 |
 
 The header's `rungs` field lists all 23 with their bits per window and
 per pixel, and `info` prints them.
@@ -179,6 +182,9 @@ Encoded tiles will be hosted at `<host>/annual/{year}/{zone}/{stem}.georvq.parqu
 
 ## Encoding cost
 
-Encoding the tile above with quality stats took 101 s on one A100,
-and a full-tile decode took 8-10 s in the same run. Throughput over many tiles, on GPU and
-on CPU, is `[pending: measurements]`.
+Over the 16 tiles, on one A100: encoding takes about 113 s per full
+tile with the quality stats (less for partial tiles), and decoding a
+whole tile takes 7-9 s at every rung, because the decoder runs at full
+resolution whatever the depth; fetching the codes is under 1.3 s of
+that. On CPU through ONNX Runtime, decoding runs at about 45 windows/s
+with 16 threads, about 6 minutes for a full tile.
