@@ -22,7 +22,8 @@ H, WD, WIN = 200, 168, 16
 TIERS = "model.tiers=['1:16:32:3','2:8:32:2','4:8:16:2']"
 STATS = ("model.stats_cond={subtract_mean: true, cond_encoder: true, "
          "cond_decoder: true, bits_per_band: 6}")
-BLOCK_PX = 64
+# base 2 x 2 chunks, mid 4 x 3, fine 7 x 6, with partial edge chunks
+CHUNK_PX = {"base": 128, "mid": 64, "fine": 32}
 
 
 def _field(h, w, seed=0):
@@ -110,7 +111,8 @@ def setup(tmp_path_factory):
         for b in range(1, 65):
             ds.set_band_description(b, f"A{b - 1:02d}")
     out = tmp / "tile.georvq.parquet"
-    v2.encode_tile(src, out, codec, stats=True, block_px=BLOCK_PX, batch=256)
+    v2.encode_tile(src, out, codec, stats=True, chunk_px=CHUNK_PX, strip_px=48,
+                   batch=256)
     return {"codec": codec, "src": src, "file": out, "north": north,
             "valid": valid, "t_north": t_north, "tmp": tmp}
 
@@ -232,16 +234,29 @@ def test_quality_bound_picks_rungs_per_window(setup):
         assert np.array_equal(north[sl], full[k][sl])
 
 
-def test_partial_read_is_one_request_per_block(setup):
+def test_point_read_is_one_request_per_tier_then_cached(setup):
     with v2.open_dataset(setup["file"], codec=setup["codec"], first_read=4096,
                          gap=0) as ds:
-        before = dict(ds.reader.stats)
-        ds.read(window=Window(64, H - 16, 16, 16), quality="3-1-0")
-        assert ds.reader.stats["requests"] - before["requests"] == 1
-        # a window across four blocks, at a rung with fine levels
-        before = dict(ds.reader.stats)
-        ds.read(window=Window(60, 60, 10, 20), quality="3-2-1")
-        assert ds.reader.stats["requests"] - before["requests"] == 4
+        rd = ds.reader
+        assert rd.chunk_grids == {"base": (2, 2), "mid": (4, 3), "fine": (7, 6),
+                                  "quality": (2, 2)}
+        # source row 100 is north-up row 99, window (6, 4)
+        plan = rd.plan(6, 7, 4, 5, depths=(3, 2, 1))
+        assert len(plan) == 3
+        before = dict(rd.stats)
+        a = ds.read(window=Window(70, 100, 1, 1), quality="3-2-1")
+        assert rd.stats["requests"] - before["requests"] == 3
+        assert rd.stats["bytes"] - before["bytes"] == sum(n for _, n in plan)
+        before = dict(rd.stats)
+        b = ds.read(window=Window(68, 98, 3, 3), quality="3-2-1")
+        assert rd.stats["requests"] == before["requests"]
+        assert np.array_equal(a, b[:, 2:3, 2:3])
+        # a quality bound fetches the quality chunk, then only what the
+        # cache lacks
+        assert len(rd.plan(6, 7, 4, 5, depths=(0, 0, 0), base=False, mask=False,
+                           quality=True)) == 1
+        ds.read(window=Window(70, 100, 1, 1), quality="p99<=0")
+        assert rd.plan(6, 7, 4, 5, quality=True) == []
 
 
 def test_reconstruct_keeps_the_source_profile(setup):
@@ -268,14 +283,18 @@ def test_ae_instance_layout_matches_the_spec():
                            np.ones(64), bits, np.ones(64))
     assert ch.cost_bits() == 440
     lay = v2.layout(specs, 64, ch, n_rungs=23)
-    assert lay.block_windows == 16
+    assert {k: (g.chunk_px, g.chunk_windows) for k, g in lay.groups.items()} == {
+        "base": (8192, 128), "mid": (4096, 64), "fine": (1024, 16),
+        "quality": (8192, 128)}
     assert lay.column_order == (["base", "mask"] + [f"mid_{i}" for i in range(1, 9)]
                                 + [f"fine_{i}" for i in range(1, 9)] + ["quality"])
     rb = {n: c.record_bytes for n, c in lay.columns.items()}
     assert (rb["base"], rb["mid_1"], rb["fine_8"], rb["quality"]) == (66, 26, 448, 46)
-    # bytes of one block's value per column
-    assert [rb[n] * 256 for n in ("base", "mid_1", "fine_1", "quality")] == [
-        16896, 6656, 114688, 11776]
+    # bytes of one chunk's value per column
+    n = {k: g.chunk_windows ** 2 for k, g in lay.groups.items()}
+    assert [rb[c] * n[lay.kind_of[c]] for c in ("base", "mid_1", "fine_1",
+                                                 "quality")] == [
+        1081344, 106496, 114688, 753664]
     assert [t.name for t in lay.tiers] == ["coarse", "mid", "fine"]
     assert lay.tiers[0].in_base
     assert v2.rung_bits(specs, (8, 8, 2), ch) == 440 + 88 + 8 * 16 * 13 + 2 * 256 * 14
