@@ -588,6 +588,31 @@ def test_parallel_fetch_matches_sequential(served):
     assert (out[16]["mid"][:, :, 0] == vals["mid_1"]).all()
 
 
+def test_trace_records_requests_and_their_overlap(served):
+    url, state, vals = served
+    state["delay"] = 0.05
+    plain = gp.RVQParquetReader(url, first_read=4096, gap=0)
+    tr = gp.Trace()
+    r = gp.RVQParquetReader(url, first_read=4096, gap=0, trace=tr)
+    assert plain.trace is None
+    n_open = len(tr.events)
+    got = r.read(0, 10, 0, 13, depths=(3, 1, 0))
+    ref = plain.read(0, 10, 0, 13, depths=(3, 1, 0))
+    for k in ref:
+        assert np.array_equal(got[k], ref[k])
+    gets = [e for e in tr.events if e["kind"] == "get"]
+    assert len(gets) == r.stats["requests"]
+    assert sum(e["bytes"] for e in gets) == r.stats["bytes"]
+    assert gets[0]["label"] == "suffix"
+    assert {"parse footer", "plan ranges", "parse pages", "unpack records"} <= {
+        e["label"] for e in tr.events if e["kind"] == "cpu"}
+    assert all(e["t1"] >= e["t0"] for e in tr.events)
+    # the parallel requests of one read overlap in time
+    reads = sorted((e for e in gets[n_open:] if e["label"] != "suffix"),
+                   key=lambda e: e["t0"])
+    assert len(reads) > 1 and reads[1]["t0"] < reads[0]["t1"]
+
+
 def test_cache_serves_later_reads(served):
     url, state, vals = served
     r = gp.RVQParquetReader(url, first_read=4096)
