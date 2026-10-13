@@ -20,7 +20,9 @@ own version of this document.
   / 16:64:16384:8), `bitstream_id 2f7c352718b87fe6`. Blobs and models
   cross-check ids; mismatches are refused (same-architecture codebooks
   decode each other's indices into plausible garbage).
-- Backends: PyTorch (CPU/CUDA) or ONNX (torch-free; `[onnx]` extra).
+- Backends: PyTorch (CPU/CUDA) or ONNX (torch-free at run time; the
+  `[onnx]` extra). `pip install` still pulls torch, a core dependency,
+  and `georvq-ae-tile` needs the `[eval]` extra for rasterio.
   Encoders are backend-consistent, not bit-identical (fp32 vs bf16
   assignment flips ~13% of near-tie deep indices at equal quality);
   decode is deterministic everywhere.

@@ -34,7 +34,7 @@ the matryoshka property):
 - optional location embedding (conditioned models; cascade decoding
   replays the priors),
 - optional packed stats bytes (normalized sources): `[n:1B][n component
-  bytes]`, `n=255` = raw-f16 fallback.
+  bytes]`, with two raw escapes: `n=255` = float16, `n=254` = float32.
 
 Nominal cost: `sum_tiers cells * depth_used * log2(codes)` bits
 (`Codec.packet_bits`).

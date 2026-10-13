@@ -94,9 +94,9 @@ fine tier is not saturated at the shipped depth
 
 **[have] — and it already overturns the default objective.**
 `scripts/eval_rate_sweep.py`, with datasets built for both sources
-(`/data/tessera-samples/eval` 42 GB, `/data/AE-samples/eval` 122 GB:
-ASTER GED, LUCAS LC/LU, LCMAP LC/LU). Reported in
-`tessera_downstream_interim.pdf`.
+(on the group server, 42 GB for Tessera and 122 GB for AE: ASTER GED,
+LUCAS LC/LU, LCMAP LC/LU). Results are in
+`lab/findings/tessera-transparency-point.md`.
 
 Protocol: encode each labelled pixel's 64x64 context window, decode at a
 rate tuple, read the reconstructed embedding at the label pixel; fit 1-NN,
@@ -155,8 +155,7 @@ criteria. For S2 the criterion a remote-sensing user applies is
 This is the number to report alongside R2 for any S2 model, because the
 two can move apart: R2 is computed in per-window standardized space,
 where a band's error is measured in units of its own spread, while the
-practitioner reads error against the band's absolute level. See
-`docs/FINDINGS.md` on uniform losses allocating error by dynamic range.
+practitioner reads error against the band's absolute level.
 
 ## The five-source measurement table
 
@@ -225,9 +224,9 @@ of each step is established, and several are still habit.
 | 0 | **objective** | use-case: task eval, band subsetting | point-thematic transparency at ~1 b/px, cos ~0.93; cosine is NOT transferable across sources; fine-scale use unmeasured |
 | 1 | **W** (window) | autocorrelation range; between/within variance vs W | 64 px, unjustified |
 | 2 | **P**, **G** (tiers, grids) | power spectrum; autocorrelation scale breaks | fine cell 4 px matches lag-0.5 point |
-| 3 | **L** (latent dims/tier) | data d95; ~4 bits/dim saturation | latent d95 51/91/71 of 512/512/256 on Tessera — over-provisioned several fold |
-| 4 | **K** | sample-budget: batch x cells x window / K >= 450 | K=256 verified healthy |
-| 5 | **N** (levels) | per-level residual decay to a target rate | tier 2 not saturated at 20 |
+| 3 | **L** (latent dims/tier) | data d95; ~4 bits/dim saturation | latent d95 51/91/71 of 512/512/256 on Tessera — over-provisioned several fold (`cosine-not-transferable`) |
+| 4 | **K** | sample-budget: batch x cells x window / K >= 450 | K=256 verified healthy (`codebook-sample-budget`) |
+| 5 | **N** (levels) | per-level residual decay to a target rate | tier 2 not saturated at 20 (`tessera-fine-tier-not-saturated`) |
 | 6 | **X** (attention) | ceiling vs capacity; where the ceiling stops moving | unmeasured |
 | 7 | **tricks** | mean removal, gain, conditioning | see below |
 

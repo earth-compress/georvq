@@ -15,17 +15,20 @@ whichever preset you copied.
 
 A chip store exists to give the pool fixed-geometry chips it can read
 cheaply. If the source is *already* laid out that way, building one
-duplicates the corpus to gain nothing. Two live readers do without:
+duplicates the corpus to gain nothing. Three live readers do without:
 
 | reader | source | why live |
 |---|---|---|
 | `live_dem` (`data/live_dem.py`) | GLO-30 COG mosaics | chips are windows on a continuous mosaic |
 | `live_s2` (`data/live_s2.py`) | Major-TOM Core-S2L1C | already 106k scene dirs on a regular 10 km grid |
+| `era5` (`data/era5.py`) | ERA5 cube zarr | hourly variable slices on a fixed global grid |
 
-Both present the `ChipStore` surface — the same attributes, the
+All three present the `ChipStore` surface — the same attributes, the
 `open_shard(sh, group)[slot]` contract and `split()` — so the pool, the
-trainer and the evals cannot tell the difference. `open_store` picks one;
-`data.reader` pins the choice.
+trainer and the evals cannot tell the difference. `open_store` picks one:
+`live_dem` and `era5` from the `kind` in the store's `manifest.json`, and
+Major-TOM by its directory layout. `data.reader` can pin `chipstore` or
+`live_s2`.
 
 Write a live reader when the source's own layout already has fixed
 geometry and a usable index, and a store builder when it does not (chips
@@ -60,8 +63,10 @@ Notes:
 
 ## 2. A `Source` adapter
 
-Subclass `georvq.sources.Source` and register it in
-`georvq/sources/__init__.py`:
+Subclass `georvq.sources.Source` and add it to the `SOURCES` table in
+`get_source()` (`georvq/sources/__init__.py`), which maps the
+`data.source` name to the class. ERA5 shows the other pattern: the name
+`era5:<var>` carries a parameter the adapter needs.
 
 - `prep(raw, device) -> (x, valid)` — store dtype to model-space floats
   plus a validity mask (nodata handling lives here).
@@ -69,16 +74,27 @@ Subclass `georvq.sources.Source` and register it in
   shared ViT tokenizer expects. This is where multi-resolution band groups
   get their native-GSD conv stems (see `S2NativeStem`). Dense single-plane
   sources use `nn.Identity()`.
-- `build_head(cfg, in_dim)` — decoder fine tokens → pixel output(s).
-  `DenseHead` (single plane, optional per-pixel L2 norm) covers embedding
-  fields; `S2MultiResHead` decodes each native grid.
+- `build_head(cfg, in_dim, n_tiers=None, out_px=None)` — decoder fine
+  tokens → pixel output(s). `n_tiers`/`out_px` are set when the head
+  belongs to a decoder-bank member that decodes a prefix of the tiers at
+  a smaller size; `Source.head_geom` turns them into the token grid and
+  patch size. `DenseHead` (single plane, optional per-pixel L2 norm)
+  covers embedding fields; `S2MultiResHead` decodes each native grid.
 - `normalizer(cfg)` — per-tile stats side channel, or `None` if your data
-  is already normalized (unit-norm embedding fields). Stats are compressed
-  with `georvq.inference.stats_codec.StatsPacker` (~11 bytes/tile).
+  is already normalized (unit-norm embedding fields). A source with one
+  also implements `last_stats()`, returning the stats of the batch `prep`
+  just normalized (the figures need them to plot physical units), and
+  `side_bits(cfg)`, the per-window bits the stats cost. `side_bits` is
+  what charges the channel: `PyramidCodec.side_bits` adds it to every
+  rate figure, and an uncharged stats channel once reached 34% of a
+  bitstream before anyone noticed. How the stats are encoded is the
+  source's choice: S2 packs them with
+  `georvq.inference.stats_codec.StatsPacker` (about 10 bytes at low
+  rates), DEM sends two float32 values.
   A separate option, `model.stats_cond`, *transmits* the per-window mean
   and codes only the remainder; it pays when the mean is a large share of
-  window energy and the field is not unit-norm. Charge it: an uncharged
-  stats channel once reached 34% of a bitstream before anyone noticed.
+  window energy and the field is not unit-norm. The codec charges that
+  channel itself.
 - `recon_stats(out, x, valid) -> (loss, metrics)` — the training loss and
   quality metrics in model space.
 - `report(cfg) -> ReportSpec` — what a run on this source should measure,
@@ -100,13 +116,22 @@ Subclass `georvq.sources.Source` and register it in
   those may only take things away, and naming something the source does
   not declare is a config error.
 
-`georvq/sources/ae.py` is the minimal reference (60 lines);
+`georvq/sources/ae.py` is the minimal reference (about 80 lines);
 `georvq/sources/s2.py` is the full multi-resolution example.
+
+A newer layer separates two things `prep` used to do at once: a
+sampler (`data.sampler`, `georvq/data/sampler.py`) decides the sample
+geometry, and a prep (`data.prep`, `georvq/sources/prep.py`) is a
+static, fitted transform to model space with a declared inverse. Sources
+are moving to it one at a time; ERA5's Box-Cox prep is the first, and
+leaving both fields unset gives the behaviour described above.
 
 ## 3. A YAML preset
 
-Copy the closest `configs/*.yaml`, set `data.source`, `data.store_dir`,
-`model.window/bands/tiers`, and train:
+Copy the closest preset from `configs/<source>/`, set `data.source`,
+`data.store_dir`, `model.window/bands/tiers`, and train. Presets'
+`store_dir` values point at the group server and need overriding
+elsewhere.
 
 ```bash
 georvq-train -c configs/<source>/my_preset.yaml --gpu 0
