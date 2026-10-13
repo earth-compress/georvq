@@ -31,6 +31,7 @@ the standard library, so a reader can be installed without torch.
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import io
 import json
@@ -38,6 +39,7 @@ import os
 import re
 import struct
 import threading
+import time
 import urllib.request
 import zlib
 from collections import OrderedDict
@@ -544,6 +546,46 @@ class RVQParquetWriter:
 
 
 # --------------------------------------------------------------------------
+# tracing
+# --------------------------------------------------------------------------
+
+class Trace:
+    """Timed events of a read, for profiling: each a dict with `kind`
+    ("get" for a byte request, "cpu" for local work, "decode" for codec
+    stages), `label`, `t0` and `t1` (time.perf_counter seconds) and
+    `bytes`. Byte requests made in parallel are recorded from their own
+    threads, so their overlap is kept. Pass one as `trace=` to
+    RVQParquetReader (or georvq.ae.open); tracing is off without one."""
+
+    def __init__(self):
+        self.events = []
+        self._lock = threading.Lock()
+
+    def add(self, kind, label, t0, t1, nbytes=0):
+        with self._lock:
+            self.events.append({"kind": kind, "label": label, "t0": t0,
+                                "t1": t1, "bytes": int(nbytes)})
+
+    @contextlib.contextmanager
+    def span(self, kind, label, nbytes=0, sync=None):
+        """Records the enclosed block. `sync`, when given, is called
+        before the end time is taken (e.g. torch.cuda.synchronize), so
+        asynchronous device work is counted in the block that issued it."""
+        t0 = time.perf_counter()
+        yield
+        if sync is not None:
+            sync()
+        self.add(kind, label, t0, time.perf_counter(), nbytes)
+
+
+def span(trace, kind, label, nbytes=0, sync=None):
+    """`trace.span(...)`, or a no-op context when `trace` is None."""
+    if trace is None:
+        return contextlib.nullcontext()
+    return trace.span(kind, label, nbytes, sync)
+
+
+# --------------------------------------------------------------------------
 # cache
 # --------------------------------------------------------------------------
 
@@ -681,12 +723,14 @@ class RVQParquetReader:
     `concurrency` at a time over HTTP and in turn from a local file.
     `cache` defaults to a RecordCache of `cache_bytes`, on disk under
     `cache_dir` when one is given. `stats` counts requests, bytes,
-    values served from the cache and their bytes."""
+    values served from the cache and their bytes. `trace`, a Trace,
+    records each byte request and the parsing work when given."""
 
     def __init__(self, path_or_url, first_read=FIRST_READ, gap=GAP,
                  concurrency=CONCURRENCY, cache=None, cache_bytes=CACHE_BYTES,
-                 cache_dir=None):
+                 cache_dir=None, trace=None):
         self.source = os.fspath(path_or_url)
+        self.trace = trace
         self.gap = int(gap)
         self.concurrency = max(1, int(concurrency))
         self._url = self.source.startswith(("http://", "https://"))
@@ -707,8 +751,9 @@ class RVQParquetReader:
         # The footer is parsed from the fetched bytes alone: pyarrow's own
         # open reads a fixed-size suffix that may extend past them.
         footer = tail[len(tail) - need:]
-        md = pq.read_metadata(pa.BufferReader(b"PAR1" + footer))
-        self._pf = pq.ParquetFile(self._buf, metadata=md)
+        with span(trace, "cpu", "parse footer"):
+            md = pq.read_metadata(pa.BufferReader(b"PAR1" + footer))
+            self._pf = pq.ParquetFile(self._buf, metadata=md)
         self.metadata = md
         kv = md.metadata or {}
         if HEADER_KEY.encode() not in kv:
@@ -771,6 +816,7 @@ class RVQParquetReader:
         return resp.headers.get("ETag") or resp.headers.get("Last-Modified")
 
     def _suffix(self, n):
+        t0 = time.perf_counter()
         if self._url:
             req = urllib.request.Request(self.source,
                                          headers={"Range": f"bytes=-{n}"})
@@ -789,6 +835,8 @@ class RVQParquetReader:
             size = os.fstat(self._fd).st_size
             data = self._pread(max(0, size - n), min(n, size))
         self._count(len(data))
+        if self.trace is not None:
+            self.trace.add("get", "suffix", t0, time.perf_counter(), len(data))
         return data, size
 
     def _pread(self, offset, length):
@@ -805,6 +853,7 @@ class RVQParquetReader:
         offset, length = rng
         if length <= 0:
             return b""
+        t0 = time.perf_counter()
         if self._url:
             req = urllib.request.Request(
                 self.source, headers={"Range": f"bytes={offset}-{offset + length - 1}"})
@@ -822,6 +871,9 @@ class RVQParquetReader:
         if len(data) != length:
             raise OSError(f"{self.source}: short read at {offset}")
         self._count(len(data))
+        if self.trace is not None:
+            self.trace.add("get", f"{offset}+{length}", t0, time.perf_counter(),
+                           length)
         return data
 
     def _fetch(self, ranges) -> list:
@@ -970,7 +1022,8 @@ class RVQParquetReader:
                 self.stats["cache_bytes"] += len(v)
         if not missing:
             return out
-        ranges = self._ranges(missing)
+        with span(self.trace, "cpu", "plan ranges"):
+            ranges = self._ranges(missing)
         for r, data in zip(ranges, self._fetch(ranges)):
             self._buf.add(r[0], data)
         try:
@@ -978,15 +1031,16 @@ class RVQParquetReader:
             for n in missing:
                 rg = self.row_group(self.layout.kind_of[n[0]], n[1], n[2])
                 by_rg.setdefault(rg, []).append(n)
-            for rg, ns in by_rg.items():
-                tb = self._pf.read_row_group(rg, columns=[n[0] for n in ns],
-                                             use_threads=False)
-                for n in ns:
-                    v = tb.column(n[0])[0].as_py()
-                    if v is None:
-                        raise ValueError(f"{self.source}: {n} is null")
-                    out[n] = v
-                    self.cache.put(self._key(n), v)
+            with span(self.trace, "cpu", "parse pages"):
+                for rg, ns in by_rg.items():
+                    tb = self._pf.read_row_group(
+                        rg, columns=[n[0] for n in ns], use_threads=False)
+                    for n in ns:
+                        v = tb.column(n[0])[0].as_py()
+                        if v is None:
+                            raise ValueError(f"{self.source}: {n} is null")
+                        out[n] = v
+                        self.cache.put(self._key(n), v)
         finally:
             self._buf.clear()
         return out
@@ -1004,6 +1058,11 @@ class RVQParquetReader:
             depths = [t.levels for t in self.layout.tiers]
         cols = self.columns_for(depths, base, mask, quality)
         vals = self.values(self.needs(wy0, wy1, wx0, wx1, cols))
+        with span(self.trace, "cpu", "unpack records"):
+            return self._unpack(vals, wy0, wy1, wx0, wx1, depths, base,
+                                mask, quality)
+
+    def _unpack(self, vals, wy0, wy1, wx0, wx1, depths, base, mask, quality):
         gh, gw = wy1 - wy0, wx1 - wx0
         out = {}
 
