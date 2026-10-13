@@ -110,30 +110,25 @@ reads like the source tile, at 23 rates; full contract in
 `docs/AE_V2_RELEASE.md`. v1 above is unchanged.
 
 ```bash
-# 1. install
+# 1. install (add ".[onnx]" for torch-free decode)
 git clone <this repo> && cd georvq
-pip install -e ".[eval]"
+pip install -e .
 
-# 2. get the weights from Hugging Face   [pending: hosting]
-huggingface-cli download earth-compress/georvq-ae-v2 --local-dir georvq-ae-v2
-
-# 3. use it (--model/--channel until the bundle loader lands   [pending: bundle])
+# 2. use it; the weights a file needs are fetched on first read  [pending: hosting]
 python -m georvq.ae.v2 info   tile.georvq.parquet
-python -m georvq.ae.v2 decode tile.georvq.parquet out.npy \
-    --model <checkpoint> --channel <mean channel .npz> --quality 8-8-2
-python -m georvq.ae.v2 encode src.tif out_dir/ \
-    --model <checkpoint> --channel <mean channel .npz> --device cuda
+python -m georvq.ae.v2 decode tile.georvq.parquet out.npy --quality 8-8-2
+python -m georvq.ae.v2 encode src.tif out_dir/ --bundle <bundle dir> --device cuda
 ```
 
 ```python
 import georvq.ae
-ds = georvq.ae.open("<url or path>/annual/2021/44N/<stem>.georvq.parquet",
-                    model="<checkpoint>", channel="<mean channel .npz>")
+ds = georvq.ae.open("<url or path>/annual/2021/44N/<stem>.georvq.parquet")
 a = ds.read(window=((0, 1024), (0, 1024)), quality="p99<=0.02")
 ```
 
-Decoding needs torch for now; torch-free decode through ONNX is
-planned `[pending: onnx]`.
+The file names the release that decodes it; `open` finds that release's
+bundle in a local cache or downloads it from Hugging Face. Decoding runs
+on torch, or on ONNX Runtime when torch is not installed.
 
 ## Train
 
@@ -214,7 +209,7 @@ the byte ranges a window and rate need, and picks a rate from 23 rungs
 
 ```python
 import georvq.ae
-ds = georvq.ae.open(url, model=ckpt, channel=mean_npz)   # [pending: bundle]
+ds = georvq.ae.open(url)
 a = ds.read(window=((0, 1024), (0, 1024)), quality="8-8-2")
 ```
 

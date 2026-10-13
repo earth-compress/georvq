@@ -1,3 +1,5 @@
+Draft for review: the module-map additions for AE v2 and the install line are new and not yet approved.
+
 # Codebase overview
 
 Orientation for humans and agents working on georvq. `README.md` is the
@@ -61,8 +63,8 @@ submodules exist. Everything is assembled from one validated `Config`
 | `georvq/train/` | `loop.py` the one trainer (it also owns the dead-code reset schedule, `mark_resets`); `stage1.py` σ-conditioned pretrain; `grow.py` grown training; `dist.py` data parallelism for frozen codebooks; `trap.py` a flight recorder and tripwire for gradient spikes; `validate.py`, `figures.py`, `report.py`, `warmstart.py` |
 | `georvq/eval/` | Held-out extraction, probes, benchmark registry, codec A/B helpers |
 | `georvq/viz/` | Panel/GIF styling and builders |
-| `georvq/inference/` | Source-agnostic deployment machinery: `api.py` Codec/Packet, `stats_codec.py`, `archive.py` rANS (research tool), `refine.py` additive residual refinements, `mean_codec.py` the `stats_cond` channel on the wire, `release.py` bundles + bitstream/decoder ids, `onnx_backend.py` ONNX export + torch-free runtime |
-| `georvq/ae/` | **The AlphaEarth release codec** — AE-specific policy (pixel prep, 8* coarse sidecar, quality ladder, COG asset container, executables). See `docs/AE_RELEASE.md` |
+| `georvq/inference/` | Source-agnostic deployment machinery: `api.py` Codec/Packet, `stats_codec.py`, `archive.py` rANS (research tool), `refine.py` additive residual refinements, `mean_codec.py` the `stats_cond` channel on the wire, `release.py` bundles + bitstream/decoder ids, `onnx_backend.py` ONNX export + torch-free runtime, `georvq_parquet.py` the GeoParquet release container (layout, writer, range reader, record cache), `bitpack.py` fixed-width records, `onnx_stats.py` ONNX for transmitted-mean models |
+| `georvq/ae/` | **The AlphaEarth release codec** — AE-specific policy (pixel prep, 8* coarse sidecar, quality ladder, COG asset container, executables). See `docs/AE_RELEASE.md`. v2: `v2.py` (codec, `georvq.ae.open`, CLI), `v2_bundle.py`, `v2_resolve.py` (finding the bundle a file names), `index.py`; see `docs/AE_V2_RELEASE.md` |
 | `georvq/tessera/` | **The Tessera release codec** — Tessera-specific policy (transmitted mean, rate ladder, fine-tier refinement). See `docs/TESSERA_RELEASE.md` |
 | `scripts/` | Thin drivers over the above (train, store builders, eval, archive, GIFs) |
 | `analysis/` | Source-characterisation and codec-diagnostic probes (`analysis/README.md`) |
