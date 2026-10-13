@@ -361,6 +361,14 @@ class AEV2Codec:
         """base: (n, n_values) base records; tiers: per finer tier (n,
         levels_read, cells) codes, or None at depth 0; depths: the tuple; valid: (n, W, W)
         bool. -> (n, C, W, W) int8 with invalid pixels at -128."""
+        out, v = self.decode_field(base, tiers, depths, valid)
+        return requant(out, v)
+
+    @torch.no_grad()
+    def decode_field(self, base, tiers, depths, valid):
+        """As decode_records, but returns the decoded float field (n, C,
+        W, W) on the codec's device before requantization, and the
+        validity as a device tensor."""
         dev = self.device
         n = base.shape[0]
         sp0 = self.specs[0]
@@ -377,8 +385,7 @@ class AEV2Codec:
             i = torch.from_numpy(np.ascontiguousarray(i)).to(dev)
             zqs.append(_cumulative(rvq, i, int(L))[int(L)])
         v = torch.from_numpy(np.ascontiguousarray(valid)).to(dev)
-        out = self._forward(zqs, depths, mean, v)
-        return requant(out, v)
+        return self._forward(zqs, depths, mean, v), v
 
 
 def requant(out, valid):
