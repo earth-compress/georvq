@@ -35,6 +35,12 @@ graphs, codebooks and mean channel to a directory, and
 `AEV2OnnxCodec` with onnxruntime and numpy. This module imports torch
 only when the torch codec is used.
 
+The header names the release a file was coded with (`codec.release`),
+so `open_dataset(path)` with no codec arguments finds the bundle that
+decodes it, in the environment, the local cache, or by downloading it
+from a trusted release (georvq.ae.v2_resolve). The bundle is located
+when pixels are first read, so reading metadata needs none.
+
 The v1 release (georvq.ae.cli, georvq.ae.cog) is separate and unchanged.
 """
 from __future__ import annotations
@@ -50,6 +56,9 @@ import time
 
 import numpy as np
 
+from georvq.ae.v2_resolve import (RELEASE_NAME, RELEASE_URI, BundleError,
+                                  default_device, release_record,
+                                  resolve_codec)
 from georvq.inference.georvq_parquet import (Layout, RVQParquetReader,
                                              RVQParquetWriter, output_name,
                                              tier_names)
@@ -565,12 +574,15 @@ def _projjson(crs):
 
 
 def encode_tile(src_path, out_path, codec: AEV2Codec, stats=True,
-                chunk_px=None, strip_px=STRIP_PX, batch=256, release=None,
+                chunk_px=None, strip_px=STRIP_PX, batch=256,
+                release=RELEASE_NAME, uri=RELEASE_URI, revision=None,
                 log=None) -> dict:
     """Encode one AE tile (GeoTIFF) to `out_path`, conventionally
     `output_name(src_path)`. Strips of `strip_px` rows are encoded in
     turn. chunk_px: per-kind chunk sizes, `chunk_sizes` by default.
-    Returns timings."""
+    `release`, `uri` and `revision` are written to the header's
+    `codec.release` (see georvq.ae.v2_resolve); `release=None` writes
+    none. Returns timings."""
     import rasterio
     from rasterio.windows import Window
     W = codec.window
@@ -589,7 +601,8 @@ def encode_tile(src_path, out_path, codec: AEV2Codec, stats=True,
         meta = _source_meta(ds)
         pid = os.path.splitext(os.path.basename(os.fspath(src_path)))[0]
         header = {
-            "codec": codec.header_codec(release),
+            "codec": codec.header_codec(
+                release_record(codec, release, uri, revision)),
             "product": {
                 "kind": KIND, "id": pid,
                 "source": os.fspath(src_path),
@@ -639,9 +652,11 @@ class AEV2Dataset:
 
     Georeferencing, shape and `read` follow the SOURCE tile, including a
     bottom-up row order, so code written against the source dataset can
-    read this instead. `read` needs a codec; the metadata does not."""
+    read this instead. `read` needs a codec; the metadata does not.
+    Without a codec, `resolver(header)` is called for one the first time
+    `codec` is used."""
 
-    def __init__(self, path_or_url, codec=None, **reader_kw):
+    def __init__(self, path_or_url, codec=None, resolver=None, **reader_kw):
         self.reader = RVQParquetReader(path_or_url, **reader_kw)
         self.name = self.reader.source
         h = self.header = self.reader.header
@@ -649,10 +664,10 @@ class AEV2Dataset:
         if p.get("kind") != KIND:
             raise ValueError(f"{self.name}: product kind {p.get('kind')!r}, "
                              f"not {KIND}")
-        self.codec = codec
-        if codec is not None and codec.bitstream_id != h["codec"]["bitstream_id"]:
-            raise ValueError(f"{self.name}: bitstream {h['codec']['bitstream_id']}"
-                             f", codec holds {codec.bitstream_id}")
+        self._codec = None
+        self._resolver = resolver
+        if codec is not None:
+            self.codec = codec
         self.height, self.width = int(p["height"]), int(p["width"])
         self.count = int(p["count"])
         self.dtypes = (p["dtype"],) * self.count
@@ -668,6 +683,20 @@ class AEV2Dataset:
         self.names = tier_names(len(self.full))
         self._meta = None
         self._crs = None
+
+    @property
+    def codec(self):
+        if self._codec is None and self._resolver is not None:
+            self.codec = self._resolver(self.header)
+        return self._codec
+
+    @codec.setter
+    def codec(self, codec):
+        bid = self.header["codec"]["bitstream_id"]
+        if codec is not None and codec.bitstream_id != bid:
+            raise ValueError(f"{self.name}: bitstream {bid}, codec holds "
+                             f"{codec.bitstream_id}")
+        self._codec = codec
 
     @property
     def crs(self):
@@ -797,9 +826,9 @@ class AEV2Dataset:
         the cheapest rung meeting it, full depth where none does), or
         None for full depth."""
         if self.codec is None:
-            raise ValueError("reading pixels needs a codec: open(path, "
-                             "model=..., channel=...) or open(path, "
-                             "backend='onnx', onnx_dir=...)")
+            raise ValueError("reading pixels needs a codec: open the file "
+                             "with open_dataset, which finds the file's "
+                             "bundle, or pass codec=")
         W = self.window_px
         ny0, ny1, nx0, nx1 = self._north_px(window)
         wy0, wy1 = ny0 // W, -(-ny1 // W)
@@ -847,21 +876,64 @@ class AEV2Dataset:
         return m[::-1] if self.bottom_up else m
 
 
-def open_dataset(path_or_url, model=None, channel=None, device="cpu",
-                 bf16=None, codec=None, backend="torch", onnx_dir=None,
-                 **reader_kw) -> "AEV2Dataset":
-    """Open an AE v2 file (a local path or an http(s) URL). Reading pixels
-    needs a codec: `model` (a checkpoint path or a model) and `channel` (a
-    .npz path or a channel) for the torch backend, `onnx_dir` with
-    backend="onnx", or an AEV2Codec / AEV2OnnxCodec as `codec`.
-    `reader_kw` go to RVQParquetReader (`first_read`, `gap`,
-    `concurrency`, `cache`, `cache_bytes`, `cache_dir`)."""
-    if codec is None and (model is not None or backend == "onnx"):
-        if backend == "torch" and channel is None:
+def open_dataset(path_or_url, model=None, channel=None, bundle=None,
+                 onnx_dir=None, device=None, backend=None, trust_remote=False,
+                 cache_dir=None, bf16=None, codec=None, threads=None,
+                 record_cache_dir=None, **reader_kw) -> "AEV2Dataset":
+    """Open an AE v2 file (a local path or an http(s) URL).
+
+    The codec that reads pixels comes from the first of
+    - `codec`, an AEV2Codec or AEV2OnnxCodec;
+    - `model` (a checkpoint path or a model) and `channel` (a .npz path
+      or a channel), torch backend;
+    - `bundle`, a bundle directory, or `onnx_dir`, an `export_onnx`
+      directory (onnx backend);
+    - the bundle `georvq.ae.v2_resolve.locate_bundle` finds for the
+      file: $GEORVQ_AE_BUNDLE, the cache under `cache_dir` (default
+      $GEORVQ_CACHE, $XDG_CACHE_HOME/georvq or ~/.cache/georvq), or a
+      download from the release the header names, when that release is
+      trusted or `trust_remote` is set.
+    Explicit arguments are loaded on open; the located bundle is loaded
+    when the codec is first needed, so metadata can be read without it.
+    A bundle for another bitstream is refused.
+
+    backend: "torch" or "onnx"; default torch when it imports (onnx
+    when `onnx_dir` is given). device: default cuda when the torch
+    backend sees a GPU, else cpu. `record_cache_dir` is the
+    RVQParquetReader's on-disk record cache; `reader_kw` go to it too
+    (`first_read`, `gap`, `concurrency`, `cache`, `cache_bytes`)."""
+    if record_cache_dir is not None:
+        reader_kw["cache_dir"] = record_cache_dir
+    explicit = codec is not None
+    if codec is None and (model is not None or channel is not None):
+        if backend not in (None, "torch"):
+            raise ValueError("model= and channel= load the torch backend")
+        if model is None or channel is None:
             raise ValueError("a model needs its mean channel")
-        codec = load_codec(model, channel, device=device, bf16=bf16,
-                           backend=backend, onnx_dir=onnx_dir)
-    return AEV2Dataset(path_or_url, codec, **reader_kw)
+        codec = load_codec(model, channel, device=device or
+                           default_device("torch"), bf16=bf16)
+        explicit = True
+    elif codec is None and bundle is None and onnx_dir is not None:
+        if backend not in (None, "onnx"):
+            raise ValueError("onnx_dir= loads the onnx backend")
+        codec = load_codec(backend="onnx", onnx_dir=onnx_dir,
+                           device=device or "cpu", threads=threads)
+        explicit = True
+
+    def resolver(header):
+        return resolve_codec(header, bundle=bundle, backend=backend,
+                             device=device, bf16=bf16, threads=threads,
+                             cache_dir=cache_dir, trust_remote=trust_remote)
+
+    ds = AEV2Dataset(path_or_url, codec, None if explicit else resolver,
+                     **reader_kw)
+    if bundle is not None and not explicit:
+        try:
+            ds.codec
+        except BaseException:
+            ds.close()
+            raise
+    return ds
 
 
 open = open_dataset
@@ -914,16 +986,37 @@ def _window_arg(s):
     return ((r, r + h), (c, c + w))
 
 
+def _fetch_header(target, uri, revision) -> dict:
+    """Header of the file `target`, or a stand-in naming a bitstream id
+    and the release to download it from."""
+    if os.path.exists(target) or target.startswith(("http://", "https://")):
+        with RVQParquetReader(target) as rd:
+            return rd.header
+    return {"codec": {"bitstream_id": target,
+                      "release": {"uri": uri, "revision": revision}}}
+
+
 def main(argv=None):
+    from georvq.ae.v2_resolve import locate_bundle
     ap = argparse.ArgumentParser(
         prog="python -m georvq.ae.v2",
         description="AlphaEarth v2 codec: one annual tile <-> one "
                     "georvq GeoParquet file.")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
+    def cache_args(p):
+        p.add_argument("--cache-dir", default=None,
+                       help="georvq cache (default $GEORVQ_CACHE, else "
+                            "$XDG_CACHE_HOME/georvq or ~/.cache/georvq); "
+                            "bundles live in bundles/<bitstream_id>/")
+        p.add_argument("--trust-remote", action="store_true",
+                       help="download a release that is not on the "
+                            "trusted list")
+
     def model_args(p, onnx=False):
         p.add_argument("--model", default=None, help="checkpoint path")
         p.add_argument("--channel", default=None, help="mean channel .npz")
+        p.add_argument("--bundle", default=None, help="bundle directory")
         p.add_argument("--device", default=None,
                        help="default: cuda when torch sees one, else cpu "
                             "(onnx backend: cpu)")
@@ -932,12 +1025,14 @@ def main(argv=None):
         p.add_argument("--batch", type=int, default=256)
         if onnx:
             p.add_argument("--backend", choices=["torch", "onnx"],
-                           default="torch")
+                           default=None,
+                           help="default torch when it imports, else onnx")
             p.add_argument("--onnx-dir", default=None,
                            help="export-onnx directory (backend onnx)")
             p.add_argument("--threads", type=int, default=None,
                            help="onnxruntime threads (default: the CPUs "
                                 "this process may use)")
+            cache_args(p)
 
     e = sub.add_parser("encode", help="GeoTIFF tile -> .georvq.parquet")
     e.add_argument("src")
@@ -947,7 +1042,14 @@ def main(argv=None):
     model_args(e)
     e.add_argument("--no-quality", action="store_true",
                    help="skip the per-rung quality column (one decode per rung)")
-    e.add_argument("--release", default=None)
+    e.add_argument("--release", default=RELEASE_NAME,
+                   help="release name in the header ('' for no release "
+                        "record)")
+    e.add_argument("--release-uri", default=RELEASE_URI,
+                   help="where the release's bundle is published")
+    e.add_argument("--revision", default=None,
+                   help="revision of the release's bundle (default: none, "
+                        "the repository's default branch)")
 
     d = sub.add_parser("decode", help="window -> .npy (source row order)")
     d.add_argument("src")
@@ -968,8 +1070,17 @@ def main(argv=None):
     model_args(x)
     x.add_argument("--opset", type=int, default=17)
 
+    f = sub.add_parser("fetch", help="find or download the bundle of a file "
+                                     "or bitstream id; prints its directory")
+    f.add_argument("target", help="a v2 file (path or URL) or a bitstream id")
+    f.add_argument("--uri", default=RELEASE_URI,
+                   help="release to download a bitstream id from")
+    f.add_argument("--revision", default=None)
+    cache_args(f)
+
     i = sub.add_parser("info", help="header summary and column sizes")
     i.add_argument("src")
+    i.add_argument("--cache-dir", default=None)
     args = ap.parse_args(argv)
 
     if args.cmd == "info":
@@ -989,51 +1100,72 @@ def main(argv=None):
             for n, b in rd.kind_bytes().items():
                 print(f"  {n + ' rows':<10} {b:>12,} B")
             print(f"  {'file':<10} {rd.size:>12,} B")
+            try:
+                where = locate_bundle(h, args.cache_dir, download=False)
+            except BundleError as err:
+                where = f"not found ({err})"
+            print(f"  bundle     {where}")
         return 0
 
-    backend = getattr(args, "backend", "torch")
-    device = args.device
-    if device is None:
-        if backend == "onnx":
-            device = "cpu"
-        else:
-            import torch
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-    if backend == "torch" and (args.model is None or args.channel is None):
-        ap.error("--model and --channel are needed (or --backend onnx "
-                 "--onnx-dir DIR)")
-    if args.cmd == "export-onnx":
-        codec = AEV2Codec.load(args.model, args.channel, device="cpu",
-                               bf16=False)
+    if args.cmd == "fetch":
+        header = _fetch_header(args.target, args.uri, args.revision)
+        try:
+            print(locate_bundle(header, args.cache_dir, args.trust_remote))
+        except BundleError as err:
+            print(err, file=sys.stderr)
+            return 1
+        return 0
+
+    t0 = time.time()
+    if args.cmd in ("decode", "reconstruct"):
+        with open_dataset(args.src, model=args.model, channel=args.channel,
+                          bundle=args.bundle, onnx_dir=args.onnx_dir,
+                          device=args.device, backend=args.backend,
+                          bf16=not args.fp32, threads=args.threads,
+                          cache_dir=args.cache_dir,
+                          trust_remote=args.trust_remote) as ds:
+            try:
+                ds.codec
+            except BundleError as err:
+                print(err, file=sys.stderr)
+                return 1
+            if args.cmd == "decode":
+                a = ds.read(window=_window_arg(args.window),
+                            quality=args.quality, batch=args.batch)
+                np.save(args.out, a)
+                print(f"{a.shape} in {time.time() - t0:.1f}s, "
+                      f"{ds.reader.stats['requests']} requests, "
+                      f"{ds.reader.stats['bytes']:,} B")
+            else:
+                reconstruct(ds, args.out, quality=args.quality)
+                print(f"{args.out} in {time.time() - t0:.1f}s")
+        return 0
+
+    # the export traces the model on CPU in fp32
+    export = args.cmd == "export-onnx"
+    device = "cpu" if export else args.device or default_device("torch")
+    bf16 = False if export else not args.fp32
+    if args.bundle is not None:
+        from georvq.ae.v2_bundle import load_bundle
+        codec = load_bundle(args.bundle, device=device, bf16=bf16)
+    elif args.model is not None and args.channel is not None:
+        codec = AEV2Codec.load(args.model, args.channel, device=device,
+                               bf16=bf16)
+    else:
+        ap.error("--model and --channel, or --bundle, are needed")
+    if export:
         meta = export_onnx(codec, args.out, opset=args.opset)
         print(json.dumps({k: meta[k] for k in ("format", "bitstream_id",
                                                "decoder_id")}))
         return 0
-    codec = load_codec(args.model, args.channel, device=device,
-                       bf16=not args.fp32, backend=backend,
-                       onnx_dir=getattr(args, "onnx_dir", None),
-                       threads=getattr(args, "threads", None))
-    t0 = time.time()
-    if args.cmd == "encode":
-        out = args.out
-        if out is None or os.path.isdir(out):
-            out = os.path.join(out or ".", output_name(args.src))
-        t = encode_tile(args.src, out, codec, stats=not args.no_quality,
-                        batch=args.batch, release=args.release,
-                        log=lambda s: print(s, file=sys.stderr))
-        print(json.dumps(dict(t, out=out)))
-    elif args.cmd == "decode":
-        with AEV2Dataset(args.src, codec) as ds:
-            a = ds.read(window=_window_arg(args.window), quality=args.quality,
-                        batch=args.batch)
-            np.save(args.out, a)
-            print(f"{a.shape} in {time.time() - t0:.1f}s, "
-                  f"{ds.reader.stats['requests']} requests, "
-                  f"{ds.reader.stats['bytes']:,} B")
-    elif args.cmd == "reconstruct":
-        with AEV2Dataset(args.src, codec) as ds:
-            reconstruct(ds, args.out, quality=args.quality)
-        print(f"{args.out} in {time.time() - t0:.1f}s")
+    out = args.out
+    if out is None or os.path.isdir(out):
+        out = os.path.join(out or ".", output_name(args.src))
+    t = encode_tile(args.src, out, codec, stats=not args.no_quality,
+                    batch=args.batch, release=args.release or None,
+                    uri=args.release_uri, revision=args.revision,
+                    log=lambda s: print(s, file=sys.stderr))
+    print(json.dumps(dict(t, out=out)))
     return 0
 
 

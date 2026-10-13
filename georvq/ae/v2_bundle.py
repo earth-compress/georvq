@@ -12,6 +12,12 @@ Layout of a bundle directory:
     config.json       the model's resolved Config
     bundle.json       ids, tiers, rungs with their bits, file hashes
     README.md
+    onnx/             optional (`onnx=True`): the `export_onnx`
+                      directory, for the torch-free backend
+
+bundle.json records the sha256 of every file but itself and the README,
+those under onnx/ included, and names the ONNX directory under "onnx"
+(null without one).
 
 Everything is stored as plain numpy arrays and JSON, and the loader
 reads the arrays with `allow_pickle=False`, so loading a bundle runs no
@@ -37,17 +43,17 @@ The v1 bundles (`georvq.inference.release`) are separate and unchanged.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 
 import numpy as np
 import torch
 
-from georvq.ae.v2 import FORMAT, AEV2Codec
+from georvq.ae.v2 import FORMAT, AEV2Codec, export_onnx
+from georvq.ae.v2_resolve import (BUNDLE_FORMAT, ONNX_DIR, check_files,
+                                  read_bundle_meta, sha256_file)
 from georvq.inference.mean_codec import RVQPCAMeanChannel
 
-BUNDLE_FORMAT = "georvq-ae/v2-bundle"
 BUNDLE_VERSION = 1
 FILES = ("weights.npz", "codebooks.npz", "mean_channel.npz", "config.json")
 TRAINING_STATE = ("ema_count", "ema_sum", "ema_sse", "step", "initialized")
@@ -108,14 +114,6 @@ def book_from_int(q, scale) -> torch.Tensor:
     return f * torch.from_numpy(np.asarray(scale, dtype=np.float32))[:, None]
 
 
-def _sha256(path) -> str:
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for blk in iter(lambda: f.read(1 << 22), b""):
-            h.update(blk)
-    return h.hexdigest()
-
-
 def _numpy(t):
     t = t.detach().cpu()
     if t.dtype == torch.bfloat16:
@@ -123,10 +121,12 @@ def _numpy(t):
     return t.numpy()
 
 
-def write_bundle(out_dir, model, cfg, channel, source=None, notes="") -> dict:
+def write_bundle(out_dir, model, cfg, channel, source=None, notes="",
+                 onnx=False) -> dict:
     """Write a v2 bundle for a loaded model and its mean channel. Returns
     the bundle.json payload. `source` is descriptive metadata about the
-    checkpoint the weights came from."""
+    checkpoint the weights came from. `onnx` also writes the model's
+    ONNX export under onnx/, so that one bundle serves both backends."""
     bits = cfg.model.vq.book_bits
     if not bits:
         raise ValueError("a v2 bundle stores int codebooks; the model has "
@@ -147,6 +147,11 @@ def write_bundle(out_dir, model, cfg, channel, source=None, notes="") -> dict:
     channel.save(os.path.join(out_dir, "mean_channel.npz"))
     with open(os.path.join(out_dir, "config.json"), "w") as f:
         json.dump(cfg.model_dump(mode="json"), f, indent=1)
+    files = list(FILES)
+    if onnx:
+        export_onnx(codec, os.path.join(out_dir, ONNX_DIR))
+        files += [f"{ONNX_DIR}/{n}" for n in
+                  sorted(os.listdir(os.path.join(out_dir, ONNX_DIR)))]
 
     payload = {
         "format": BUNDLE_FORMAT, "version": BUNDLE_VERSION,
@@ -160,9 +165,10 @@ def write_bundle(out_dir, model, cfg, channel, source=None, notes="") -> dict:
         "mean_channel": {"kind": "rvq-pca",
                          "bits": int(channel.cost_bits())},
         "rungs": codec.header_rungs(),
+        "onnx": ONNX_DIR if onnx else None,
         "files": {n: {"bytes": os.path.getsize(os.path.join(out_dir, n)),
-                      "sha256": _sha256(os.path.join(out_dir, n))}
-                  for n in FILES},
+                      "sha256": sha256_file(os.path.join(out_dir, n))}
+                  for n in files},
         "source": source or {},
         "notes": notes,
     }
@@ -172,8 +178,9 @@ def write_bundle(out_dir, model, cfg, channel, source=None, notes="") -> dict:
     return payload
 
 
-def build_bundle(ckpt, mean_npz, out_dir, notes="") -> dict:
-    """Bundle a training checkpoint and its mean channel tables."""
+def build_bundle(ckpt, mean_npz, out_dir, notes="", onnx=False) -> dict:
+    """Bundle a training checkpoint and its mean channel tables; `onnx`
+    as for write_bundle."""
     from georvq.factory import from_checkpoint
     ck = torch.load(ckpt, map_location="cpu", weights_only=False)
     if ck.get("prep"):
@@ -185,7 +192,7 @@ def build_bundle(ckpt, mean_npz, out_dir, notes="") -> dict:
               "step": ck.get("step"), "config_hash": ck.get("config_hash"),
               "git": ck.get("git"), "metrics": ck.get("metrics")}
     return write_bundle(out_dir, model, model.full_config, channel,
-                        source=source, notes=notes)
+                        source=source, notes=notes, onnx=onnx)
 
 
 def load_model(bundle_dir, device="cpu", verify=True):
@@ -193,17 +200,9 @@ def load_model(bundle_dir, device="cpu", verify=True):
     `verify` checks the file hashes recorded in bundle.json."""
     from georvq.config import Config, migrate
     from georvq.factory import build_model
-    with open(os.path.join(bundle_dir, "bundle.json")) as f:
-        meta = json.load(f)
-    if meta.get("format") != BUNDLE_FORMAT:
-        raise ValueError(f"{bundle_dir}: not an AE v2 bundle "
-                         f"(format {meta.get('format')!r})")
+    meta = read_bundle_meta(bundle_dir)
     if verify:
-        for name, rec in meta["files"].items():
-            got = _sha256(os.path.join(bundle_dir, name))
-            if got != rec["sha256"]:
-                raise ValueError(f"{bundle_dir}/{name}: sha256 {got}, "
-                                 f"bundle.json records {rec['sha256']}")
+        check_files(bundle_dir, meta)
     with open(os.path.join(bundle_dir, "config.json")) as f:
         cfg = Config.model_validate(migrate(json.load(f)))
     model = build_model(cfg, "cpu")
@@ -251,6 +250,8 @@ def _write_readme(out_dir, meta):
         f"{r['bits_px']:.4f} |" for r in meta["rungs"])
     size = sum(f["bytes"] for f in meta["files"].values())
     src = meta.get("source") or {}
+    onnx = (f"\n`{meta['onnx']}/` holds the ONNX export used by the torch-free "
+            "backend (`backend=\"onnx\"`).\n" if meta.get("onnx") else "")
     with open(os.path.join(out_dir, "README.md"), "w") as f:
         f.write(f"""# georvq AE v2 bundle
 
@@ -277,7 +278,7 @@ Files ({size / 1e6:.1f} MB): `weights.npz` (model tensors), `codebooks.npz`
 (per level an int8 `q` and a float32 per-codeword `scale`, codebook =
 q * scale, with q = -128 standing for -0.0), `mean_channel.npz`,
 `config.json`, `bundle.json`. All arrays load with `allow_pickle=False`.
-
+{onnx}
 ```python
 from georvq.ae.v2_bundle import load_bundle
 from georvq.ae import v2
