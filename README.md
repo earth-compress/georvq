@@ -2,10 +2,10 @@
 
 Pyramidal residual-VQ compression for geospatial datasets.
 
-One model, one bitstream, a whole rate–distortion front: georvq trains
+Prefix-able bitstreams that offer the entire rate–distortion front from a single encode and write: georvq trains
 hierarchical (coarse→fine) residual-VQ codecs over gridded geospatial data —
 embedding fields (e.g. AlphaEarth, Tessera), multispectral imagery
-(e.g. Sentinel-2), elevation, SAR, or any source you write an adapter for.
+(e.g. Sentinel-2), elevation, SAR, or any source, though training data is needed.
 
 ## The method
 
