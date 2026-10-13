@@ -89,15 +89,18 @@ AEF source tiles store their rows bottom-up; the file codes them
 north-up and `read` returns them in the source's own order, so code
 written against the rasterio dataset of the source tile can read the
 file instead. Invalid pixels come back as -128 exactly, from the
-stored mask. The header and metadata need no model; reading pixels
-does.
+stored mask. The file's header names the release that decodes it, and
+`open` finds that release's bundle by its `bitstream_id`: in a local
+cache (`~/.cache/georvq/bundles/<bitstream_id>/`), at `GEORVQ_AE_BUNDLE`,
+or by downloading it from the `earth-compress` organisation on Hugging
+Face `[pending: hosting]`. A bundle whose ids do not match the file is
+refused. The device defaults to CUDA when available, and the backend to
+torch when installed, otherwise ONNX Runtime.
 
 ```python
 import georvq.ae
 
-ds = georvq.ae.open("annual/2021/44N/<stem>.georvq.parquet",
-                    model="<checkpoint>", channel="<mean channel .npz>",
-                    device="cuda")                     # [pending: bundle]
+ds = georvq.ae.open("annual/2021/44N/<stem>.georvq.parquet")
 w = ((0, 1024), (0, 1024))                            # rows, cols in source pixels
 a = ds.read(window=w, quality="8-8-2")                # (64, 1024, 1024) int8
 b = ds.read(3, window=w, quality="p99<=0.02")         # band 3 only, 1-based
@@ -118,13 +121,11 @@ The command line:
 
 ```bash
 python -m georvq.ae.v2 info  tile.georvq.parquet          # header, rungs, bytes per column
+python -m georvq.ae.v2 fetch tile.georvq.parquet          # download the release it names
 python -m georvq.ae.v2 decode tile.georvq.parquet out.npy \
-    --model <checkpoint> --channel <mean channel .npz> \
     --window 0,0,1024,1024 --quality 8-8-2                 # or --quality "p99<=0.02"
-python -m georvq.ae.v2 reconstruct tile.georvq.parquet recon.tif \
-    --model <checkpoint> --channel <mean channel .npz> --quality 8-8-2
-python -m georvq.ae.v2 encode src.tif out_dir/ \
-    --model <checkpoint> --channel <mean channel .npz> --device cuda
+python -m georvq.ae.v2 reconstruct tile.georvq.parquet recon.tif --quality 8-8-2
+python -m georvq.ae.v2 encode src.tif out_dir/ --device cuda
 ```
 
 `decode` writes a `.npy` in source row order and prints the requests
