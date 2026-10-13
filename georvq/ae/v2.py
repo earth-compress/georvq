@@ -3,17 +3,20 @@
 An AE v2 file holds one AlphaEarth annual tile (64-band int8, nodata
 -128) coded by a `stats_cond` model whose per-window mean travels through
 an `RVQPCAMeanChannel`. The layout is the "AE v2 instance" of
-docs/GEORVQ_PARQUET.md: one row and one row group per 1024 px block,
-with columns
+docs/GEORVQ_PARQUET.md: one row and one row group per chunk, with a
+chunk size per kind, in this file order:
 
-- `base`: per window, the mean channel's fields and every level of the
-  coarsest tier;
-- `mask`: the block's pixel validity (north-up), empty when fully valid;
-- `mid_1..mid_8`, `fine_1..fine_8` for a three-tier pyramid (otherwise
-  `tier1_*` and up): per level, the block's windows' codes, so a depth
-  prefix of a block is one contiguous byte range;
-- `quality`, optional: per window and per rung, the mean and p99 of
-  per-pixel `1 - cos` measured at encode time.
+- `base`, one 8192 px chunk (the whole tile): `base`, per window the
+  mean channel's fields and every level of the coarsest tier, then
+  `mask`, the tile's pixel validity (north-up), empty when fully valid;
+- `mid`, 4096 px chunks: `mid_1..mid_8`, per level the chunk's windows'
+  codes, so a depth prefix of a chunk is one contiguous byte range;
+- `fine`, 1024 px chunks: `fine_1..fine_8`;
+- `quality`, optional, chunked as base: per window and per rung, the
+  mean and p99 of per-pixel `1 - cos` measured at encode time.
+
+A codec with other than three tiers names them `tier0` and up, the
+finest taking the fine chunk size and the others the mid one.
 
 The source's profile, tags and orientation are JSON in the file's
 `georvq_aux` metadata. Coded data is north-up. A bottom-up source
@@ -50,7 +53,8 @@ from georvq.inference.mean_codec import RVQPCAMeanChannel
 NODATA = -128
 KIND = "aef-annual-tile"
 FORMAT = "georvq-ae/v2"
-BLOCK_PX = 1024
+BASE_CHUNK_PX, MID_CHUNK_PX, FINE_CHUNK_PX = 8192, 4096, 1024
+STRIP_PX = 1024
 QUALITY_STATS = ("mean", "p99")
 # quality code = round(Q_SCALE * (log10(e) + Q_OFFSET)), clipped to 0..255
 Q_SCALE, Q_OFFSET, Q_FLOOR = 32.0, 6.0, 1e-6
@@ -85,10 +89,21 @@ def mean_fields(channel) -> list:
     return out
 
 
+def chunk_sizes(n_tiers: int) -> dict:
+    """Chunk side in pixels per kind of an AE v2 file."""
+    names = tier_names(n_tiers)
+    out = {"base": BASE_CHUNK_PX}
+    out.update({n: MID_CHUNK_PX for n in names[1:-1]})
+    if n_tiers > 1:
+        out[names[-1]] = FINE_CHUNK_PX
+    return out
+
+
 def layout(specs, window: int, channel, n_rungs: int = 0,
-           block_px: int = BLOCK_PX) -> Layout:
+           chunk_px=None) -> Layout:
     """Columns of an AE v2 file. `n_rungs` 0 leaves out the quality
-    column. The coarsest tier's levels follow the mean in `base`."""
+    column. The coarsest tier's levels follow the mean in `base`.
+    chunk_px: per-kind chunk sizes, `chunk_sizes` by default."""
     names = tier_names(len(specs))
     sp0 = specs[0]
     base = mean_fields(channel) + [
@@ -97,7 +112,8 @@ def layout(specs, window: int, channel, n_rungs: int = 0,
         (name, sp.depth, [(name, sp.cells, _index_bits(sp.codes))])
         for name, sp in zip(names[1:], specs[1:])]
     quality = [(st, n_rungs, 8) for st in QUALITY_STATS] if n_rungs else None
-    return Layout(window, block_px, base, tiers, quality)
+    return Layout(window, chunk_px or chunk_sizes(len(specs)), base, tiers,
+                  quality)
 
 
 def rung_bits(specs, depths, channel) -> int:
@@ -173,18 +189,10 @@ class BlockRecords:
             out[name] = d[:, :, 0] if name in ("base", "quality") else d
         return out
 
-    def add_to(self, writer, block_row=0, block_col=0):
-        """Add the region's blocks to an RVQParquetWriter. The region's
-        top-left pixel is the corner of block (block_row, block_col)."""
-        n, b = writer.layout.block_windows, writer.layout.block_px
-        d = self.dense()
-        gh, gw = self.grid
-        for i in range(-(-gh // n)):
-            for j in range(-(-gw // n)):
-                sl = np.s_[i * n:(i + 1) * n, j * n:(j + 1) * n]
-                writer.add_block(block_row + i, block_col + j,
-                                 {k: v[sl] for k, v in d.items()},
-                                 self.valid[i * b:(i + 1) * b, j * b:(j + 1) * b])
+    def add_to(self, writer, window_row=0, window_col=0):
+        """Add the region's windows to an RVQParquetWriter, its top-left
+        window at (window_row, window_col) of the product's grid."""
+        writer.add_windows(window_row, window_col, self.dense(), self.valid)
 
 
 class AEV2Codec:
@@ -234,9 +242,9 @@ class AEV2Codec:
         return (torch.autocast("cuda", dtype=torch.bfloat16) if self.bf16
                 else contextlib.nullcontext())
 
-    def layout(self, quality=True, block_px=BLOCK_PX) -> Layout:
+    def layout(self, quality=True, chunk_px=None) -> Layout:
         return layout(self.specs, self.window, self.channel,
-                      len(self.rungs) if quality else 0, block_px)
+                      len(self.rungs) if quality else 0, chunk_px)
 
     def header_codec(self, release=None) -> dict:
         return {"format": FORMAT, "bitstream_id": self.bitstream_id,
@@ -431,15 +439,17 @@ def _projjson(crs):
 
 
 def encode_tile(src_path, out_path, codec: AEV2Codec, stats=True,
-                block_px=BLOCK_PX, batch=256, release=None, log=None) -> dict:
+                chunk_px=None, strip_px=STRIP_PX, batch=256, release=None,
+                log=None) -> dict:
     """Encode one AE tile (GeoTIFF) to `out_path`, conventionally
-    `output_name(src_path)`. Strips of `block_px` rows are encoded in
-    turn and split into blocks. Returns timings."""
+    `output_name(src_path)`. Strips of `strip_px` rows are encoded in
+    turn. chunk_px: per-kind chunk sizes, `chunk_sizes` by default.
+    Returns timings."""
     import rasterio
     from rasterio.windows import Window
     W = codec.window
-    if block_px % W:
-        raise ValueError(f"block_px {block_px} is not a multiple of {W}")
+    if strip_px % W:
+        raise ValueError(f"strip_px {strip_px} is not a multiple of {W}")
     t0 = time.time()
     with rasterio.Env(**_GDAL_ENV), rasterio.open(src_path) as ds:
         if ds.count != codec.bands or ds.dtypes[0] != "int8":
@@ -466,13 +476,13 @@ def encode_tile(src_path, out_path, codec: AEV2Codec, stats=True,
             "rungs": codec.header_rungs()}
         if stats:
             header["quality"] = codec.header_quality()
-        lay = codec.layout(quality=stats, block_px=block_px)
+        lay = codec.layout(quality=stats, chunk_px=chunk_px)
         t_read = t_enc = t_write = 0.0
         w = RVQParquetWriter(out_path, header, lay, pid, list(north)[:6], H, Wd,
                              crs=_projjson(ds.crs),
                              aux=json.dumps(meta, default=str))
-        for y0 in range(0, H, block_px):
-            y1 = min(H, y0 + block_px)
+        for y0 in range(0, H, strip_px):
+            y1 = min(H, y0 + strip_px)
             s0, s1 = (H - y1, H - y0) if bottom_up else (y0, y1)
             ta = time.time()
             a = ds.read(window=Window(0, s0, Wd, s1 - s0))
@@ -481,7 +491,7 @@ def encode_tile(src_path, out_path, codec: AEV2Codec, stats=True,
             tb = time.time()
             rec = codec.encode_block(a, stats=stats, batch=batch)
             tc = time.time()
-            rec.add_to(w, block_row=y0 // block_px)
+            rec.add_to(w, window_row=y0 // W)
             t_read += tb - ta
             t_enc += tc - tb
             t_write += time.time() - tc
@@ -715,7 +725,8 @@ def open_dataset(path_or_url, model=None, channel=None, device="cpu",
     """Open an AE v2 file (a local path or an http(s) URL). `model` (a checkpoint path or a model)
     and `channel` (a .npz path or a channel) are needed to read pixels;
     `codec` passes an AEV2Codec instead. `reader_kw` go to
-    RVQParquetReader (`first_read`, `gap`)."""
+    RVQParquetReader (`first_read`, `gap`, `concurrency`, `cache`,
+    `cache_bytes`, `cache_dir`)."""
     if codec is None and model is not None:
         if channel is None:
             raise ValueError("a model needs its mean channel")
@@ -747,15 +758,16 @@ def reconstruct(src, out_path, quality=None, rows=1024, creation_options=None):
 
 
 def column_bytes(reader: RVQParquetReader) -> dict:
-    """Bytes per column group: the block metadata columns, `base`,
+    """Bytes per column group: the chunk metadata columns, `base`,
     `mask`, each tier outside base, `quality`, and the footer."""
     out = {}
     tier_of = {c: t.name for t in reader.layout.tiers for c in t.columns
                if not t.in_base}
     for name, b in reader.column_bytes().items():
         key = tier_of.get(name, name)
-        if key in ("product_id", "block_row", "block_col", "geometry", "bbox"):
-            key = "block_meta"
+        if key in ("kind", "product_id", "chunk_row", "chunk_col", "geometry",
+                   "bbox"):
+            key = "chunk_meta"
         out[key] = out.get(key, 0) + b
     out["footer"] = reader.metadata.serialized_size + 8
     return out
@@ -820,13 +832,17 @@ def main(argv=None):
             h = rd.header
             print(json.dumps({k: h[k] for k in ("format", "version", "status",
                                                 "codec", "product")}, indent=1))
-            print(f"  blocks {rd.block_grid}, windows {rd.window_grid}, "
-                  f"{rd.layout.block_px} px blocks")
+            print(f"  windows {rd.window_grid}")
+            for kind, g in rd.layout.groups.items():
+                print(f"  {kind:<8} {g.chunk_px:>5} px chunks, grid "
+                      f"{rd.chunk_grids[kind]}")
             for rr in h["rungs"]:
                 print(f"  {'-'.join(map(str, rr['tuple'])):>8}  "
                       f"{rr['bits_window']:>7} b/window  {rr['bits_px']:.4f} b/px")
             for n, b in column_bytes(rd).items():
                 print(f"  {n:<10} {b:>12,} B")
+            for n, b in rd.kind_bytes().items():
+                print(f"  {n + ' rows':<10} {b:>12,} B")
             print(f"  {'file':<10} {rd.size:>12,} B")
         return 0
 

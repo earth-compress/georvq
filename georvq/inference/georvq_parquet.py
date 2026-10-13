@@ -1,33 +1,43 @@
 """Reader and writer for georvq GeoParquet files (docs/GEORVQ_PARQUET.md).
 
-A file holds one source product. Each row, and each row group, is one
-square spatial block of the product: its footprint as a WKB polygon with
-a GeoParquet 1.1 bbox covering, and its windows' fixed-width code
-records as binary values, one column per tier level. The base column
-holds the windows' base records (for example a transmitted mean and the
-coarsest tier's levels), `mask` holds the block's pixel validity, and an
-optional `quality` column holds per-window quality bytes. The codec
-header is JSON in the file's key-value metadata under `georvq`.
+A file holds one source product. Its windows' fixed-width code records
+are grouped into square spatial chunks, with a chunk size chosen per
+kind: `base` (the base record, for example a transmitted mean and the
+coarsest tier's levels), each finer tier by its name, and `quality`
+(per-window quality bytes, chunked as base). Each row, and each row
+group, is one chunk of one kind: its footprint as a WKB polygon with a
+GeoParquet 1.1 bbox covering, and its windows' records as binary
+values, one column per tier level. The pixel validity mask is a column
+of the base chunks, after `base`. Row groups are ordered by kind, then
+row-major over that kind's chunk grid. The codec header is JSON in the
+file's key-value metadata under `georvq`.
 
 Code columns are written uncompressed and without dictionary encoding,
 so each column chunk is one data page around one value and its byte
 range follows from the footer. The reader opens a file with one suffix
-read, then fetches the column chunks a block range needs at a given
-depth, merging adjacent ranges, and small gaps between them, into single
-requests. The file is a standard Parquet file, so pyarrow, DuckDB or
-GDAL can read it without this module.
+read, plans the byte ranges a window region needs at a depth tuple from
+the footer, merges adjacent ranges and small gaps, fetches them (in
+parallel over HTTP), and keeps the decoded values per (chunk, column)
+in a cache, so later reads fetch only what they lack. The file is a
+standard Parquet file, so pyarrow or DuckDB can read it without this
+module.
 
 This module is source-agnostic and depends only on numpy, pyarrow and
 the standard library, so a reader can be installed without torch.
 """
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import os
+import re
 import struct
+import threading
 import urllib.request
 import zlib
+from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 import numpy as np
@@ -43,13 +53,17 @@ STATUS = "placeholder"
 SUFFIX = ".georvq.parquet"
 FIRST_READ = 256 * 1024
 GAP = 16 * 1024
+CONCURRENCY = 16
+CACHE_BYTES = 512 * 1024 * 1024
 MASK_CODEC = "packbits-zlib"
 HEADER_KEY = "georvq"
 AUX_KEY = "georvq_aux"
 GEO_KEY = "geo"
 _BBOX = ("xmin", "ymin", "xmax", "ymax")
-_STAT_COLUMNS = ["product_id", "block_row", "block_col"] + [f"bbox.{k}" for k in _BBOX]
+_STAT_COLUMNS = ["kind", "product_id", "chunk_row", "chunk_col"] + [
+    f"bbox.{k}" for k in _BBOX]
 _WRITER_KEYS = ("format", "version", "status", "layout")
+_RESERVED = ("base", "mask", "quality")
 
 
 def tier_names(n_tiers: int) -> list:
@@ -110,24 +124,41 @@ class Tier:
         return self.columns == ("base",)
 
 
+@dataclass(frozen=True)
+class Group:
+    """One kind of row group: its chunk side in pixels and windows, and
+    its data columns in file order."""
+    kind: str
+    chunk_px: int
+    chunk_windows: int
+    columns: tuple
+
+
 class Layout:
-    """Columns and block geometry of a file.
+    """Columns and chunk geometry of a file.
 
-    window_px: window side in pixels; block_px: block side in pixels, a
-    multiple of window_px. base: fields of the base record. tiers: list
-    of (name, levels, fields), fields None for a tier carried in base
-    (only the first tier can be). quality: fields of the quality record,
-    or None for no quality column."""
+    window_px: window side in pixels. chunk_px: chunk side in pixels, a
+    multiple of window_px, either one int for every kind or a dict with
+    an entry for `base` and for each tier outside base; quality chunks
+    follow base. base: fields of the base record. tiers: list of (name,
+    levels, fields), fields None for a tier carried in base (only the
+    first tier can be). quality: fields of the quality record, or None
+    for no quality column. mask_kind: the kind whose chunks hold the
+    pixel validity mask, `base` or a tier outside base.
 
-    def __init__(self, window_px, block_px, base, tiers, quality=None):
-        self.window_px, self.block_px = int(window_px), int(block_px)
-        if self.block_px % self.window_px:
-            raise ValueError(f"block_px {block_px} is not a multiple of "
-                             f"window_px {window_px}")
-        self.block_windows = self.block_px // self.window_px
+    Kinds, in file order, are `base`, each tier outside base, and
+    `quality`. The mask follows `base` in the base kind, and is the first
+    column of a tier's kind, so either way a read of the kind's leading
+    columns covers it in the same range."""
+
+    def __init__(self, window_px, chunk_px, base, tiers, quality=None,
+                 mask_kind="base"):
+        self.window_px = W = int(window_px)
         self.base = Column("base", base)
         self.tiers, self.level_columns = [], []
         for i, (name, levels, fields) in enumerate(tiers):
+            if name in _RESERVED or name in [t.name for t in self.tiers]:
+                raise ValueError(f"tier name {name!r} is reserved or repeated")
             if fields is None:
                 if i:
                     raise ValueError("only the first tier can live in base")
@@ -140,15 +171,45 @@ class Layout:
         self.columns = {c.name: c for c in [self.base] + self.level_columns
                         + ([self.quality] if self.quality else [])}
 
+        kinds = ["base"] + [t.name for t in self.tiers if not t.in_base]
+        if isinstance(chunk_px, dict):
+            extra = set(chunk_px) - set(kinds)
+            missing = [k for k in kinds if k not in chunk_px]
+            if extra or missing:
+                raise ValueError(f"chunk_px keys {sorted(chunk_px)}, expected {kinds}")
+            px = {k: int(chunk_px[k]) for k in kinds}
+        else:
+            px = {k: int(chunk_px) for k in kinds}
+        for k, p in px.items():
+            if p <= 0 or p % W:
+                raise ValueError(f"{k}: chunk_px {p} is not a positive multiple "
+                                 f"of window_px {W}")
+        if mask_kind not in kinds:
+            raise ValueError(f"mask_kind {mask_kind!r} not in {kinds}")
+        self.mask_kind = mask_kind
+        groups = []
+        for k in kinds:
+            if k == "base":
+                cols = ("base", "mask") if k == mask_kind else ("base",)
+            else:
+                cols = next(t.columns for t in self.tiers if t.name == k)
+                if k == mask_kind:
+                    cols = ("mask",) + cols
+            groups.append(Group(k, px[k], px[k] // W, cols))
+        if self.quality is not None:
+            groups.append(Group("quality", px["base"], px["base"] // W,
+                                ("quality",)))
+        self.groups = OrderedDict((g.kind, g) for g in groups)
+        self.kind_of = {c: g.kind for g in groups for c in g.columns}
+
     @property
     def column_order(self) -> list:
-        """Code columns in file order, `mask` after `base`."""
-        return (["base", "mask"] + [c.name for c in self.level_columns]
-                + (["quality"] if self.quality else []))
+        """Data columns in file order."""
+        return [c for g in self.groups.values() for c in g.columns]
 
-    def block_grid(self, height, width) -> tuple:
-        b = self.block_px
-        return (-(-int(height) // b), -(-int(width) // b))
+    def chunk_grid(self, kind, height, width) -> tuple:
+        p = self.groups[kind].chunk_px
+        return (-(-int(height) // p), -(-int(width) // p))
 
     def window_grid(self, height, width) -> tuple:
         w = self.window_px
@@ -159,10 +220,14 @@ class Layout:
             return {"name": c.name, "record_bytes": c.record_bytes,
                     "fields": [{"name": n, "count": k, "bits": b}
                                for n, k, b in c.fields]}
-        return {"window_px": self.window_px, "block_px": self.block_px,
-                "block_windows": [self.block_windows] * 2,
-                "block_order": "row-major", "window_order": "row-major",
-                "mask": {"column": "mask", "codec": MASK_CODEC},
+        return {"window_px": self.window_px,
+                "chunk_order": "row-major", "window_order": "row-major",
+                "groups": [{"kind": g.kind, "chunk_px": g.chunk_px,
+                            "chunk_windows": g.chunk_windows,
+                            "columns": list(g.columns)}
+                           for g in self.groups.values()],
+                "mask": {"column": "mask", "kind": self.mask_kind,
+                         "codec": MASK_CODEC},
                 "columns": [col(self.columns[n]) for n in self.column_order
                             if n != "mask"],
                 "tiers": [{"name": t.name, "levels": t.levels,
@@ -185,8 +250,16 @@ class Layout:
                 tiers.append((t["name"], t["levels"], None))
             else:
                 tiers.append((t["name"], t["levels"], fields(t["columns"][0])))
-        return cls(d["window_px"], d["block_px"], fields("base"), tiers,
-                   fields("quality") if "quality" in cols else None)
+        px = {g["kind"]: g["chunk_px"] for g in d["groups"] if g["kind"] != "quality"}
+        lay = cls(d["window_px"], px, fields("base"), tiers,
+                  fields("quality") if "quality" in cols else None,
+                  d["mask"]["kind"])
+        if [g["kind"] for g in d["groups"]] != list(lay.groups) or any(
+                list(lay.groups[g["kind"]].columns) != g["columns"]
+                or lay.groups[g["kind"]].chunk_px != g["chunk_px"]
+                for g in d["groups"]):
+            raise ValueError("layout groups disagree with the columns and tiers")
+        return lay
 
 
 # --------------------------------------------------------------------------
@@ -194,7 +267,7 @@ class Layout:
 # --------------------------------------------------------------------------
 
 def encode_mask(valid) -> bytes:
-    """Mask value of one block: b"" when every pixel is valid, otherwise
+    """Mask value of one chunk: b"" when every pixel is valid, otherwise
     zlib of numpy.packbits of the row-major bits (1 = valid)."""
     valid = np.asarray(valid, dtype=bool)
     if valid.all():
@@ -216,12 +289,12 @@ def wkb_polygon(ring) -> bytes:
             + b"".join(struct.pack("<dd", x, y) for x, y in ring))
 
 
-def block_footprint(transform, by, bx, block_px, height, width):
-    """Ring and bbox of block (by, bx) under the affine `transform`
+def chunk_footprint(transform, cy, cx, chunk_px, height, width):
+    """Ring and bbox of chunk (cy, cx) under the affine `transform`
     (a, b, c, d, e, f), clipped to the product."""
     a, b, c, d, e, f = (float(v) for v in transform[:6])
-    r0, r1 = by * block_px, min((by + 1) * block_px, height)
-    c0, c1 = bx * block_px, min((bx + 1) * block_px, width)
+    r0, r1 = cy * chunk_px, min((cy + 1) * chunk_px, height)
+    c0, c1 = cx * chunk_px, min((cx + 1) * chunk_px, width)
     corners = [(c0, r1), (c1, r1), (c1, r0), (c0, r0)]
     pts = [(a * col + b * row + c, d * col + e * row + f) for col, row in corners]
     if e > 0:                      # keep the ring counter-clockwise
@@ -248,10 +321,10 @@ def merge_ranges(ranges, gap=0) -> list:
 # --------------------------------------------------------------------------
 
 class RVQParquetWriter:
-    """Writes one product. Blocks can be added in any order, from
-    independent block encoders; `close` writes one row group per block
-    in row-major block order, so the file does not depend on the order
-    of `add_block` calls. Every block of the grid must be added.
+    """Writes one product. Window regions can be added in any order,
+    from independent encoders; `close` writes the row groups in file
+    order, so the file does not depend on the order of `add_windows`
+    calls. Every window of the product must be added.
 
     header: the codec, product, rungs and quality entries of the
     `georvq` metadata. transform: the north-up affine (a, b, c, d, e, f)
@@ -272,9 +345,18 @@ class RVQParquetWriter:
         self.crs = crs
         self.aux = aux if aux is None or isinstance(aux, str) else json.dumps(
             aux, separators=(",", ":"), default=str)
-        self.block_grid = layout.block_grid(height, width)
         self.window_grid = layout.window_grid(height, width)
-        self._blocks = {}
+        self.chunk_grids = {k: layout.chunk_grid(k, height, width)
+                            for k in layout.groups}
+        # packed records of each code column over its kind's padded grid
+        self._rec = {}
+        for name, col in layout.columns.items():
+            g = layout.groups[layout.kind_of[name]]
+            ny, nx = self.chunk_grids[g.kind]
+            self._rec[name] = np.zeros((ny * g.chunk_windows, nx * g.chunk_windows,
+                                        col.record_bytes), np.uint8)
+        self._filled = np.zeros(self.window_grid, bool)
+        self._valid = None
         self._closed = False
 
     def _tier(self, name):
@@ -283,19 +365,15 @@ class RVQParquetWriter:
                 return t
         return None
 
-    def add_block(self, block_row: int, block_col: int, records: dict,
-                  valid=None) -> None:
-        """records: {column: (h, w, n_values) ints} for the block's
-        windows, h, w <= block_windows (an edge block may give only the
-        windows inside the product). A tier name instead of a column
-        takes (h, w, levels, n_values). Columns left out are zero.
-        valid: the block's pixel validity clipped to the product, None
-        for fully valid."""
-        by, bx = int(block_row), int(block_col)
-        nby, nbx = self.block_grid
-        if not (0 <= by < nby and 0 <= bx < nbx):
-            raise ValueError(f"block ({by}, {bx}) outside the {nby}x{nbx} grid")
-        n = self.layout.block_windows
+    def add_windows(self, window_row: int, window_col: int, records: dict,
+                    valid=None) -> None:
+        """records: {column: (h, w, n_values) ints} for the windows
+        [window_row:+h, window_col:+w]; a tier name instead of a column
+        takes (h, w, levels, n_values). Every array gives the same
+        (h, w), inside the window grid. Columns left out are zero.
+        valid: pixel validity of the region clipped to the product,
+        None for fully valid."""
+        wy, wx = int(window_row), int(window_col)
         cols = {}
         for key, arr in records.items():
             arr = np.asarray(arr)
@@ -310,51 +388,95 @@ class RVQParquetWriter:
                 cols[key] = arr
             else:
                 raise ValueError(f"no column or tier named {key!r}")
-        row = {}
-        for name, col in self.layout.columns.items():
-            full = np.zeros((n, n, col.n_values), dtype=np.int64)
-            if name in cols:
-                arr = cols[name]
-                if arr.ndim != 3 or arr.shape[2] != col.n_values \
-                        or arr.shape[0] > n or arr.shape[1] > n:
-                    raise ValueError(f"{name}: expected (<= {n}, <= {n}, "
-                                     f"{col.n_values}), got {arr.shape}")
-                full[:arr.shape[0], :arr.shape[1]] = arr
-            row[name] = pack(full.reshape(n * n, -1), col.widths).tobytes()
-        b = self.layout.block_px
-        shape = (min(b, self.height - by * b), min(b, self.width - bx * b))
-        if valid is None:
-            row["mask"] = b""
-        else:
+        if not cols:
+            raise ValueError("no records given")
+        shapes = {a.shape[:2] for a in cols.values()}
+        if len(shapes) != 1:
+            raise ValueError(f"records cover different window regions {shapes}")
+        h, w = shapes.pop()
+        gy, gx = self.window_grid
+        if not (0 <= wy and 0 <= wx and wy + h <= gy and wx + w <= gx):
+            raise ValueError(f"windows [{wy}:{wy + h}, {wx}:{wx + w}] outside "
+                             f"the {gy}x{gx} grid")
+        for name, arr in cols.items():
+            col = self.layout.columns[name]
+            if arr.ndim != 3 or arr.shape[2] != col.n_values:
+                raise ValueError(f"{name}: expected (h, w, {col.n_values}), got "
+                                 f"{arr.shape}")
+            rec = pack(arr.reshape(h * w, -1), col.widths)
+            self._rec[name][wy:wy + h, wx:wx + w] = rec.reshape(h, w, -1)
+        W = self.layout.window_px
+        py, px = wy * W, wx * W
+        shape = (min(h * W, self.height - py), min(w * W, self.width - px))
+        if valid is not None:
             valid = np.asarray(valid, dtype=bool)
             if valid.shape != shape:
-                raise ValueError(f"block ({by}, {bx}) mask {valid.shape}, "
+                raise ValueError(f"windows at ({wy}, {wx}): mask {valid.shape}, "
                                  f"expected {shape}")
-            row["mask"] = encode_mask(valid)
-        self._blocks[(by, bx)] = row
+            if self._valid is None:
+                self._valid = np.ones((self.height, self.width), bool)
+            self._valid[py:py + shape[0], px:px + shape[1]] = valid
+        elif self._valid is not None:
+            self._valid[py:py + shape[0], px:px + shape[1]] = True
+        self._filled[wy:wy + h, wx:wx + w] = True
 
-    def _schema(self, bboxes):
+    def _rows(self):
+        """Row dicts in file order, and the chunks with a non-empty mask."""
+        lay, rows, masked = self.layout, [], []
+        for g in lay.groups.values():
+            ny, nx = self.chunk_grids[g.kind]
+            n, p = g.chunk_windows, g.chunk_px
+            for i in range(ny):
+                for j in range(nx):
+                    ring, bb = chunk_footprint(self.transform, i, j, p,
+                                               self.height, self.width)
+                    row = {"kind": g.kind, "product_id": self.product_id,
+                           "chunk_row": i, "chunk_col": j,
+                           "geometry": wkb_polygon(ring),
+                           "bbox": dict(zip(_BBOX, bb))}
+                    for c in g.columns:
+                        if c == "mask":
+                            v = b"" if self._valid is None else encode_mask(
+                                self._valid[i * p:(i + 1) * p, j * p:(j + 1) * p])
+                            if v:
+                                masked.append([i, j])
+                        else:
+                            v = self._rec[c][i * n:(i + 1) * n,
+                                             j * n:(j + 1) * n].tobytes()
+                        row[c] = v
+                    rows.append(row)
+        return rows, masked
+
+    def _schema(self, masked):
         bbox_t = pa.struct([(k, pa.float64()) for k in _BBOX])
-        fields = [pa.field("product_id", pa.string(), nullable=False),
-                  pa.field("block_row", pa.int32(), nullable=False),
-                  pa.field("block_col", pa.int32(), nullable=False),
+        fields = [pa.field("kind", pa.string(), nullable=False),
+                  pa.field("product_id", pa.string(), nullable=False),
+                  pa.field("chunk_row", pa.int32(), nullable=False),
+                  pa.field("chunk_col", pa.int32(), nullable=False),
                   pa.field("geometry", pa.binary(), nullable=False),
                   pa.field("bbox", bbox_t, nullable=False)]
-        fields += [pa.field(n, pa.binary(), nullable=False)
-                   for n in self.layout.column_order]
+        fields += [pa.field(n, pa.binary()) for n in self.layout.column_order]
+        _, ext = chunk_footprint(self.transform, 0, 0,
+                                 max(self.height, self.width), self.height,
+                                 self.width)
         geo_col = {"encoding": "WKB", "geometry_types": ["Polygon"],
-                   "crs": self.crs,
-                   "bbox": [min(b[0] for b in bboxes), min(b[1] for b in bboxes),
-                            max(b[2] for b in bboxes), max(b[3] for b in bboxes)],
+                   "crs": self.crs, "bbox": list(ext),
                    "covering": {"bbox": {k: ["bbox", k] for k in _BBOX}}}
         geo = {"version": "1.1.0", "primary_column": "geometry",
                "columns": {"geometry": geo_col}}
+        lay = self.layout.to_json()
+        first = 0
+        for g in lay["groups"]:
+            ny, nx = self.chunk_grids[g["kind"]]
+            g["chunk_grid"] = [ny, nx]
+            g["row_groups"] = [first, ny * nx]
+            first += ny * nx
+        lay["mask"]["chunks"] = masked
+        lay["window_grid"] = list(self.window_grid)
+        lay["product_px"] = [self.height, self.width]
         header = dict(self.header)
-        header.update({
-            "format": FORMAT, "version": f"{MAJOR}.{MINOR}", "status": STATUS,
-            "layout": dict(self.layout.to_json(),
-                           block_grid=list(self.block_grid),
-                           window_grid=list(self.window_grid))})
+        header.update({"format": FORMAT, "version": f"{MAJOR}.{MINOR}",
+                       "status": STATUS, "layout": lay})
         meta = {GEO_KEY: json.dumps(geo, separators=(",", ":")),
                 HEADER_KEY: json.dumps(header, separators=(",", ":"))}
         if self.aux is not None:
@@ -364,35 +486,28 @@ class RVQParquetWriter:
     def close(self) -> None:
         if self._closed:
             return
-        nby, nbx = self.block_grid
-        missing = [(i, j) for i in range(nby) for j in range(nbx)
-                   if (i, j) not in self._blocks]
-        if missing:
-            raise ValueError(f"{len(missing)} blocks were not added, first "
-                             f"{missing[0]}")
-        foot = {(i, j): block_footprint(self.transform, i, j,
-                                        self.layout.block_px, self.height,
-                                        self.width)
-                for i in range(nby) for j in range(nbx)}
-        schema, meta = self._schema([bb for _, bb in foot.values()])
-        largest = max(len(v) for r in self._blocks.values() for v in r.values())
+        if not self._filled.all():
+            ys, xs = np.nonzero(~self._filled)
+            raise ValueError(f"{len(ys)} windows were not added, first "
+                             f"({ys[0]}, {xs[0]})")
+        rows, masked = self._rows()
+        schema, meta = self._schema(masked)
+        names = schema.names
+        largest = max(len(r[c]) for r in rows for c in self.layout.column_order
+                      if c in r)
         with pq.ParquetWriter(
                 self.path, schema, compression="NONE", use_dictionary=False,
                 write_statistics=_STAT_COLUMNS,
                 data_page_size=max(1 << 20, 2 * largest),
                 store_schema=False, write_page_index=False) as w:
-            for i in range(nby):
-                for j in range(nbx):
-                    ring, bb = foot[(i, j)]
-                    row = {"product_id": [self.product_id], "block_row": [i],
-                           "block_col": [j], "geometry": [wkb_polygon(ring)],
-                           "bbox": [dict(zip(_BBOX, bb))]}
-                    row.update({n: [v] for n, v in self._blocks[(i, j)].items()})
-                    w.write_table(pa.Table.from_pydict(row, schema=schema))
+            for row in rows:
+                w.write_table(pa.Table.from_pydict(
+                    {n: [row.get(n)] for n in names}, schema=schema))
             # store_schema=False drops schema metadata, so the key-value
             # metadata is added to the footer directly.
             w.add_key_value_metadata(meta)
-        self._blocks = {}
+        self._rec = {}
+        self._valid = None
         self._closed = True
 
     def __enter__(self):
@@ -404,14 +519,88 @@ class RVQParquetWriter:
 
 
 # --------------------------------------------------------------------------
+# cache
+# --------------------------------------------------------------------------
+
+class RecordCache:
+    """Values of column chunks, keyed by (file key, column, chunk_row,
+    chunk_col) with file key = (bitstream id, file identity hash).
+
+    An in-memory LRU bounded by `max_bytes`, backed optionally by files
+    under `cache_dir`/<bitstream id>/<file identity hash>/. Readers can
+    share one cache."""
+
+    def __init__(self, max_bytes=CACHE_BYTES, cache_dir=None):
+        self.max_bytes = int(max_bytes)
+        self.dir = None if cache_dir is None else os.path.expanduser(
+            os.fspath(cache_dir))
+        self._d = OrderedDict()
+        self.nbytes = 0
+        self._lock = threading.Lock()
+
+    def _path(self, key):
+        (bid, fkey), col, r, c = key
+        safe = re.sub(r"[^\w.-]", "_", str(bid)) or "_"
+        return os.path.join(self.dir, safe, fkey, f"{col}-{r}-{c}.bin")
+
+    def has(self, key) -> bool:
+        with self._lock:
+            if key in self._d:
+                return True
+        return self.dir is not None and os.path.exists(self._path(key))
+
+    def get(self, key):
+        with self._lock:
+            if key in self._d:
+                self._d.move_to_end(key)
+                return self._d[key]
+        if self.dir is None:
+            return None
+        try:
+            with open(self._path(key), "rb") as f:
+                v = f.read()
+        except FileNotFoundError:
+            return None
+        self._remember(key, v)
+        return v
+
+    def put(self, key, value: bytes) -> None:
+        self._remember(key, value)
+        if self.dir is not None:
+            p = self._path(key)
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            tmp = f"{p}.{os.getpid()}.{threading.get_ident()}.tmp"
+            with open(tmp, "wb") as f:
+                f.write(value)
+            os.replace(tmp, p)
+
+    def _remember(self, key, value):
+        if len(value) > self.max_bytes:
+            return
+        with self._lock:
+            if key in self._d:
+                self.nbytes -= len(self._d.pop(key))
+            self._d[key] = value
+            self.nbytes += len(value)
+            while self.nbytes > self.max_bytes:
+                _, v = self._d.popitem(last=False)
+                self.nbytes -= len(v)
+
+    def clear(self) -> None:
+        with self._lock:
+            self._d.clear()
+            self.nbytes = 0
+
+
+# --------------------------------------------------------------------------
 # reader
 # --------------------------------------------------------------------------
 
 class _Sparse(io.RawIOBase):
-    """A file of known size holding only the byte ranges fetched so far.
-    The tail stays; other pieces are dropped by `clear`. A read outside
-    the fetched ranges raises, so a reader cannot fetch more than it
-    asked for."""
+    """A file of known size holding only the byte ranges fetched so far,
+    for pyarrow to parse pages from. The tail stays; other pieces are
+    dropped by `clear`. A read outside the fetched ranges raises, so a
+    reader cannot fetch more than it planned."""
 
     def __init__(self, size, tail_offset, tail):
         self.size, self.pos = int(size), 0
@@ -458,24 +647,35 @@ class _Sparse(io.RawIOBase):
 
 class RVQParquetReader:
     """Reads a georvq GeoParquet file from a local path or an http(s)
-    URL (HTTP Range requests). `stats` counts requests and bytes.
+    URL (HTTP Range requests).
 
     Opening costs one suffix read of `first_read` bytes, and a second
-    when the footer is longer. Reads merge column-chunk ranges whose gap
-    is at most `gap` bytes."""
+    when the footer is longer. A read plans the column chunks it needs,
+    leaves out those in `cache` or in the fetched tail, merges ranges
+    whose gap is at most `gap` bytes, and fetches them, up to
+    `concurrency` at a time over HTTP and in turn from a local file.
+    `cache` defaults to a RecordCache of `cache_bytes`, on disk under
+    `cache_dir` when one is given. `stats` counts requests, bytes,
+    values served from the cache and their bytes."""
 
-    def __init__(self, path_or_url, first_read=FIRST_READ, gap=GAP):
+    def __init__(self, path_or_url, first_read=FIRST_READ, gap=GAP,
+                 concurrency=CONCURRENCY, cache=None, cache_bytes=CACHE_BYTES,
+                 cache_dir=None):
         self.source = os.fspath(path_or_url)
         self.gap = int(gap)
+        self.concurrency = max(1, int(concurrency))
         self._url = self.source.startswith(("http://", "https://"))
-        self._file = None if self._url else open(self.source, "rb")
-        self.stats = {"requests": 0, "bytes": 0}
+        self._fd = None if self._url else os.open(self.source, os.O_RDONLY)
+        self._lock = threading.Lock()
+        self.stats = {"requests": 0, "bytes": 0, "cache_hits": 0,
+                      "cache_bytes": 0}
+        self.version_tag = None
         tail, size = self._suffix(int(first_read))
         if len(tail) < 12 or tail[-4:] != b"PAR1":
             raise ValueError(f"{self.source}: not a Parquet file")
         need = struct.unpack("<I", tail[-8:-4])[0] + 8
         if need > len(tail):
-            more = self._read(size - need, need - len(tail))
+            more = self._read((size - need, need - len(tail)))
             tail = more + tail
         self.size = size
         self._buf = _Sparse(size, size - len(tail), tail)
@@ -485,7 +685,7 @@ class RVQParquetReader:
         md = pq.read_metadata(pa.BufferReader(b"PAR1" + footer))
         self._pf = pq.ParquetFile(self._buf, metadata=md)
         self.metadata = md
-        kv = self.metadata.metadata or {}
+        kv = md.metadata or {}
         if HEADER_KEY.encode() not in kv:
             raise ValueError(f"{self.source}: no {HEADER_KEY!r} metadata")
         self.header = json.loads(kv[HEADER_KEY.encode()])
@@ -500,18 +700,43 @@ class RVQParquetReader:
         self.aux = None if aux is None else aux.decode("utf-8")
         lay = self.header["layout"]
         self.layout = Layout.from_json(lay)
-        self.block_grid = tuple(int(v) for v in lay["block_grid"])
         self.window_grid = tuple(int(v) for v in lay["window_grid"])
-        p = self.header.get("product", {})
-        self.height = int(p.get("height", self.window_grid[0] * self.layout.window_px))
-        self.width = int(p.get("width", self.window_grid[1] * self.layout.window_px))
-        md = self.metadata
-        if md.num_row_groups != self.block_grid[0] * self.block_grid[1]:
-            raise ValueError(f"{self.source}: {md.num_row_groups} row groups for "
-                             f"a {self.block_grid} block grid")
+        self.chunk_grids, self._first = {}, {}
+        for g in lay["groups"]:
+            self.chunk_grids[g["kind"]] = tuple(int(v) for v in g["chunk_grid"])
+            self._first[g["kind"]] = int(g["row_groups"][0])
+        self.masked = {tuple(c) for c in lay["mask"].get("chunks", [])}
+        self.height, self.width = (int(v) for v in lay["product_px"])
+        n_rg = sum(a * b for a, b in self.chunk_grids.values())
+        if md.num_row_groups != n_rg:
+            raise ValueError(f"{self.source}: {md.num_row_groups} row groups, "
+                             f"the layout has {n_rg}")
         self._col = {md.schema.column(k).path: k for k in range(md.num_columns)}
+        bid = (self.header.get("codec") or {}).get("bitstream_id", "")
+        self.file_key = (str(bid), hashlib.sha1(json.dumps(
+            self.identity, default=str).encode()).hexdigest()[:20])
+        self.cache = cache if cache is not None else RecordCache(cache_bytes,
+                                                                 cache_dir)
 
     # ---- io ----
+
+    @property
+    def identity(self) -> list:
+        """What distinguishes this file's bytes from another version: the
+        URL with its ETag or Last-Modified, or the path, size and mtime."""
+        if self._url:
+            return [self.source, self.version_tag]
+        st = os.fstat(self._fd)
+        return [os.path.realpath(self.source), st.st_size, st.st_mtime_ns]
+
+    def _count(self, n):
+        with self._lock:
+            self.stats["requests"] += 1
+            self.stats["bytes"] += n
+
+    @staticmethod
+    def _tag(resp):
+        return resp.headers.get("ETag") or resp.headers.get("Last-Modified")
 
     def _suffix(self, n):
         if self._url:
@@ -519,6 +744,7 @@ class RVQParquetReader:
                                          headers={"Range": f"bytes=-{n}"})
             with urllib.request.urlopen(req) as resp:
                 data = resp.read()
+                self.version_tag = self._tag(resp)
                 if resp.status == 206:
                     size = int(resp.headers["Content-Range"].rsplit("/", 1)[1])
                 elif resp.status == 200:
@@ -528,14 +754,23 @@ class RVQParquetReader:
                     raise OSError(f"{self.source}: suffix request answered "
                                   f"{resp.status}")
         else:
-            size = os.fstat(self._file.fileno()).st_size
-            self._file.seek(max(0, size - n))
-            data = self._file.read(n)
-        self.stats["requests"] += 1
-        self.stats["bytes"] += len(data)
+            size = os.fstat(self._fd).st_size
+            data = self._pread(max(0, size - n), min(n, size))
+        self._count(len(data))
         return data, size
 
-    def _read(self, offset: int, length: int) -> bytes:
+    def _pread(self, offset, length):
+        parts, got = [], 0
+        while got < length:
+            b = os.pread(self._fd, length - got, offset + got)
+            if not b:
+                break
+            parts.append(b)
+            got += len(b)
+        return b"".join(parts)
+
+    def _read(self, rng) -> bytes:
+        offset, length = rng
         if length <= 0:
             return b""
         if self._url:
@@ -545,20 +780,28 @@ class RVQParquetReader:
                 if resp.status != 206:
                     raise OSError(f"{self.source}: range request answered "
                                   f"{resp.status}, expected 206")
+                tag = self._tag(resp)
+                if self.version_tag is not None and tag != self.version_tag:
+                    raise OSError(f"{self.source}: changed since it was opened "
+                                  f"({self.version_tag} -> {tag})")
                 data = resp.read()
         else:
-            self._file.seek(offset)
-            data = self._file.read(length)
+            data = self._pread(offset, length)
         if len(data) != length:
             raise OSError(f"{self.source}: short read at {offset}")
-        self.stats["requests"] += 1
-        self.stats["bytes"] += len(data)
+        self._count(len(data))
         return data
 
+    def _fetch(self, ranges) -> list:
+        if self._url and self.concurrency > 1 and len(ranges) > 1:
+            with ThreadPoolExecutor(min(self.concurrency, len(ranges))) as ex:
+                return list(ex.map(self._read, ranges))
+        return [self._read(r) for r in ranges]
+
     def close(self) -> None:
-        if self._file is not None:
-            self._file.close()
-            self._file = None
+        if self._fd is not None:
+            os.close(self._fd)
+            self._fd = None
 
     def __enter__(self):
         return self
@@ -568,13 +811,17 @@ class RVQParquetReader:
 
     # ---- metadata ----
 
-    def row_group(self, block_row: int, block_col: int) -> int:
-        return int(block_row) * self.block_grid[1] + int(block_col)
+    def row_group(self, kind: str, chunk_row: int, chunk_col: int) -> int:
+        ny, nx = self.chunk_grids[kind]
+        if not (0 <= chunk_row < ny and 0 <= chunk_col < nx):
+            raise ValueError(f"{kind} chunk ({chunk_row}, {chunk_col}) outside "
+                             f"the {ny}x{nx} grid")
+        return self._first[kind] + int(chunk_row) * nx + int(chunk_col)
 
-    def chunk_range(self, block_row, block_col, column) -> tuple:
-        """(offset, length) of one column chunk."""
-        cc = self.metadata.row_group(self.row_group(block_row, block_col)) \
-            .column(self._col[column])
+    def chunk_range(self, column, chunk_row, chunk_col) -> tuple:
+        """(offset, length) of one column chunk of its kind's chunk."""
+        rg = self.row_group(self.layout.kind_of[column], chunk_row, chunk_col)
+        cc = self.metadata.row_group(rg).column(self._col[column])
         o = (cc.dictionary_page_offset if cc.has_dictionary_page
              else cc.data_page_offset)
         return int(o), int(cc.total_compressed_size)
@@ -588,6 +835,15 @@ class RVQParquetReader:
             for k in range(md.num_columns):
                 name = md.schema.column(k).path.split(".")[0]
                 out[name] = out.get(name, 0) + rg.column(k).total_compressed_size
+        return out
+
+    def kind_bytes(self) -> dict:
+        """Total bytes of each kind's row groups, every column included."""
+        md, out = self.metadata, {}
+        for kind, (ny, nx) in self.chunk_grids.items():
+            first = self._first[kind]
+            out[kind] = sum(md.row_group(first + i).column(k).total_compressed_size
+                            for i in range(ny * nx) for k in range(md.num_columns))
         return out
 
     def columns_for(self, depths=None, base=True, mask=True,
@@ -612,92 +868,141 @@ class RVQParquetReader:
             cols.append("quality")
         return cols
 
-    def blocks_of(self, wy0, wy1, wx0, wx1) -> list:
+    def chunks_of(self, kind, wy0, wy1, wx0, wx1) -> list:
+        """Chunks of `kind` holding windows [wy0:wy1, wx0:wx1]."""
         rows, cols = self.window_grid
         if not (0 <= wy0 < wy1 <= rows and 0 <= wx0 < wx1 <= cols):
             raise ValueError(f"windows [{wy0}:{wy1}, {wx0}:{wx1}] outside "
                              f"the {rows}x{cols} grid")
-        n = self.layout.block_windows
+        n = self.layout.groups[kind].chunk_windows
         return [(i, j) for i in range(wy0 // n, (wy1 - 1) // n + 1)
                 for j in range(wx0 // n, (wx1 - 1) // n + 1)]
 
-    def byte_ranges(self, blocks, columns) -> list:
-        """Merged (offset, length) requests that fetch `columns` of
-        `blocks`, leaving out what the open already holds."""
+    def needs(self, wy0, wy1, wx0, wx1, columns) -> list:
+        """(column, chunk_row, chunk_col) values that a read of `columns`
+        over the windows needs; masks known to be empty are left out."""
+        out = []
+        for c in columns:
+            for ch in self.chunks_of(self.layout.kind_of[c], wy0, wy1, wx0, wx1):
+                if c == "mask" and ch not in self.masked:
+                    continue
+                out.append((c,) + ch)
+        return out
+
+    def _key(self, need):
+        return (self.file_key,) + tuple(need)
+
+    def plan(self, wy0, wy1, wx0, wx1, depths=None, base=True, mask=True,
+             quality=False) -> list:
+        """Merged (offset, length) requests a read would make now: the
+        needed column chunks not in the cache or the fetched tail."""
+        cols = self.columns_for(depths, base, mask, quality)
+        return self._ranges([n for n in self.needs(wy0, wy1, wx0, wx1, cols)
+                             if not self.cache.has(self._key(n))])
+
+    def _ranges(self, needs):
         ranges = []
-        for by, bx in blocks:
-            for c in columns:
-                o, n = self.chunk_range(by, bx, c)
-                if not self._buf.covers(o, n):
-                    ranges.append((o, n))
+        for n in needs:
+            o, ln = self.chunk_range(*n)
+            if not self._buf.covers(o, ln):
+                ranges.append((o, ln))
         return merge_ranges(ranges, self.gap)
 
     # ---- values ----
 
-    def fetch(self, blocks, columns) -> dict:
-        """{column: [value bytes per block]} for `blocks` (a list of
-        (block_row, block_col)), fetched in merged requests."""
-        blocks = list(blocks)
-        for o, n in self.byte_ranges(blocks, columns):
-            self._buf.add(o, self._read(o, n))
+    def values(self, needs) -> dict:
+        """{(column, chunk_row, chunk_col): value bytes} for `needs`, from
+        the cache where held and otherwise in merged requests."""
+        out, missing = {}, []
+        for n in needs:
+            v = self.cache.get(self._key(n))
+            if v is None:
+                missing.append(n)
+            else:
+                out[n] = v
+                self.stats["cache_hits"] += 1
+                self.stats["cache_bytes"] += len(v)
+        if not missing:
+            return out
+        ranges = self._ranges(missing)
+        for r, data in zip(ranges, self._fetch(ranges)):
+            self._buf.add(r[0], data)
         try:
-            rgs = [self.row_group(*b) for b in blocks]
-            tb = self._pf.read_row_groups(rgs, columns=list(columns),
-                                          use_threads=False)
-            return {c: tb.column(c).to_pylist() for c in columns}
+            by_rg = OrderedDict()
+            for n in missing:
+                rg = self.row_group(self.layout.kind_of[n[0]], n[1], n[2])
+                by_rg.setdefault(rg, []).append(n)
+            for rg, ns in by_rg.items():
+                tb = self._pf.read_row_group(rg, columns=[n[0] for n in ns],
+                                             use_threads=False)
+                for n in ns:
+                    v = tb.column(n[0])[0].as_py()
+                    if v is None:
+                        raise ValueError(f"{self.source}: {n} is null")
+                    out[n] = v
+                    self.cache.put(self._key(n), v)
         finally:
             self._buf.clear()
+        return out
 
     def read(self, wy0, wy1, wx0, wx1, depths=None, base=True, mask=True,
              quality=False) -> dict:
-        """Records of windows [wy0:wy1, wx0:wx1] in one fetch.
+        """Records of windows [wy0:wy1, wx0:wx1].
 
         Returns {"base": (h, w, n), tier name: (h, w, L, n) for each
         tier outside base read at L > 0, "quality": (h, w, n), "valid":
         (h * W, w * W) pixel validity, False beyond the product}, with
         only the parts asked for."""
+        if depths is None:
+            depths = [t.levels for t in self.layout.tiers]
         cols = self.columns_for(depths, base, mask, quality)
-        blocks = self.blocks_of(wy0, wy1, wx0, wx1)
-        vals = self.fetch(blocks, cols)
-        n = self.layout.block_windows
+        vals = self.values(self.needs(wy0, wy1, wx0, wx1, cols))
         gh, gw = wy1 - wy0, wx1 - wx0
         out = {}
 
-        def place(arr, by, bx, block):
-            y0, x0 = by * n, bx * n
-            sy0, sy1 = max(wy0, y0), min(wy1, y0 + n)
-            sx0, sx1 = max(wx0, x0), min(wx1, x0 + n)
-            arr[sy0 - wy0:sy1 - wy0, sx0 - wx0:sx1 - wx0, ...] = \
-                block[sy0 - y0:sy1 - y0, sx0 - x0:sx1 - x0, ...]
-
         def records(name):
             col = self.layout.columns[name]
+            kind = self.layout.kind_of[name]
+            n = self.layout.groups[kind].chunk_windows
             arr = np.zeros((gh, gw, col.n_values), np.int64)
-            for (by, bx), v in zip(blocks, vals[name]):
-                raw = np.frombuffer(v, np.uint8).reshape(n * n, col.record_bytes)
-                place(arr, by, bx, unpack(raw, col.widths).reshape(n, n, -1))
+            for i, j in self.chunks_of(kind, wy0, wy1, wx0, wx1):
+                y0, x0 = i * n, j * n
+                sy0, sy1 = max(wy0, y0), min(wy1, y0 + n)
+                sx0, sx1 = max(wx0, x0), min(wx1, x0 + n)
+                raw = np.frombuffer(vals[(name, i, j)], np.uint8).reshape(
+                    n, n, col.record_bytes)[sy0 - y0:sy1 - y0, sx0 - x0:sx1 - x0]
+                arr[sy0 - wy0:sy1 - wy0, sx0 - wx0:sx1 - wx0] = unpack(
+                    raw.reshape(-1, col.record_bytes), col.widths).reshape(
+                    sy1 - sy0, sx1 - sx0, -1)
             return arr
 
         if base:
             out["base"] = records("base")
-        for t, L in zip(self.layout.tiers, depths or [t.levels for t in self.layout.tiers]):
+        for t, L in zip(self.layout.tiers, depths):
             if t.in_base or int(L) == 0:
                 continue
             out[t.name] = np.stack([records(c) for c in t.columns[:int(L)]], 2)
         if quality:
             out["quality"] = records("quality")
         if mask:
-            W, b = self.layout.window_px, self.layout.block_px
+            W = self.layout.window_px
+            kind = self.layout.mask_kind
+            p = self.layout.groups[kind].chunk_px
             valid = np.zeros((gh * W, gw * W), bool)
-            for (by, bx), v in zip(blocks, vals["mask"]):
-                py0, px0 = by * b, bx * b
-                bh, bw = min(b, self.height - py0), min(b, self.width - px0)
-                blk = decode_mask(v, (bh, bw))
-                y0, x0 = wy0 * W, wx0 * W
+            y0, x0 = wy0 * W, wx0 * W
+            for i, j in self.chunks_of(kind, wy0, wy1, wx0, wx1):
+                py0, px0 = i * p, j * p
+                bh, bw = min(p, self.height - py0), min(p, self.width - px0)
                 sy0, sy1 = max(y0, py0), min(y0 + gh * W, py0 + bh)
                 sx0, sx1 = max(x0, px0), min(x0 + gw * W, px0 + bw)
-                valid[sy0 - y0:sy1 - y0, sx0 - x0:sx1 - x0] = \
-                    blk[sy0 - py0:sy1 - py0, sx0 - px0:sx1 - px0]
+                if sy1 <= sy0 or sx1 <= sx0:
+                    continue
+                if (i, j) in self.masked:
+                    blk = decode_mask(vals[("mask", i, j)], (bh, bw))
+                    valid[sy0 - y0:sy1 - y0, sx0 - x0:sx1 - x0] = \
+                        blk[sy0 - py0:sy1 - py0, sx0 - px0:sx1 - px0]
+                else:
+                    valid[sy0 - y0:sy1 - y0, sx0 - x0:sx1 - x0] = True
             out["valid"] = valid
         return out
 
