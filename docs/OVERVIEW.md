@@ -1,4 +1,4 @@
-Draft for review: the module-map additions for AE v2 and the install line are new and not yet approved.
+Draft for review: new or changed are the georvq/inference and georvq/ae module-map rows, the install line, the AlphaEarth CLI examples, the data end user line and the preset sentence that pointed to SOURCES.md.
 
 # Codebase overview
 
