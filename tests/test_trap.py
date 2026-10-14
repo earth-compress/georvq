@@ -1,6 +1,5 @@
 import os
 
-import pytest
 import torch
 import torch.nn as nn
 
@@ -74,7 +73,6 @@ def test_dump_holds_prestep_state_and_flight(tmp_path):
     assert "gnorm" in f and "u_0" in f.files or "g_0" in f.files
 
 
-@pytest.mark.slow
 def test_trap_smoke_dumps_replayable_bundle(tmp_path):
     """End-to-end: a hair-trigger trap on the synthetic smoke run must
     dump a bundle whose weights + batch reproduce the trapped loss."""

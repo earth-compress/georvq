@@ -88,7 +88,6 @@ def test_s2_model_forward(s2_store):
     assert norm.stats_vector(source.last_stats()).shape == (4, 26)
 
 
-@pytest.mark.slow
 def test_s2_toy_training(s2_store):
     """A short optimization drives the multi-res reconstruction loss down."""
     cfg = _cfg()

@@ -190,3 +190,105 @@ def test_load_refuses_a_bundle_whose_files_disagree_with_its_id(tmp_path):
     np.savez(p, **d)
     with pytest.raises(ValueError, match="bitstream"):
         rel.load(str(out))
+
+
+# --------------------------------------------------------------------------
+# encode / decode round trip on a tiny untrained release
+# --------------------------------------------------------------------------
+
+@pytest.fixture(scope="module")
+def tiny_release(tmp_path_factory):
+    import torch
+    from georvq.config import load_config
+    from georvq.factory import build_model
+    from georvq.inference.api import Codec
+    torch.manual_seed(0)
+    cfg = load_config("configs/smoke.yaml", [
+        "data.source=tessera", "model.bands=8",
+        "model.tiers=['1:16:32:3','2:8:32:2','4:8:16:2']",
+        "model.min_depths=[1,0,0]",
+        "model.stats_cond={subtract_mean: true, cond_encoder: true, "
+        "cond_decoder: true, bits_per_band: 6}"])
+    model = build_model(cfg, "cpu").eval()
+    g = torch.Generator().manual_seed(0)
+    x = torch.randn(6, 8, 16, 16, generator=g) \
+        + 2 * torch.randn(6, 8, 1, 1, generator=g)
+    valid = torch.ones(6, 16, 16, dtype=torch.bool)
+    valid[1, :5, :7] = False
+    x = x * valid[:, None]
+    _, res, mu = Codec(model).encode_batch(x, refine_tiers=(2,), valid=valid)
+    rng = np.random.default_rng(0)
+    means = (np.repeat(mu.numpy(), 8, 0)
+             + rng.normal(size=(48, 8)).astype(np.float32) * 0.3)
+    out = tmp_path_factory.mktemp("tessera_tiny") / "bundle"
+    rel.build_bundle(str(out), model, cfg, means,
+                     refine_residuals=np.concatenate([res[2]] * 8))
+    return rel.load(str(out)), x, valid
+
+
+def test_release_encodes_against_the_transmitted_mean(tiny_release):
+    import torch
+    from georvq.inference.api import Codec
+    R, x, valid = tiny_release
+    pk = R.encode(x, valid)
+    mu = np.stack([p.mean for p in pk])
+    codes = R.mean_channel.encode(mu)
+    assert np.array_equal(R.mean_channel.decode(codes), mu)
+    want = Codec(R.model).encode(x, valid=valid, mean=torch.from_numpy(mu))
+    for a, b in zip(pk, want):
+        for ia, ib in zip(a.indices, b.indices):
+            assert np.array_equal(ia, ib)
+    assert all(p.refinements is None for p in pk)        # off by default
+
+
+def test_release_decode_is_monotone_prefix_and_restores_nodata(tiny_release):
+    import torch
+    R, x, valid = tiny_release
+    pk = R.encode(x, valid)
+    full = R.decode(pk, valid=valid)
+    assert full.shape == x.shape
+    assert torch.equal(R.decode(pk, valid=valid), full)
+    assert not full[1][:, ~valid[1]].any()
+    low = R.decode(pk, depths=[1, 0, 0], valid=valid)
+    assert not torch.equal(low, full)
+
+
+def test_release_refinement_applies_only_at_full_fine_depth(tiny_release):
+    import torch
+    R, x, valid = tiny_release
+    plain = R.encode(x, valid)
+    refined = R.encode(x, valid, refine=True)
+    assert R.bits(refine=True) - R.bits() == pytest.approx(
+        R.refine.cost_bits(R.specs[2].cells, R.specs[2].dim))
+    for a, b in zip(plain, refined):
+        for ia, ib in zip(a.indices, b.indices):
+            assert np.array_equal(ia, ib)
+        assert set(b.refinements) == {2}
+    part = [3, 2, 1]
+    assert torch.equal(R.decode(plain, depths=part, valid=valid),
+                       R.decode(refined, depths=part, valid=valid))
+    assert not torch.equal(R.decode(plain, valid=valid),
+                           R.decode(refined, valid=valid))
+    # the refinement shrinks the fine tier's residual
+    from georvq.inference.api import Codec
+    mu = torch.from_numpy(np.stack([p.mean for p in plain]))
+    _, res, _ = Codec(R.model).encode_batch(x, refine_tiers=(2,),
+                                            valid=valid, mean=mu)
+    q = np.stack([p.refinements[2] for p in refined])
+    assert ((res[2] - q) ** 2).sum() < (res[2] ** 2).sum()
+
+
+def test_tile_helpers_match_per_window_coding(tiny_release):
+    import torch
+    from georvq.tessera import decode_tile, encode_tile, to_windows, prep
+    R, _, _ = tiny_release
+    emb = np.random.default_rng(2).normal(size=(8, 32, 48)).astype(np.float32)
+    emb *= 32.0
+    packets, grid = encode_tile(R, emb, batch=4)
+    assert grid == (1, 2, 3) and len(packets) == 6
+    tile = decode_tile(R, packets, grid, depths=[3, 2, 2], batch=4)
+    assert tile.shape == (1, 8, 32, 48)
+    x, v = prep(emb)
+    xw, vw, _ = to_windows(x, v, R.window)
+    want = R.decode(R.encode(xw, vw), depths=[3, 2, 2])
+    assert torch.equal(to_windows(tile, v, R.window)[0], want)
