@@ -23,20 +23,17 @@ class ViTTokenizer(nn.Module):
     """x: (B, C, W, W) -> list of per-tier latents [(B, cells_i, dim_i)]."""
 
     def __init__(self, specs, window, bands, dim=256, depth=9, ff_ratio=4.0,
-                 grad_ckpt=False, late_join=0, stem_pyramid=False,
-                 embed_norm=False):
+                 grad_ckpt=False, stem_pyramid=False, embed_norm=False):
         super().__init__()
         assert specs[0].cells == 1, "coarsest tier must be grid=1 (CLS token)"
-        assert 0 <= late_join < depth
+        if len(specs) < 2:
+            raise ValueError("the tokenizer needs at least two tiers: the "
+                             "grid=1 tier is a readout token with no input "
+                             "of its own")
         self.specs = specs
         self.grad_ckpt = grad_ckpt
-        self.late_join = late_join
         self.embed_norm = embed_norm
-        # tokens before the finest tier: the late-join prefix runs on
-        # these alone, so the split point is a property of the geometry
-        self.n_base = 1 + sum(sp.cells for sp in specs[1:-1])
-        self.single = len(specs) == 1
-        self.pyramid = bool(stem_pyramid) and not self.single
+        self.pyramid = bool(stem_pyramid)
         if self.pyramid:
             for a, b in zip(specs, specs[1:]):
                 if b.grid % a.grid:
@@ -55,19 +52,13 @@ class ViTTokenizer(nn.Module):
             for a, b in zip(specs[:-1], specs[1:]):
                 r = b.grid // a.grid
                 self.stages.append(nn.Conv2d(dim, dim, r, r))
-        elif self.single:
-            # single-vector autoencoder: per-pixel input tokens feed the
-            # trunk, the CLS token is the only readout
-            self.patches = nn.ModuleList([nn.Conv2d(bands, dim, 1)])
         else:
             self.patches = nn.ModuleList([
                 nn.Conv2d(bands, dim, window // sp.grid, window // sp.grid)
                 for sp in specs[1:]])
         if not self.pyramid:
             self.cls = nn.Parameter(torch.zeros(1, 1, dim))
-        n_tok = (sum(sp.cells for sp in specs) if self.pyramid else
-                 1 + (window * window if self.single
-                      else sum(sp.cells for sp in specs[1:])))
+        n_tok = sum(sp.cells for sp in specs)
         self.pos = nn.Parameter(torch.randn(1, n_tok, dim) * 0.02)
         layer = nn.TransformerEncoderLayer(
             dim, 8, int(dim * ff_ratio), dropout=0.0,
@@ -78,16 +69,13 @@ class ViTTokenizer(nn.Module):
             for sp in specs])
 
     def _run(self, h, layers):
-        m = getattr(self, "attn_mask", None)
-        if m is not None:
-            m = m[:h.shape[1], :h.shape[1]]    # late-join prefix slice
         if self.grad_ckpt and self.training:
             from torch.utils.checkpoint import checkpoint
             for layer in layers:
-                h = checkpoint(layer, h, m, use_reentrant=False)
+                h = checkpoint(layer, h, use_reentrant=False)
         else:
             for layer in layers:
-                h = layer(h, m)
+                h = layer(h)
         return h
 
     def forward(self, x, stats_bias=None):
@@ -115,16 +103,7 @@ class ViTTokenizer(nn.Module):
             # parameter-free: bounds layer 0's pre-norm backward (1/std
             # of this stream), the measured spike-amplification site
             h = nn.functional.layer_norm(h, (h.shape[-1],))
-        layers = self.vit.layers
-        if self.late_join:
-            # coarse tiers run the prefix alone; the finest tier's tokens
-            # (patch embed + pos only) join for the last `late_join` layers
-            base, ultra = h[:, :self.n_base], h[:, self.n_base:]
-            base = self._run(base, layers[:len(layers) - self.late_join])
-            h = self._run(torch.cat([base, ultra], 1),
-                          layers[len(layers) - self.late_join:])
-        else:
-            h = self._run(h, layers)
+        h = self._run(h, self.vit.layers)
         zs, o = [], 0
         for sp, lo in zip(self.specs, self.out):
             zs.append(lo(h[:, o:o + sp.cells]))

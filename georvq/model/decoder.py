@@ -23,23 +23,14 @@ class DenseHead(nn.Module):
     smooths patch seams; optional per-pixel L2 normalization for unit-norm
     embedding fields (AlphaEarth)."""
 
-    def __init__(self, in_dim, grid, p, bands, head_feat=64, normalize=True,
-                 dw=False):
+    def __init__(self, in_dim, grid, p, bands, head_feat=64, normalize=True):
         super().__init__()
         self.grid, self.p, self.normalize = grid, p, normalize
         self.to_patch = nn.Linear(in_dim, head_feat * p * p)
-
-        def block(cin, cout):
-            if not dw:
-                return [nn.Conv2d(cin, cout, 3, 1, 1)]
-            # depthwise-separable: 3x3 per-channel then 1x1 mix (~8x fewer
-            # MACs at these widths)
-            return [nn.Conv2d(cin, cin, 3, 1, 1, groups=cin),
-                    nn.Conv2d(cin, cout, 1)]
         self.conv = nn.Sequential(
-            *block(head_feat, head_feat), nn.GELU(),
-            *block(head_feat, head_feat), nn.GELU(),
-            *block(head_feat, bands))
+            nn.Conv2d(head_feat, head_feat, 3, 1, 1), nn.GELU(),
+            nn.Conv2d(head_feat, head_feat, 3, 1, 1), nn.GELU(),
+            nn.Conv2d(head_feat, bands, 3, 1, 1))
 
     def forward(self, fine):                       # fine: (B, g*g, in_dim)
         B, g, p = fine.shape[0], self.grid, self.p
@@ -59,9 +50,8 @@ class PyramidAttnDecoder(nn.Module):
 
     def __init__(self, specs, head, dim=384, depth=8, heads=8,
                  cls_bridge=False, ff_ratio=4.0, sigma_cond=False,
-                 sigma_freqs=8, late_join=0):
+                 sigma_freqs=8):
         super().__init__()
-        assert 0 <= late_join < depth
         # With one tier the fine token IS the coarse token, so bridging
         # would concatenate it with itself and double the head's input
         # width against what `head_in_dim` reports. Coerce here so the
@@ -71,7 +61,6 @@ class PyramidAttnDecoder(nn.Module):
         self.cls_bridge = cls_bridge
         self.sigma_cond = sigma_cond
         self.sigma_freqs = sigma_freqs
-        self.late_join = late_join
         self.grad_ckpt = False        # set by the factory from train cfg
         self.specs = specs
         self.fine = specs[-1]
@@ -114,26 +103,13 @@ class PyramidAttnDecoder(nn.Module):
         x = toks + self.pos
         c = self._cond(cond_arg, stats)
 
-        def run(h, blocks):
-            m = getattr(self, "attn_mask", None)
-            if m is not None:
-                m = m[:h.shape[1], :h.shape[1]]    # late-join prefix slice
-            if self.grad_ckpt and self.training:
-                from torch.utils.checkpoint import checkpoint
-                for blk in blocks:
-                    h = checkpoint(blk, h, c, m, use_reentrant=False)
-            else:
-                for blk in blocks:
-                    h = blk(h, c, m)
-            return h
-
-        if self.late_join:
-            nb = x.shape[1] - self.fine.cells
-            base = run(x[:, :nb], self.blocks[:len(self.blocks) - self.late_join])
-            x = run(torch.cat([base, x[:, nb:]], 1),
-                    self.blocks[len(self.blocks) - self.late_join:])
+        if self.grad_ckpt and self.training:
+            from torch.utils.checkpoint import checkpoint
+            for blk in self.blocks:
+                x = checkpoint(blk, x, c, use_reentrant=False)
         else:
-            x = run(x, self.blocks)
+            for blk in self.blocks:
+                x = blk(x, c)
         xo = self.norm_out(x)
         fine = xo[:, -self.fine.cells:]                    # (B, cells, dim)
         if self.cls_bridge:    # lineage: concat all ancestors per fine cell
@@ -208,11 +184,6 @@ class DecoderBank(nn.Module):
         for m in self.members:
             m.grad_ckpt = v
 
-    def pick(self, cond_arg) -> int:
-        """Index of the member serving a whole batch at one depth tuple."""
-        d = cond_arg[0].tolist() if hasattr(cond_arg, "tolist") else cond_arg
-        return active_tiers([int(v) for v in d]) - 1
-
     def route(self, cond_arg):
         """(B,) member index per row."""
         import torch
@@ -227,8 +198,7 @@ class DecoderBank(nn.Module):
         out = dec(list(zqs[:n]), cond_arg[:, :n], stats=stats)
         return out if native else _to_window(out, self.window)
 
-    def forward(self, zqs, cond_arg, stats=None, member=None,
-                native=False):
+    def forward(self, zqs, cond_arg, stats=None, native=False):
         """Decode, routing each row to the member its depth tuple needs.
 
         Training draws a depth tuple per row, so a batch is generally
@@ -238,12 +208,10 @@ class DecoderBank(nn.Module):
         are scattered back into batch order. A batch that happens to be
         uniform takes the single-call path.
 
-        `member` forces one member for the whole batch; `native` returns
-        each member's own resolution instead of resampling to the window,
-        which only makes sense when the batch is uniform.
+        `native` returns each member's own resolution instead of
+        resampling to the window, which only makes sense when the batch is
+        uniform.
         """
-        if member is not None:
-            return self._one(member, zqs, cond_arg, stats, native)
         idx = self.route(cond_arg)
         uniq = idx.unique().tolist()
         self.last_counts = {k: int((idx == k).sum()) for k in uniq}
@@ -252,7 +220,7 @@ class DecoderBank(nn.Module):
         if native:
             raise ValueError(
                 "native=True needs a batch that routes to one member; this "
-                f"batch spans {uniq}. Pass member= or decode uniform rows.")
+                f"batch spans {uniq}. Decode uniform rows.")
         import torch
         parts = {}
         for k in uniq:

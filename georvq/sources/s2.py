@@ -177,10 +177,6 @@ class S2Source(Source):
 
     def build_head(self, model_cfg, in_dim, n_tiers=None,
                    out_px=None) -> nn.Module:
-        if model_cfg.decoder.head_dw:
-            raise ValueError(
-                "decoder.head_dw is not implemented for the S2 multi-"
-                "resolution head; leave it false on S2")
         grid, p = self.head_geom(model_cfg, n_tiers, out_px)
         return S2MultiResHead(in_dim, grid=grid, p=p,
                               head_feat=model_cfg.decoder.head_feat)

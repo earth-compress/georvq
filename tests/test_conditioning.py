@@ -135,3 +135,27 @@ def test_select_quantize_and_cumsums(tiny_raw_cfg):
         _, cums = model.level_cumsums(x, loc=loc)
         out = model.eval_tuple(cums, [3, 2], x)
     assert out.shape == x.shape
+
+
+@pytest.mark.parametrize("kind", ["cascade", "select"])
+@pytest.mark.parametrize("loc,width", [
+    ({"encoder": "satclip"}, 256),
+    ({"encoder": "sphharm", "degree": 6}, 36)])
+def test_location_width_follows_the_encoder(tiny_raw_cfg, kind, loc, width):
+    """The predictor or selector input is as wide as the location table
+    the configured encoder produces, which for sphharm is degree^2."""
+    cond = {"kind": kind, "location": loc}
+    if kind == "select":
+        cond.update(proj_dim=8, subset_frac=0.5)
+    raw = {**tiny_raw_cfg,
+           "model": {**tiny_raw_cfg["model"], "conditioning": cond}}
+    torch.manual_seed(0)
+    model = build_model(Config.model_validate(raw))
+    model.eval()
+    x = torch.nn.functional.normalize(torch.randn(4, 8, 16, 16), dim=1)
+    with torch.no_grad():
+        _, cums = model.level_cumsums(x, loc=torch.randn(4, width))
+        out = model.eval_tuple(cums, [3, 2], x)
+    assert out.shape == x.shape
+    if kind == "cascade":
+        assert model.conditioner.loc_dim == width

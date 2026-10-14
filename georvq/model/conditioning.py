@@ -261,7 +261,8 @@ class CodebookSelector(nn.Module):
 
 def build_conditioning(codec, cond_cfg):
     """Attach the configured conditioning submodule to a PyramidCodec."""
-    loc_dim = 256 if cond_cfg.location is not None else 0
+    from georvq.model.location import location_dim
+    loc_dim = location_dim(cond_cfg.location)
     if cond_cfg.kind == "select":
         codec.selector = CodebookSelector(
             codec.specs, loc_dim=loc_dim, proj_dim=cond_cfg.proj_dim,
