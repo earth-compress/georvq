@@ -476,3 +476,24 @@ def test_s2_all_nodata_window_is_finite():
         assert torch.isfinite(x[g]).all()
     loss, m = src.recon_stats(x, x, valid)
     assert torch.isfinite(loss) and torch.isfinite(m["one_minus_mse_10m"])
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA")
+def test_groupbatch_tensor_index_on_cuda_uint16():
+    """The reconstruction figure gathers val windows with a tensor index;
+    CUDA has no index kernel for uint16, the dtype S2 val tokens hold."""
+    from georvq.data.pool import GroupBatch
+    g = GroupBatch({"10m": torch.arange(60000, 60024, dtype=torch.int32)
+                    .to(torch.uint16).view(6, 4).cuda()})
+    sel = torch.tensor([0, 5, 2])
+    out = g[sel]["10m"].cpu()
+    assert out.dtype == torch.uint16
+    assert torch.equal(out, g["10m"].cpu()[sel])
+
+
+def test_groupbatch_tensor_index_on_cpu_uint16():
+    from georvq.data.pool import GroupBatch
+    t = torch.arange(60000, 60024, dtype=torch.int32).to(torch.uint16).view(6, 4)
+    g = GroupBatch({"10m": t})
+    sel = torch.tensor([0, 5, 2])
+    assert torch.equal(g[sel]["10m"], t[sel])
