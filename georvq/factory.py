@@ -59,12 +59,53 @@ def from_checkpoint(path, device="cpu") -> PyramidCodec:
             f"{path}: no embedded config — for legacy research checkpoints "
             "use georvq.compat.from_legacy_checkpoint")
     from georvq.config import migrate
-    cfg = Config.model_validate(migrate(ck["config"]))
+    raw = migrate(ck["config"])
+    cfg = Config.model_validate(raw)
+    cfg = bank_heads_as_built(cfg, raw, ck["model"], path)
     model = build_model(cfg, device)
     model.load_state_dict(ck["model"], strict=True)
     model.eval()
     attach_prep(model, ck.get("prep"))
     return model
+
+
+def bank_heads_as_built(cfg, raw, state_dict, path=""):
+    """Before 2026-10-14 every decoder-bank member's pixel head was built
+    with `decoder.head_feat`, whatever its own `head_feat` said. For a
+    member whose checkpointed head shapes match that width and not the
+    configured one, return a config with the member's head_feat set to
+    the width it was built with, so the checkpoint loads strictly."""
+    bank = cfg.model.decoder_bank
+    want = cfg.model.decoder.head_feat
+    if not bank or all(st.head_feat in (None, want) for st in bank):
+        return cfg
+    import copy
+    import warnings
+    old_raw = copy.deepcopy(raw)
+    for st in old_raw["model"]["decoder_bank"]:
+        st["head_feat"] = want
+    built = {"now": build_model(cfg, "cpu").state_dict(),
+             "old": build_model(Config.model_validate(old_raw),
+                                "cpu").state_dict()}
+
+    def heads(sd, i):
+        pre = f"decoder.members.{i}.head."
+        return {k: tuple(v.shape) for k, v in sd.items() if k.startswith(pre)}
+    fixed = []
+    for i, st in enumerate(bank):
+        ck = heads(state_dict, i)
+        if (st.head_feat not in (None, want)
+                and ck != heads(built["now"], i)
+                and ck == heads(built["old"], i)):
+            raw["model"]["decoder_bank"][i]["head_feat"] = want
+            fixed.append((i, st.head_feat))
+    if not fixed:
+        return cfg
+    warnings.warn(
+        f"{path}: decoder_bank members {[i for i, _ in fixed]} were built "
+        f"with decoder.head_feat={want}, not their configured widths "
+        f"{[h for _, h in fixed]}; loading them as built", stacklevel=3)
+    return Config.model_validate(raw)
 
 
 def attach_prep(model, state=None):
