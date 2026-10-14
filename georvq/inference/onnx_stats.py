@@ -24,6 +24,11 @@ export carries the release's bitstream id.
 Exporting needs torch. `OnnxStatsCodec` and the numpy RVQ functions need
 only numpy and onnxruntime, and importing this module does not import
 torch.
+
+meta.json records `graph_opsets`, the default-domain opset each graph
+was written at, and `opset`, the highest of them, which is the opset a
+runtime must support. Exports made before this rule recorded the
+requested opset as `opset`; the runtime does not read either field.
 """
 from __future__ import annotations
 
@@ -74,11 +79,14 @@ def rvq_lookup_np(indices, books, L=None):
 # --------------------------------------------------------------------------
 
 def export_stats_onnx(model, out_dir, extra_id=(), meta_extra=None,
-                      opset=17):
+                      opset=18):
     """Export a stats_cond PyramidCodec to `out_dir` (encoder.onnx,
     decoder.onnx, codebooks.npz, meta.json). `extra_id` is the release's
     bitstream-defining state, hashed into the recorded bitstream id;
-    `meta_extra` is merged into meta.json. Returns the meta dict."""
+    `meta_extra` is merged into meta.json. `opset` is the opset asked of
+    the exporter, which writes a decoder with ReduceL2 (AE's per-pixel
+    renormalisation) at 18 even when 17 is asked for. Returns the meta
+    dict."""
     import torch
 
     if model.stats_cond is None:
@@ -149,6 +157,9 @@ def export_stats_onnx(model, out_dir, extra_id=(), meta_extra=None,
     np.savez(os.path.join(out_dir, CODEBOOKS_NAME), **books)
 
     from georvq.inference.release import bitstream_id, decoder_id
+    graph_opsets = {n: _graph_opset(os.path.join(out_dir, f))
+                    for n, f in (("encoder", ENCODER_NAME),
+                                 ("decoder", DECODER_NAME))}
     meta = {
         "format": FORMAT,
         "window": model.window,
@@ -160,10 +171,9 @@ def export_stats_onnx(model, out_dir, extra_id=(), meta_extra=None,
         "norm_latents": bool(getattr(model, "norm_latents", False)),
         "bitstream_id": bitstream_id(model, extra=extra_id),
         "decoder_id": decoder_id(model),
-        "opset": opset,
-        "graph_opsets": {n: _graph_opset(os.path.join(out_dir, f))
-                         for n, f in (("encoder", ENCODER_NAME),
-                                      ("decoder", DECODER_NAME))},
+        "opset": max((v for v in graph_opsets.values() if v is not None),
+                     default=None),
+        "graph_opsets": graph_opsets,
     }
     meta.update(meta_extra or {})
     with open(os.path.join(out_dir, META_NAME), "w") as f:

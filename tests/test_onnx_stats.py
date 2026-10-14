@@ -1,7 +1,9 @@
 """ONNX export of a stats_cond model (georvq.inference.onnx_stats): the
 onnxruntime graphs against torch fp32 on CPU, and the runtime path
 running with torch unavailable."""
+import json
 import os
+import shutil
 import subprocess
 import sys
 import textwrap
@@ -153,7 +155,48 @@ def test_refuses_a_model_without_stats(tmp_path):
 
 
 def test_meta_records_the_written_opsets(exported):
-    _, _, meta = exported
+    _, out, meta = exported
     ops = meta["graph_opsets"]
     assert set(ops) == {"encoder", "decoder"}
-    assert all(isinstance(v, int) and v >= meta["opset"] for v in ops.values())
+    assert all(isinstance(v, int) for v in ops.values())
+    # `opset` is what a runtime must support: the highest graph opset
+    assert meta["opset"] == max(ops.values()) == 18
+    with open(os.path.join(out, "meta.json")) as f:
+        assert json.load(f)["opset"] == 18
+
+
+def test_loads_a_meta_with_the_requested_opset(exported, tmp_path):
+    # exports before the opset rule recorded the requested 17 next to
+    # graph opsets of 17 and 18, as the published AE v2 export does
+    model, out, meta = exported
+    old = tmp_path / "old"
+    shutil.copytree(out, old)
+    with open(old / "meta.json", "w") as f:
+        json.dump(dict(meta, opset=17,
+                       graph_opsets={"encoder": 17, "decoder": 18}), f)
+    x, v, st = _inputs(model, seed=3)
+    a, b = OnnxStatsCodec(out), OnnxStatsCodec(str(old))
+    idx = a.encode(x.numpy(), st.numpy(), v.numpy())
+    assert np.array_equal(a.decode(idx, (3, 2, 1), st.numpy(), v.numpy()),
+                          b.decode(idx, (3, 2, 1), st.numpy(), v.numpy()))
+
+
+PUBLISHED_ONNX = os.environ.get(
+    "GEORVQ_AE_V2_ONNX",
+    "/home/ali/projects/georvq/scratch/ae-v2/bundle_v2_hf/onnx")
+
+
+def test_published_ae_v2_export_still_loads():
+    if not os.path.exists(os.path.join(PUBLISHED_ONNX, "meta.json")):
+        pytest.skip("published AE v2 ONNX export not present "
+                    "(set GEORVQ_AE_V2_ONNX)")
+    from georvq.ae.v2 import AEV2OnnxCodec
+    c = AEV2OnnxCodec(PUBLISHED_ONNX, threads=4)
+    assert c.ort.meta["opset"] == 17
+    assert c.ort.meta["graph_opsets"] == {"encoder": 17, "decoder": 18}
+    n = 2
+    valid = np.ones((n, c.window, c.window), bool)
+    base = np.zeros((n, c.n_mean + c.specs[0].depth * c.specs[0].cells),
+                    np.int64)
+    out = c.decode_records(base, [None, None], (2, 0, 0), valid)
+    assert out.shape[0] == n
