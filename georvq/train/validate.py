@@ -217,7 +217,7 @@ def validate(model, source, val_s, tuples, canon_names=(), val_loc=None,
 
     # codebook health per tier/level (on one chunk)
     cx, cv, cloc = chunks[0]
-    out.update(model.codebook_health(cx, loc=cloc))
+    out.update(model.codebook_health(cx, loc=cloc, valid=cv))
     if model.selector is not None:
         out.update(model.selector.diagnostics(model, cx, cloc, cv))
 

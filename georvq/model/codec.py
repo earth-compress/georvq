@@ -145,11 +145,8 @@ class PyramidCodec(nn.Module):
         self.specs = list(cfg.tiers)
         self.norm_latents = cfg.norm_latents
         self.continuous = cfg.vq is None
-        self.norm_latents = cfg.norm_latents
 
         self.stem = source.build_stem(cfg)
-        if cfg.local_attn and cfg.local_attn[-1] is not None:
-            sr = cfg.local_attn[-1]
         self.tokenizer = ViTTokenizer(
             self.specs, cfg.window, cfg.bands, dim=cfg.tokenizer.dim,
             depth=cfg.tokenizer.depth, ff_ratio=cfg.ff_ratio,
@@ -310,8 +307,8 @@ class PyramidCodec(nn.Module):
         """zqs: list of (B, cells, dim); cond: (B, n_tiers) depths (or sigmas
         in stage-1 mode). stats: (B, bands) per-window mean when stats
         conditioning is on -- REQUIRED then, because silently omitting it
-        would return a mean-removed field and quietly wreck every metric
-        rather than raising."""
+        would return a mean-removed field and corrupt every metric
+        without raising."""
         self._require_stats(stats, "decode")
         emb = None if self.stats_dec is None else self.stats_dec(stats)
         out = self.decoder(zqs, cond, stats=emb)
@@ -358,9 +355,11 @@ class PyramidCodec(nn.Module):
             bits += float(channel_bits(self.stats_cond, self.bands))
         src = getattr(self, "source", None)
         if src is not None and hasattr(src, "side_bits"):
-            try:
+            import inspect
+            # a source's side_bits(cfg) may omit the depth argument
+            if "depths" in inspect.signature(src.side_bits).parameters:
                 bits += float(src.side_bits(self.cfg, depths))
-            except TypeError:            # sources predating the depth arg
+            else:
                 bits += float(src.side_bits(self.cfg))
         return bits
 
@@ -456,14 +455,16 @@ class PyramidCodec(nn.Module):
 
     # ---- stage-1: continuous, noise-robust, sigma-conditioned ----
 
-    def encode_stage1(self, x):
+    def encode_stage1(self, x, stats=None, valid=None):
         """Continuous per-tier latents, L2-normalized per cell then scaled by
         sqrt(dim) so per-element std ~= 1 in EVERY tier. This (a) bounds the
         latent scale so an absolute sigma is meaningful (the encoder can't
         escape the noise by inflating magnitudes), and (b) makes one sigma
-        corrupt all tiers equally despite their different dims."""
+        corrupt all tiers equally despite their different dims. `stats`
+        and `valid` are as for `encode_levels`; stats_cond models need
+        them."""
         return [F.normalize(z, dim=-1, eps=1e-6) * (z.shape[-1] ** 0.5)
-                for z in self.encode_levels(x)]
+                for z in self.encode_levels(x, stats, valid)]
 
     def forward_stage1(self, x, sigmas, drop=None):
         """Encode -> normalize -> add per-tier additive-uniform noise
@@ -487,9 +488,16 @@ class PyramidCodec(nn.Module):
         return self.rate.rate_bits(zs, self.rvqs, self.window, tau_rel)
 
     @torch.no_grad()
-    def entropy_level_bits(self, x):
-        """Honest eval-time entropy-coded bits, per tier (B, depth)."""
-        return self.rate.level_bits(self.encode_levels(x), self.rvqs)
+    def entropy_level_bits(self, x, valid=None):
+        """Eval-time entropy-coded bits of the hard indices, per tier
+        (B, depth). Plain RVQ only: a cascade or select model codes
+        different indices, which the rate model's pass does not see."""
+        if self.conditioner is not None or self.selector is not None:
+            raise NotImplementedError(
+                "entropy_level_bits uses plain RVQ indices, which are not "
+                "what a cascade or select model transmits")
+        zs = self.encode_levels(x, self._stats_of(x, valid), valid)
+        return self.rate.level_bits(zs, self.rvqs)
 
     # ---- eval ----
 
@@ -511,7 +519,7 @@ class PyramidCodec(nn.Module):
             return zs, self.conditioner.cumsums(
                 self.rvqs, self.specs, [z.float() for z in zs], loc)
         for z, rvq in zip(zs, self.rvqs):
-            per = rvq.all_levels(z)[0]
+            per = rvq.all_levels(z.float())[0]       # VQ stays fp32
             zero = torch.zeros_like(per[:, :, :1])
             cums.append(torch.cat([zero, per.cumsum(-2)], dim=-2))
         return zs, cums
@@ -525,12 +533,12 @@ class PyramidCodec(nn.Module):
         return self.decode(zqs, Ls, self._stats_of(batch_ref, valid), valid)
 
     @torch.no_grad()
-    def codebook_health(self, x, loc=None):
+    def codebook_health(self, x, loc=None, valid=None):
         """Per-(tier, level) codebook usage / entropy / perplexity on one
         batch: 'pyr{i}_usage_L{l}', 'pyr{i}_entropy_L{l}',
         'pyr{i}_perplexity_L{l}'."""
         out = {}
-        zs = self.encode_levels(x, self._stats_of(x), None)
+        zs = self.encode_levels(x, self._stats_of(x, valid), valid)
 
         def _tally(i, sp, per_level_idx):
             """Per-level codebook diagnostics for one tier: fraction of codes

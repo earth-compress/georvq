@@ -7,7 +7,7 @@ tier, conditioned on: the cumulative within-tier reconstruction z_q^{(<l)}
 
 `PyramidRateModel` owns the per-tier models plus the cross-tier context
 projections and implements both the differentiable training rate
-(`rate_bits`, R = -(softmax(-d/tau) . log q)) and the honest eval-time
+(`rate_bits`, R = -(softmax(-d/tau) . log q)) and the eval-time
 hard-index bits (`level_bits`) — the same model is the arithmetic coder's
 distribution at deployment.
 """
@@ -155,7 +155,7 @@ class PyramidRateModel(nn.Module):
     def level_bits(self, zs, rvqs):
         """Eval-time entropy-coded cost. Per tier returns (B, depth)
         HARD-index bits summed over cells: -log2 q(chosen_idx | within-tier
-        recon^{<l}, full coarse recon, level) — the honest range-coder rate
+        recon^{<l}, full coarse recon, level) — the range-coder rate
         (not the soft train surrogate). One full-depth pass; any tuple's
         rate = sum of its included levels. Coarse context uses the FULL
         coarse reconstruction -> EXACT for operating points with full coarse
