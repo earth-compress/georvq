@@ -7,8 +7,9 @@ resampling of the data itself:
   fuse onto the 10m grid to form the single plane the tokenizer eats.
 - head: per-resolution patch heads decode the fine tokens back to each
   native grid.
-- normalizer: per-tile per-band mean/std are removed before encoding and
-  re-applied after decoding; the stats travel in the packet's side channel
+- normalizer: per-tile per-band mean/std, taken over each band's valid
+  (non-zero) pixels, are removed before encoding and re-applied after
+  decoding; the stats travel in the packet's side channel
   (see georvq.inference.stats_codec).
 
 Batches are dicts {"10m": (B,4,W,W), "20m": (B,6,W/2,W/2),
@@ -102,20 +103,34 @@ class S2Normalizer:
 
     per_sample = True       # denormalize needs the batch's own stats
 
-    def normalize(self, x: dict):
-        """Per-band-group standardization, returning the stats to transmit.
+    def normalize(self, x: dict, valid: dict | None = None):
+        """Per-band standardization over valid pixels, returning the stats
+        to transmit.
 
         Sentinel-2 bands differ in physical scale and per-scene
         illumination, so the model sees standardized inputs and the (mu, sd)
-        side channel carries what was removed. Embedding-field sources need
-        nothing here and return None from `normalizer`.
+        side channel carries what was removed. `valid` maps each group to a
+        per-band mask (B, C, h, w) of pixels that are not nodata. The mean
+        and std of a band are taken over its own valid pixels only, and its
+        invalid pixels are set to 0 (the band mean) in the output, so a
+        window that straddles a swath edge is coded around the statistics
+        of the data it holds rather than those of the DN 0 fill. The std is
+        the unbiased estimate, as `Tensor.std` gives, so a fully valid
+        window gets the same stats as before masking existed.
         """
         stats = {}
         out = GroupBatch()
         for name, t in x.items():
-            mu = t.mean((2, 3), keepdim=True)
-            sd = t.std((2, 3), keepdim=True).clamp_min(1e-4)
-            out[name] = (t - mu) / sd
+            if valid is None:
+                m = torch.ones_like(t)
+            else:
+                m = valid[name].to(t.dtype)
+            n = m.sum((2, 3), keepdim=True)
+            mu = (t * m).sum((2, 3), keepdim=True) / n.clamp_min(1)
+            var = ((t - mu) ** 2 * m).sum((2, 3), keepdim=True) \
+                / (n - 1).clamp_min(1)
+            sd = var.sqrt().clamp_min(1e-4)
+            out[name] = (t - mu) / sd * m
             stats[name] = (mu, sd)
         return out, stats
 
@@ -128,6 +143,30 @@ class S2Normalizer:
         mus = torch.cat([stats[n][0].flatten(1) for n in GROUPS], 1)
         sds = torch.cat([stats[n][1].flatten(1) for n in GROUPS], 1)
         return torch.cat([mus, sds], 1)               # (B, 26)
+
+
+def pixel_valid(band_valid: dict):
+    """(B, W, W) mask on the 10 m grid of pixels where every band of every
+    group holds data. The 20 m and 60 m masks are repeated onto the 10 m
+    grid, so a 10 m pixel counts as valid only when the coarser pixels
+    covering it are valid too."""
+    v = None
+    for name, (_, ratio) in GROUPS.items():
+        g = band_valid[name].all(1)
+        if ratio > 1:
+            g = g.repeat_interleave(ratio, 1).repeat_interleave(ratio, 2)
+        v = g if v is None else v & g
+    return v
+
+
+def group_valid(valid, name):
+    """The 10 m pixel mask reduced to one group's grid: a coarse pixel is
+    valid when every 10 m pixel it covers is. Returns (B, 1, h, w)."""
+    ratio = GROUPS[name][1]
+    v = valid.unsqueeze(1).float()
+    if ratio > 1:
+        v = -F.max_pool2d(-v, ratio)
+    return v > 0.5
 
 
 class S2Source(Source):
@@ -161,12 +200,21 @@ class S2Source(Source):
         return _packed_bits(resolve_artifact(cfg.stats_pca))
 
     def prep(self, raw: dict, device):
-        """Raw uint16 group dict -> normalized float dict + 10m validity."""
+        """Raw uint16 group dict -> normalized float dict + 10 m validity.
+
+        DN 0 is the L1C nodata value. It is masked per band for the
+        statistics, and the returned mask marks the 10 m pixels where all
+        13 bands hold data (`pixel_valid`), which is what the loss and the
+        metrics score.
+        """
         x = GroupBatch()
+        band_valid = {}
         for name, t in raw.items():
-            x[name] = t.to(device, non_blocking=True).float() / MAX_VALUE
-        valid = x["10m"].sum(1) > 0
-        xn, self._last_stats = self._norm.normalize(x)
+            t = t.to(device, non_blocking=True)
+            band_valid[name] = t != 0
+            x[name] = t.float() / MAX_VALUE
+        valid = pixel_valid(band_valid)
+        xn, self._last_stats = self._norm.normalize(x, band_valid)
         return xn, valid
 
     def last_stats(self):
@@ -248,17 +296,22 @@ class S2Source(Source):
         return 0.01
 
     def recon_stats(self, out: dict, x: dict, valid):
+        """Per-group MSE over valid pixels, averaged over the groups.
+
+        Nodata pixels carry no target (the release restores them from the
+        mask), so they are left out of the loss as DEM leaves them out."""
         losses = {}
         total = 0.0
         for name in GROUPS:
-            mse = F.mse_loss(out[name], x[name])
+            mse = _masked_mse(out[name], x[name], group_valid(valid, name))
             losses[f"mse_{name}"] = mse
             total = total + mse
         losses["mse"] = total / len(GROUPS)
         # 1 - MSE over valid 10m pixels (normalized space); a proxy, not
         # a cosine
         err = ((out["10m"] - x["10m"]) ** 2).mean(1)
-        losses["one_minus_mse_10m"] = 1.0 - err[valid].mean().clamp(max=1.0)
+        losses["one_minus_mse_10m"] = 1.0 - err[valid].mean().clamp(max=1.0) \
+            if bool(valid.any()) else err.new_tensor(0.0)
         return total / len(GROUPS), losses
 
     def report(self, model_cfg):
@@ -321,20 +374,30 @@ def _s2_10m(t):
     return t["10m"] if isinstance(t, dict) else t
 
 
+def _masked_mse(out, x, m):
+    """Mean squared error over the pixels in m (B, 1, h, w), all bands;
+    zero when the batch holds no valid pixel."""
+    m = m.expand_as(x).to(x.dtype)
+    return ((out - x) ** 2 * m).sum() / m.sum().clamp_min(1)
+
+
 def _s2_r2(out, x, valid):
-    """Variance explained across all three native grids.
+    """Variance explained across all three native grids, on valid pixels.
 
     Per-group MSE over per-group variance, summed with equal group weight
     so the metric weights the grids the way `recon_stats` weights them.
-    Unmasked, for the same reason the loss is: S2 L1C is 99.5% valid and
-    the loss the model actually minimises does not mask either, so a
-    masked metric would report on a different quantity than the objective.
+    Masked as the loss is: nodata pixels are zero in normalized space and
+    carry no target.
     """
     num, den = 0.0, 0.0
     for name in GROUPS:
         t = x[name]
-        num = num + (t - out[name]).pow(2).mean()
-        den = den + t.var()
+        m = group_valid(valid, name)
+        num = num + _masked_mse(out[name], t, m)
+        mf = m.expand_as(t).to(t.dtype)
+        n = mf.sum().clamp_min(1)
+        mean = (t * mf).sum() / n
+        den = den + ((t - mean) ** 2 * mf).sum() / n
     return 1.0 - num / den.clamp_min(1e-8)
 
 

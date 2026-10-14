@@ -62,7 +62,7 @@ def collect_stats(store, rows, window, n_windows, batch=64, seed=0):
         while sum(len(s) for s in out) < n_windows:
             raw = pool.sample_batch(batch, token=window)
             x = {k: v.float() / 10000.0 for k, v in raw.items()}
-            _, stats = norm.normalize(x)
+            _, stats = norm.normalize(x, {k: v != 0 for k, v in raw.items()})
             out.append(norm.stats_vector(stats).numpy())
     finally:
         pool.shutdown()
