@@ -192,3 +192,36 @@ def test_stage1_presets_pass_and_unsupported_knobs_are_refused():
                       ["train.optim.warmup=0", "train.optim.schedule=constant"])
     f, s0 = make_lr_fn(cfg), cfg.train.optim.lr0_steps
     assert f(s0) == 1.0 and f(cfg.train.steps - 1) == 1.0
+
+
+@pytest.mark.slow
+def test_loop_checkpoints_load_weights_only(smoke, monkeypatch):
+    """Every checkpoint the loop writes, including the resume state,
+    loads under torch.load(weights_only=True) with only TorchVersion
+    allowlisted (a subset of georvq.repro.load_checkpoint's list)."""
+    from torch.torch_version import TorchVersion
+
+    from georvq.train import loop
+    _interrupt_at(monkeypatch, 15)
+    with pytest.raises(SystemExit):
+        loop.train(load_config("configs/smoke.yaml", smoke("wo")), gpu=-1)
+    run = os.path.join(smoke("wo")[1].split("=", 1)[1], "smoke")
+    for name in ("model.pt", "model_best.pt"):
+        with torch.serialization.safe_globals([TorchVersion]):
+            ck = torch.load(os.path.join(run, name), weights_only=True)
+        assert ck["step"] >= 10
+    with torch.serialization.safe_globals([TorchVersion]):
+        ck = torch.load(os.path.join(run, "model.pt"), weights_only=True)
+    assert {"opt", "sched", "train_state"} <= set(ck)
+    ts = ck["train_state"]
+    assert set(ts) == {"best_q", "best_is_quantized", "best_ceil_guard",
+                       "nonfinite_steps", "last_full_q", "vq", "rng"}
+    # the restored RNG reproduces the saved stream
+    loop.set_rng_state(ts["rng"])
+    import random
+
+    import numpy as np
+    a = (torch.rand(3), np.random.rand(3), random.random())
+    loop.set_rng_state(ts["rng"])
+    b = (torch.rand(3), np.random.rand(3), random.random())
+    assert torch.equal(a[0], b[0]) and (a[1] == b[1]).all() and a[2] == b[2]
