@@ -11,6 +11,7 @@ experiment: lab/experiments/stats-channel-is-per-field
 related:
   - supports: fixed-side-channels-dominate-coarse-rungs
   - supports: s2-stats-pca-packing
+  - clashes: ae-transmitted-mean
 ---
 
 Whether a stats side channel pays is a property of the field, not the
