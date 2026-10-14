@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 
 import numpy as np
 import pandas as pd
@@ -20,7 +21,9 @@ from georvq.config import TierSpec, parse_tier
 from georvq.eval import codec_ab
 from georvq.eval.extract import dequant_np
 from georvq.sources.ae import NODATA
-from georvq.viz import panels
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import panels  # noqa: E402
 
 DEFAULT_CKPTS = ["checkpoints/ae_pyr128_deep/model_best.pt",
                  "checkpoints/ae_pyr64_divfull/model_best.pt"]

@@ -113,11 +113,11 @@ def residual_init_rvq(rvq, z, mode="kmeans", iters=6, expected_batch=4096,
     """Residual init of a whole RVQ stack: fit level 1 on the latents,
     level 2 on its residuals, and so on.
 
-    Same contract and buffer bookkeeping as `vq.kmeans_init_rvq` (which it
-    replaces when `mode="tree"`), except that it does NOT silently cap the
-    fit set at 1e6 -- that cap is 61 vectors per centroid at K=16384, and
-    starving the fit without saying so is the failure this is meant to
-    avoid. Pass `max_fit` to cap deliberately.
+    Writes codebooks and EMA buffers (counts at steady-state assignment
+    rates, so nothing is instantly dead) and marks levels initialized so
+    the lazy data-init never fires. The fit set is not capped unless
+    `max_fit` is given: a silent 1e6 cap would leave 61 vectors per
+    centroid at K=16384.
     """
     residual = z.reshape(-1, z.shape[-1]).float()
     if max_fit and residual.shape[0] > max_fit:
