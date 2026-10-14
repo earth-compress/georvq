@@ -212,19 +212,16 @@ vector is used, against using all the codebooks) which is measured first
 ([`refinement-budget-is-the-ceiling-gap`](../lab/findings/refinement-budget-is-the-ceiling-gap.md)),
 and the slack sits on different tiers in different models
 ([`refinement-tier-differs-per-model`](../lab/findings/refinement-tier-differs-per-model.md)).
-On AlphaEarth the coarse tier holds it, where the leftover is
-concentrated in unusual windows the coarse codebook never learned well
-([`ae-outlier-tail-is-coarse`](../lab/findings/ae-outlier-tail-is-coarse.md));
-on Tessera it is the fine tier. Because a sidecar's cost scales with
-the tier's cell count, a coarse sidecar can ship on by default while a
-fine one has to be an opt-in
+On Tessera it is the fine tier. Because a sidecar's cost scales with
+the tier's cell count, a coarse sidecar could ship on by default while a
+fine one, as on Tessera, has to be an opt-in
 ([`refinement-cost-scales-with-cells`](../lab/findings/refinement-cost-scales-with-cells.md)).
 
 ### Stats normalization
 
 The stats normalization module is a key design choice that must be
 decided per source. Currently, three modes are supported and used in different
-sources. No normalization (AE), mean-only normalization (TESSERA) and 
+sources. No normalization, mean-only normalization (AE and TESSERA) and 
 mean+std normalization (Sentinel-2). If normalization is used, then the input is
 first debiased by the per-band mean of the patch, and divided by the per-band standard deviation,
 making each band zero-centred and with a roughly equal spread of values. Whilst removed from the input,
@@ -273,11 +270,11 @@ One checkpoint serves every rate because training samples monotone
 per-tier depth tuples and conditions the decoder on the tuple. Minimum
 depths concentrate capacity on the operating points that get used
 ([`matryoshka-min-depths`](../lab/findings/matryoshka-min-depths.md)). The current recipe (`depth_sampling: path`,
-used by the Tessera release and the S2, DEM and ERA5 presets) samples
+used by the AE and Tessera releases and the S2, DEM and ERA5 presets) samples
 depth uniformly along the truncation path so that deep fine-tier levels
 see enough training traffic ([`depth-sampling-along-path`](../lab/findings/depth-sampling-along-path.md)). The schema
 default is still `nested`, which the older AE presets, including the one
-behind the AE release, were trained with.
+behind the first AE release, were trained with.
 
 ## Quantization
 
@@ -311,9 +308,10 @@ context model ([`order0-entropy-coding-marginal`](../lab/findings/order0-entropy
 ## Side channels and refinements
 
 Whether a stats side channel pays is a property of the data, measured
-per source. Some fields want the window mean transmitted, none measured
-so far wants the standard deviation forced, and a unit-norm field wants
-nothing ([`stats-channel-is-per-field`](../lab/findings/stats-channel-is-per-field.md)).
+per source. Some fields want the window mean transmitted, including the
+unit-norm AlphaEarth field in its current release, and none measured so
+far wants the standard deviation forced
+([`stats-channel-is-per-field`](../lab/findings/stats-channel-is-per-field.md)).
 
 A tier's post-quantization residual can be scalar-quantized and added
 back at decode without touching the bitstream. The available gain is
@@ -353,6 +351,7 @@ Encoders run fp32 and decoders bf16, which keeps bitstreams bit-stable
 across hardware at most of the speed win ([`bf16-decoder-only`](../lab/findings/bf16-decoder-only.md)). Encoding
 measures its own error by decoding the rate ladder as it goes, which is
 what makes quality-controlled delivery possible without a predictor
-network ([`encode-time-self-measurement`](../lab/findings/encode-time-self-measurement.md)). Window seams are removed by a
+network ([`encode-time-self-measurement`](../lab/findings/encode-time-self-measurement.md)). Window seams can be removed by a
 boundary-conditioned deblocker at decode, at no rate cost
-([`seam-deblocker`](../lab/findings/seam-deblocker.md)).
+([`seam-deblocker`](../lab/findings/seam-deblocker.md)); no release applies one now, and the
+network is kept in `georvq/model/deblock.py` as an exploratory tool.
