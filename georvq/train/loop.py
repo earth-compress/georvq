@@ -93,17 +93,25 @@ def make_lr_fn(cfg: Config):
         if const_lr:                  # stoppable at any step
             return ramp
         total = max(steps - lr0, 1)
-        return ramp * 0.5 * (1 + np.cos(np.pi * min(1.0, s / total)))
+        # a Python float: the lr lands in the optimizer and scheduler
+        # state, which must load under torch.load(weights_only=True)
+        return float(ramp * 0.5 * (1 + np.cos(np.pi * min(1.0, s / total))))
     return lr_fn
 
 
 def rng_state():
-    """Every RNG the trainer draws from, for an exact resume."""
+    """Every RNG the trainer draws from, for an exact resume, as tensors
+    and plain Python values so the checkpoint loads under
+    torch.load(weights_only=True)."""
+    kind, keys, pos, has_gauss, gauss = np.random.get_state()
+    version, internal, gauss_next = random.getstate()
     return {"torch": torch.get_rng_state(),
-            "cuda": (torch.cuda.get_rng_state_all()
+            "cuda": (list(torch.cuda.get_rng_state_all())
                      if torch.cuda.is_available() else None),
-            "numpy": np.random.get_state(),
-            "python": random.getstate()}
+            "numpy": [str(kind), torch.from_numpy(keys.astype(np.int64)),
+                      int(pos), int(has_gauss), float(gauss)],
+            "python": [int(version), [int(v) for v in internal],
+                       gauss_next]}
 
 
 def set_rng_state(st):
@@ -111,8 +119,11 @@ def set_rng_state(st):
     if st.get("cuda") is not None and torch.cuda.is_available() \
             and len(st["cuda"]) == torch.cuda.device_count():
         torch.cuda.set_rng_state_all(st["cuda"])
-    np.random.set_state(st["numpy"])
-    random.setstate(st["python"])
+    kind, keys, pos, has_gauss, gauss = st["numpy"]
+    np.random.set_state((kind, keys.numpy().astype(np.uint32), pos,
+                         has_gauss, gauss))
+    version, internal, gauss_next = st["python"]
+    random.setstate((version, tuple(internal), gauss_next))
 
 
 def level_state(model):
@@ -548,17 +559,20 @@ def _train(cfg: Config, gpu, stop):
         set_rng_state(rng0)   # last, so the stream continues the run's
 
     def train_state():
-        return {"best_q": best_q, "best_is_quantized": best_is_quantized,
-                "best_ceil_guard": best_ceil_guard,
-                "nonfinite_steps": nonfinite_steps,
-                "last_full_q": last_full_q,
+        return {"best_q": float(best_q),
+                "best_is_quantized": bool(best_is_quantized),
+                "best_ceil_guard": float(best_ceil_guard),
+                "nonfinite_steps": int(nonfinite_steps),
+                "last_full_q": (None if last_full_q is None
+                                else float(last_full_q)),
                 "vq": level_state(model), "rng": rng_state()}
 
     def save_model_pt(step, with_optim):
         save_checkpoint(os.path.join(run_dir, "model.pt"), model, cfg,
                         step, {"quality_key": qm.key,
-                               f"{qm.key}_full": last_full_q,
-                               f"{qm.key}_best": best_q},
+                               f"{qm.key}_full": (None if last_full_q is None
+                                                  else float(last_full_q)),
+                               f"{qm.key}_best": float(best_q)},
                         opt=opt if with_optim else None,
                         sched=sched if with_optim else None,
                         prep_state=prep.state(),
