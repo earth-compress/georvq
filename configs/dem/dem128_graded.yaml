@@ -11,9 +11,10 @@
 #
 # 25 per codeword is the regime where fitting is worse than not fitting
 # (docs/FINDINGS.md): the book loses most of its codes and the tier
-# collapses quietly, while full-depth metrics stay respectable because the
-# fine tier carries everything. So the books are graded DOWN where starved
-# and left alone where healthy -- at matched rate a bigger book beats more
+# collapses with no sign of it in the loss, while full-depth metrics stay
+# respectable because the fine tier carries everything. So the books are
+# graded DOWN where starved and left alone where healthy -- at matched
+# rate a bigger book beats more
 # levels on a well-sampled tier, so shrinking tier 2 would cost R-D for
 # nothing.
 #

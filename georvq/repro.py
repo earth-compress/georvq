@@ -50,7 +50,7 @@ def run_metadata(cfg: Config) -> dict:
 
 
 def save_checkpoint(path, model, cfg: Config, step: int, metrics=None,
-                    opt=None, sched=None, prep_state=None):
+                    opt=None, sched=None, prep_state=None, train_state=None):
     """Write a checkpoint that can rebuild its own model.
 
     The resolved config travels with the weights, which is what makes
@@ -63,7 +63,11 @@ def save_checkpoint(path, model, cfg: Config, step: int, metrics=None,
     every parameter full-lr updates for thousands of steps -- the
     measured trigger of the tessera gradient storms -- so the periodic
     `model.pt` should carry them. Additive keys: older checkpoints and
-    readers are unaffected.
+    readers are unaffected. `train_state` carries what `train.resume`
+    needs beyond them (best score, RNG state, per-level reset state).
+
+    The file is written to `path + ".tmp"` and renamed into place, so a
+    kill during the write leaves the previous checkpoint intact.
     """
     d = {
         "model": model.state_dict(),
@@ -80,7 +84,11 @@ def save_checkpoint(path, model, cfg: Config, step: int, metrics=None,
         # the fitted prep constants (model-space definition) travel with
         # the weights, so decode never depends on the artifact file
         d["prep"] = prep_state
-    torch.save(d, path)
+    if train_state is not None:
+        d["train_state"] = train_state
+    tmp = f"{path}.tmp"
+    torch.save(d, tmp)
+    os.replace(tmp, path)
 
 
 def write_resolved_config(run_dir, cfg: Config):
