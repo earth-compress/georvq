@@ -431,8 +431,8 @@ def test_footer_in_one_read_when_small(tmp_path):
     _write(tmp_path / "a.parquet")
     size = os.path.getsize(tmp_path / "a.parquet")
     with gp.RVQParquetReader(tmp_path / "a.parquet") as r:
-        assert r.stats == {"requests": 1, "bytes": size, "cache_hits": 0,
-                           "cache_bytes": 0}
+        assert r.stats == {"requests": 1, "bytes": size, "retries": 0,
+                           "cache_hits": 0, "cache_bytes": 0}
         r.read(0, 10, 0, 13, quality=True)
         assert r.stats["requests"] == 1          # the suffix read held it all
     footer = pq.read_metadata(tmp_path / "a.parquet").serialized_size + 8
@@ -486,7 +486,12 @@ _RANGE = re.compile(r"^bytes=(\d*)-(\d*)$")
 class _RangeHandler(http.server.BaseHTTPRequestHandler):
     """Single Range requests, including suffix ranges (bytes=-n), with an
     ETag and a per-request delay; records the requests and the most
-    requests in flight at once."""
+    requests in flight at once. Faults, set in `state`: `fail`, statuses
+    to answer the next requests with; `stall`, seconds to wait before
+    answering the next request; `ignore_range`, answer 200 with the whole
+    file; `shift`, move the answered range by that many bytes (range
+    requests only, or every request when `shift_suffix`); `range_etag`
+    False, no ETag on range answers."""
     protocol_version = "HTTP/1.1"
     path_on_disk = None
     state = None
@@ -498,23 +503,36 @@ class _RangeHandler(http.server.BaseHTTPRequestHandler):
             st["max_active"] = max(st["max_active"], st["active"])
         try:
             time.sleep(st["delay"])
+            with st["lock"]:
+                stall, st["stall"] = st.get("stall", 0), 0
+                fail = st["fail"].pop(0) if st.get("fail") else None
+            time.sleep(stall)
             data = Path(self.path_on_disk).read_bytes()
             rng = self.headers.get("Range")
             st["requests"].append(rng)
-            if rng is None:
+            if fail is not None:
+                self.send_response(fail)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            suffix = False
+            if rng is None or st.get("ignore_range"):
                 a, b, status = 0, len(data) - 1, 200
             else:
                 m = _RANGE.match(rng)
-                if m.group(1) == "":
+                suffix = m.group(1) == ""
+                if suffix:
                     a, b = max(0, len(data) - int(m.group(2))), len(data) - 1
                 else:
                     a, b = int(m.group(1)), min(int(m.group(2)), len(data) - 1)
+                if st.get("shift") and (not suffix or st.get("shift_suffix")):
+                    a, b = a - st["shift"], b - st["shift"]
                 status = 206
             body = data[a:b + 1]
             self.send_response(status)
             if status == 206:
                 self.send_header("Content-Range", f"bytes {a}-{b}/{len(data)}")
-            if st["etag"]:
+            if st["etag"] and (suffix or st.get("range_etag", True)):
                 self.send_header("ETag", st["etag"])
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
@@ -531,7 +549,7 @@ class _RangeHandler(http.server.BaseHTTPRequestHandler):
 def served(tmp_path, mask):
     vals = _write(tmp_path / "a.georvq.parquet", valid=mask)
     state = {"lock": threading.Lock(), "active": 0, "max_active": 0,
-             "delay": 0.0, "etag": '"v1"', "requests": []}
+             "delay": 0.0, "etag": '"v1"', "requests": [], "fail": []}
     handler = type("H", (_RangeHandler,), {
         "path_on_disk": str(tmp_path / "a.georvq.parquet"), "state": state})
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
@@ -692,3 +710,225 @@ def test_module_does_not_import_torch():
          "import sys, georvq.inference.georvq_parquet; print('torch' in sys.modules)"],
         cwd=root, capture_output=True, text=True, check=True)
     assert out.stdout.strip() == "False"
+
+
+# --------------------------------------------------------------------------
+# threads, faults and hostile inputs
+# --------------------------------------------------------------------------
+
+def _region_reads(r, vals, n_threads=8, per_thread=25):
+    """Reads random regions from `n_threads` threads through one reader;
+    returns the errors and the number of reads that disagreed with
+    `vals`."""
+    errors, wrong = [], []
+
+    def work(seed):
+        rng = np.random.default_rng(seed)
+        for _ in range(per_thread):
+            wy0, wx0 = int(rng.integers(0, 9)), int(rng.integers(0, 12))
+            wy1 = int(rng.integers(wy0 + 1, 11))
+            wx1 = int(rng.integers(wx0 + 1, 14))
+            try:
+                got = r.read(wy0, wy1, wx0, wx1, depths=FULL, quality=True)
+            except Exception as e:                 # noqa: BLE001
+                errors.append(e)
+                continue
+            sl = np.s_[wy0:wy1, wx0:wx1]
+            ok = (got["base"] == vals["base"][sl]).all() and all(
+                (got[t][:, :, l] == vals[f"{t}_{l + 1}"][sl]).all()
+                for t, L in (("mid", 2), ("fine", 3)) for l in range(L))
+            if not ok:
+                wrong.append((wy0, wy1, wx0, wx1))
+
+    threads = [threading.Thread(target=work, args=(s,)) for s in range(n_threads)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    return errors, wrong
+
+
+def test_one_local_reader_shared_by_threads(tmp_path, mask):
+    vals = _write(tmp_path / "a.parquet", valid=mask)
+    # no cache, so every read fetches and parses
+    with gp.RVQParquetReader(tmp_path / "a.parquet", first_read=1024,
+                             cache_bytes=0) as r:
+        errors, wrong = _region_reads(r, vals)
+        assert errors == [] and wrong == []
+        assert r.stats["requests"] > 8 * 25
+
+
+def test_one_http_reader_shared_by_threads(served):
+    url, state, vals = served
+    state["delay"] = 0.002
+    r = gp.RVQParquetReader(url, first_read=1024, cache_bytes=0, gap=0)
+    errors, wrong = _region_reads(r, vals, per_thread=10)
+    assert errors == [] and wrong == []
+    assert r.stats["requests"] == len(state["requests"])
+
+
+@pytest.mark.parametrize("status", [503, 429, 500])
+def test_transient_failures_are_retried(served, status):
+    url, state, vals = served
+    state["fail"] = [status]                       # the suffix request
+    r = gp.RVQParquetReader(url, first_read=4096, backoff=0.01)
+    assert r.stats["retries"] == 1
+    state["fail"] = [status, status]               # the next range request
+    got = r.read(0, 10, 0, 13, depths=(3, 1, 0), mask=False)
+    assert (got["mid"][:, :, 0] == vals["mid_1"]).all()
+    assert r.stats["retries"] == 3
+
+
+def test_persistent_failures_give_up(served):
+    import urllib.error
+    url, state, _ = served
+    state["fail"] = [503] * 10
+    with pytest.raises(urllib.error.HTTPError) as e:
+        gp.RVQParquetReader(url, retries=2, backoff=0.01)
+    assert e.value.code == 503 and len(state["requests"]) == 3
+    # a 404 is final: one request, no retry
+    state["fail"], state["requests"] = [404] * 10, []
+    with pytest.raises(urllib.error.HTTPError) as e:
+        gp.RVQParquetReader(url, retries=5, backoff=0.01)
+    assert e.value.code == 404 and len(state["requests"]) == 1
+    state["fail"], state["requests"] = [], []
+    r_ok = gp.RVQParquetReader(url, first_read=4096, retries=5, backoff=0.01)
+    state["fail"] = [416] * 10
+    with pytest.raises(urllib.error.HTTPError):
+        r_ok.read(0, 1, 0, 1, depths=(3, 1, 0))
+    assert r_ok.stats["retries"] == 0
+
+
+def test_timeout_is_retried(served):
+    url, state, _ = served
+    state["stall"] = 2.0
+    t0 = time.perf_counter()
+    r = gp.RVQParquetReader(url, first_read=4096, timeout=0.3, backoff=0.01)
+    assert time.perf_counter() - t0 < 1.5
+    assert r.stats["retries"] == 1
+    state["stall"] = 2.0
+    with pytest.raises((TimeoutError, OSError)):
+        gp.RVQParquetReader(url, first_read=4096, timeout=0.3, retries=0)
+
+
+def test_server_that_ignores_range(served, tmp_path):
+    url, state, vals = served
+    state["ignore_range"] = True
+    with pytest.raises(OSError, match="ignored the Range header"):
+        gp.RVQParquetReader(url, first_read=4096)
+    # a file no longer than the suffix arrives whole, and is read from it
+    size = os.path.getsize(tmp_path / "a.georvq.parquet")
+    r = gp.RVQParquetReader(url, first_read=size + 10)
+    got = r.read(0, 10, 0, 13, depths=FULL)
+    assert (got["fine"][:, :, 2] == vals["fine_3"]).all()
+    assert r.stats["requests"] == 1 and r.size == size
+
+
+def test_content_range_must_match_the_request(served):
+    url, state, _ = served
+    r = gp.RVQParquetReader(url, first_read=4096)
+    state["shift"] = 1
+    with pytest.raises(OSError, match="were requested and bytes"):
+        r.read(0, 10, 0, 13, depths=FULL)
+    state["shift_suffix"] = True
+    with pytest.raises(OSError, match="was answered with bytes"):
+        gp.RVQParquetReader(url, first_read=4096)
+
+
+def test_server_without_version_tags(served, tmp_path):
+    url, state, vals = served
+    state["range_etag"] = False                    # tag on the suffix only
+    r = gp.RVQParquetReader(url, first_read=4096)
+    assert r.version_tag == '"v1"'
+    got = r.read(0, 10, 0, 13, depths=FULL)
+    assert (got["fine"][:, :, 0] == vals["fine_1"]).all()
+    assert r.identity == [url, '"v1"', r.size]
+    # no tag at all: values are cached in memory only
+    state["etag"] = None
+    cdir = tmp_path / "cache"
+    with pytest.warns(UserWarning, match="in memory only"):
+        r = gp.RVQParquetReader(url, first_read=4096, cache_dir=cdir)
+    assert r.identity == [url, None, r.size]
+    got = r.read(0, 10, 0, 13, depths=FULL)
+    assert (got["fine"][:, :, 0] == vals["fine_1"]).all()
+    assert not list(cdir.rglob("*.bin"))
+    before = r.stats["requests"]
+    r.read(0, 10, 0, 13, depths=FULL)
+    assert r.stats["requests"] == before           # memory cache still serves
+
+
+def test_cache_paths_stay_inside_cache_dir(tmp_path):
+    c = gp.RecordCache(cache_dir=tmp_path / "c")
+    for key in [(("..", ".."), "../../evil", 1, 0),
+                (("a/../../b", "f"), "x/../../y", 0, 0),
+                ((".", "f"), "..", 0, 0)]:
+        p = Path(c._path(key)).resolve()
+        assert p.is_relative_to((tmp_path / "c").resolve()), (key, p)
+        assert len(p.relative_to((tmp_path / "c").resolve()).parts) == 3
+    # legitimate keys keep their names
+    assert c._path((("test", "abc123"), "fine_2", 3, 4)) == str(
+        tmp_path / "c" / "test" / "abc123" / "fine_2-3-4.bin")
+    for bad in ("../evil", "a-b", "fine.1", "", "mid/2"):
+        with pytest.raises(ValueError, match="tier name"):
+            gp.Layout(WIN, 8, [("mean", 3, 12)], [(bad, 2, [("x", 4, 9)])])
+
+
+def test_corrupt_disk_cache_values_are_misses(tmp_path, mask):
+    vals = _write(tmp_path / "a.parquet", valid=mask)
+    cdir = tmp_path / "cache"
+    with gp.RVQParquetReader(tmp_path / "a.parquet", first_read=1024,
+                             cache_dir=cdir) as r:
+        r.read(0, 10, 0, 13, depths=FULL)
+    files = sorted(cdir.rglob("*.bin"))
+    fine = next(f for f in files if f.name.startswith("fine_1-"))
+    good = fine.read_bytes()
+    fine.write_bytes(good[:-5])                    # truncated
+    maskf = next(f for f in files if f.name.startswith("mask-"))
+    maskf.write_bytes(b"not zlib")
+    with gp.RVQParquetReader(tmp_path / "a.parquet", first_read=1024,
+                             cache_dir=cdir) as r:
+        got = r.read(0, 10, 0, 13, depths=FULL)
+        assert (got["fine"][:, :, 0] == vals["fine_1"]).all()
+        assert (got["valid"][:H, :W] == mask).all()
+        assert r.stats["requests"] > 1
+    assert fine.read_bytes() == good               # the fetch replaced it
+
+
+def test_failed_open_releases_the_file(tmp_path):
+    bad = tmp_path / "bad.parquet"
+    bad.write_bytes(b"x" * 100)
+    before = len(os.listdir("/proc/self/fd"))
+    for _ in range(20):
+        with pytest.raises(ValueError):
+            gp.RVQParquetReader(bad)
+    assert len(os.listdir("/proc/self/fd")) <= before
+
+
+def test_failed_write_leaves_no_file(tmp_path, monkeypatch):
+    path = tmp_path / "a.parquet"
+    path.write_bytes(b"previous")
+    calls = []
+    real = gp.pq.ParquetWriter.write_table
+
+    def failing(self, table, *a, **k):
+        calls.append(1)
+        if len(calls) == 3:
+            raise RuntimeError("killed")
+        return real(self, table, *a, **k)
+    monkeypatch.setattr(gp.pq.ParquetWriter, "write_table", failing)
+    with pytest.raises(RuntimeError, match="killed"):
+        _write(path)
+    assert path.read_bytes() == b"previous"
+    assert os.listdir(tmp_path) == ["a.parquet"]
+
+
+def test_mask_decoding_is_bounded():
+    valid = np.random.default_rng(0).random((30, 21)) > 0.5
+    data = gp.encode_mask(valid)
+    assert (gp.decode_mask(data, valid.shape) == valid).all()
+    import zlib
+    for bad in (zlib.compress(b"\xff" * 10_000_000),   # inflates far past
+                zlib.compress(b"\xff" * 10),           # too short
+                data + b"junk"):                       # input after the stream
+        with pytest.raises(ValueError, match="mask value"):
+            gp.decode_mask(bad, valid.shape)
