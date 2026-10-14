@@ -1,10 +1,8 @@
-Warning for humans: this document is more geared towards agents. There is some useful info here if you're interested, but it's by the bots and for the bots, so don't spend your precious human time on it unless you're really invested in this. 
-
 # Codebase overview
 
 This document is a map of the georvq codebase for the people and agents
-who change it. It describes how the code is organised, which invariants
-protect released codecs, and the practical knowledge that cannot be read
+who are developing it or want to know more. It describes how the code is organised, 
+which invariants protect released codecs, and the practical knowledge that cannot be read
 from function signatures. `README.md` introduces the project, and
 `docs/DESIGN.md` explains the method and the reasoning behind it.
 
