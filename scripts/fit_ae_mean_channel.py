@@ -35,7 +35,9 @@ the 2M sampled residuals come from a different code. Coded with either
 set of tables, 6% of validation means get different fields, the decoded
 means differ by at most 0.0022 and the median relative L2 error is
 0.00604 for both. Stage 2 differs further, since the scatter-adds
-accumulate in another order and the random draws are not the GPU's. The
+accumulate in another order and the random draws are not the GPU's,
+but a full CPU refit from the means (65 minutes on 16 cores, 22 GB)
+also reaches a median relative L2 error of 0.00604. The
 tables enter the bitstream_id, so a refit is a new mean channel and the
 released mean_channel.npz is the one that decodes released files.
 """
