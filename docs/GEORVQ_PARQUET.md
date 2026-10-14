@@ -1,6 +1,6 @@
 # The georvq GeoParquet layout (draft for review)
 
-**Status: placeholder.** This data standard is deliberately simple
+**Status: placeholder.** This data standard is a deliberately simple
 format, written to ship the AE v2 release. It is expected to be
 replaced during the Earth Compress project.
 
@@ -24,7 +24,8 @@ chunk size chosen per kind of record:
   fields (for AE, the transmitted mean) and every level of the coarsest
   tier, because every decode needs them;
 - one kind per tier other than the coarsest, named after the tier
-  (`mid`, `fine` for a three-tier codec, `tier1` .. `tierN` otherwise);
+  (`mid`, `fine` for a three-tier codec, `tier1` .. `tierN` otherwise;
+  a tier name is made of `[A-Za-z0-9_]`, and a reader refuses others);
 - `quality`: optional per-window quality bytes, chunked as `base`.
 
 Each kind's chunk size is a whole number of windows, not necessarily a
@@ -114,10 +115,10 @@ order on close, so the file does not depend on encoding order.
 Fields marked * are required.
 
 - `format`*, `version`*, `status`*: `georvq-parquet`, `1.1`,
-  `placeholder`. A reader refuses an unknown major version. Minor
-  versions only add fields; a reader ignores fields it does not know.
-  Version 1.1 added empty chunks, whose null values a 1.0 reader
-  does not accept.
+  `placeholder`. A reader refuses an unknown major version, and
+  ignores header fields it does not know. Version 1.1 added empty
+  chunks, whose null values a 1.0 reader does not accept, so a 1.0
+  reader cannot read every 1.1 file.
 - `codec`*: `bitstream_id`, `decoder_id`, the tier specs
   (`grid:dim:codes:depth`), the window size in pixels, `min_depths`,
   the mean channel's kind and bits, and the model release the file was
@@ -131,7 +132,8 @@ Fields marked * are required.
 - `rungs`*: the operating points the file supports, each a depth tuple
   with its bits per window and per pixel.
 - `quality`: the descriptor of the quality column's encoding, when
-  present.
+  present, including `decode_precision`, the precision of the decodes
+  the statistics were measured with.
 - `layout`*: `window_px`, `window_grid`, `product_px`, chunk and window
   order (row-major); `groups`, the kinds in file order, each with its
   `chunk_px`, `chunk_windows`, `chunk_grid`, its data `columns` in file
@@ -141,7 +143,7 @@ Fields marked * are required.
   masks); the record layout of each code column (`name`,
   `record_bytes`, `fields` as a list of `{name, count, bits}`); and the
   tiers (`name`, `levels`, and the columns holding them, `["base"]` for
-  the coarsest).
+  the coarsest). Tier names are made of `[A-Za-z0-9_]`.
 
 ## Reading
 
@@ -167,8 +169,14 @@ bytes.
 Over HTTP the merged ranges are fetched in parallel, up to 16 requests
 at once by default; a local file is read range by range. The fetched
 column chunks are parsed as ordinary Parquet pages. Each response's
-ETag (or Last-Modified) is compared with the one the open saw, and a
-reader refuses to combine bytes from two versions of a file.
+ETag (or Last-Modified) and the file size in its Content-Range are
+compared with the ones the open saw, and a reader refuses to combine
+bytes from two versions of a file; a response without a tag is
+accepted on its size. A response whose Content-Range is not the range
+requested is refused, and so is a server that ignores Range. Each
+request times out after 60 s by default, and one that fails with a 5xx
+or 429 answer, a timeout or a broken connection is retried, up to 3
+times by default with a doubling wait.
 
 ### Cache
 
@@ -178,14 +186,17 @@ reads from the cache and fetches only the columns and chunks it lacks.
 After a whole-tile read of `base`, every window read in that tile
 fetches no base bytes. The key is the file's identity and the
 (column, chunk_row, chunk_col) of the value. The identity is the
-header's `bitstream_id` together with, for a URL, the URL and the ETag
-or Last-Modified of the first response, and for a local file, its path,
-size and modification time, so a changed file does not reuse cached
-values. The cache is an in-memory LRU with a byte budget (512 MB by
-default) and, optionally, a directory on disk
-(`cache_dir/<bitstream_id>/<identity hash>/`), off by default. Readers
-can share one cache. The reader counts requests, bytes fetched, and
-values and bytes served from the cache.
+header's `bitstream_id` together with, for a URL, the URL, the ETag
+or Last-Modified of the first response and the file size, and for a
+local file, its path, size and modification time, so a changed file
+does not reuse cached values. The cache is an in-memory LRU with a byte
+budget (512 MB by default) and, optionally, a directory on disk
+(`cache_dir/<bitstream_id>/<identity hash>/`), off by default. A URL
+whose server sends neither ETag nor Last-Modified is cached in memory
+only. A cached value of the wrong length is treated as a miss and
+fetched again. Readers can share one cache. The reader counts
+requests, bytes fetched, retried requests, and values and bytes served
+from the cache.
 
 ### Quality column
 
@@ -219,8 +230,10 @@ Measured on tile `x21yfwngg902u0lsh-0000008192-0000000000` (2021, zone
 44N), the row groups of each kind take, with page headers and the
 position, footprint and null columns of their rows: `base` 1,104,085
 B (the mask included), `mid` 3,412,892 B, `fine` 58,800,768 B,
-`quality` 754,875 B. The footer is 141,341 B, for a file of 64,213,965
-B (64,167,325 B in the earlier one-block-per-row layout). The tile's
+`quality` 754,875 B. In the published sample file the footer is
+141,606 B, for a file of 64,214,230 B (64,167,325 B in the earlier
+one-block-per-row layout); the footer's size varies by a few hundred
+bytes with the header, which records the source path and the release. The tile's
 nodata is a strip along its west edge; as 8 separate 1024 px masks it
 took about 4 KB, as one 8192 px mask it takes 21,529 B.
 

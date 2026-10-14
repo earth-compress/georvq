@@ -99,27 +99,32 @@ The documentation is split in two:
 
 ## Rules that protect released codecs
 
-- Never edit the numerics in `georvq/model/vq.py`. Trained checkpoints
-  must decode bit-for-bit forever, and `tests/test_compat.py` checks
-  this against released weights. It must stay exact, not approximately
-  equal.
+- Never edit the numerics in `georvq/model/vq.py` or
+  `georvq/model/vq_quant.py`. Trained checkpoints must decode
+  bit-for-bit forever. `tests/test_ae_v2_bundle.py` checks the AE v2
+  release's codes and decodes against the released bundle, and reads
+  back a golden GeoParquet tile; `tests/test_tessera_bundle.py` checks
+  the Tessera release's codes and decodes. Both must stay exact, not
+  approximately equal. The recorded hashes hold on torch 2.10 or later
+  with numpy 2.
 - State dict names are part of the checkpoint format. Renaming modules
   or parameters breaks every existing checkpoint. If a rename is
   unavoidable, extend the rename table in `georvq/compat.py` and show
-  that a legacy checkpoint still loads strictly.
-- The bytes of shipped payloads are frozen. The AlphaEarth `star.tif`
-  bytes are public and pinned by `tests/test_refine.py`. Generalising
-  the code behind a shipped format is fine; changing its output bytes is
-  not.
+  that a legacy checkpoint still loads strictly. Config fields are part
+  of it too, because a checkpoint embeds its config: a removed field
+  goes in `RETIRED_FIELDS` and a renamed one in `RENAMED_FIELDS`
+  (`georvq/config.py`), so that old checkpoints still load.
 - `georvq/ae/` and `georvq/tessera/` hold source-specific release
   policy (`docs/AE_RELEASE.md`, `docs/TESSERA_RELEASE.md`);
   `georvq/inference/` stays source-agnostic. Keep that boundary.
 
 ## Verifying changes
 
-Run `pytest -m "not slow and not gpu"` (about 20 seconds) on every
-change. For anything touching training, prefer `configs/smoke.yaml`, or
-a few hundred steps with overrides, over a long run. Configs are
+Run `pytest -m "not slow"` (about 80 seconds on 8 CPUs, training
+smokes included) on every change; `slow` marks only the resume and
+real-checkpoint tests. For anything touching training, prefer
+`configs/smoke.yaml`, or a few hundred steps with overrides, over a
+long run. Configs are
 validated by pydantic with `extra="forbid"`; anything that affects a run
 belongs in the `Config` schema, not in an environment variable or an
 edit to the source.

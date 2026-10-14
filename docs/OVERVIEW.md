@@ -47,7 +47,7 @@ submodules exist. Everything is assembled from one validated `Config`
 | `georvq/metrics.py` | `masked_recon_stats`, `centered_cos` |
 | `georvq/repro.py` | Seeding, git/env metadata, `save_checkpoint` (embeds config + hash) |
 | `georvq/cli.py` | `georvq-train`, `georvq-train-stage1` entry points |
-| `georvq/model/vq.py` | `VectorQuantizer`, `ResidualVQ`, k-means init, dead-code revival (`reset_mode`) — numerics frozen, see the invariants below |
+| `georvq/model/vq.py` | `VectorQuantizer`, `ResidualVQ`, data-sample init, dead-code revival (`reset_mode`) — numerics frozen, see the invariants below |
 | `georvq/model/vqinit.py` | Codebook seeding: balanced-PCA-tree init, per-tier init budgets (`init_per_code`) |
 | `georvq/model/vq_quant.py` | b-bit quantization-aware codebooks (`vq.book_bits`) — int8 books are ~4x smaller to download |
 | `georvq/model/stats_cond.py` | The transmitted-mean side channel: centre before the encoder, condition both ends, restore after the decoder |
@@ -58,15 +58,15 @@ submodules exist. Everything is assembled from one validated `Config`
 | `georvq/model/rate.py` | `ContextRateModel`, `PyramidRateModel`, `soft_rate`, `calib_tau` |
 | `georvq/model/conditioning.py` | `TierPredictor` (cascade), `CodebookSelector` (gated subset) |
 | `georvq/model/location.py` | SatCLIP clone-on-demand loader, location tables, location→latent prior MLPs |
-| `georvq/data/` | `store.py` chip-store v1 + `open_store` + `geographic_split`; `pool.py` resident pools and `GroupBatch`; `build.py` `ShardWriter`; live readers `live_dem.py`, `live_s2.py`, `era5.py`; `sampler.py` sample geometry |
+| `georvq/model/deblock.py` | `Deblocker`, an exploratory seam-removal post-decoder (no release ships it) |
+| `georvq/data/` | `store.py` chip-store v1 + `open_store` + `geographic_split`; `pool.py` resident pools and `GroupBatch`; `build.py` `ShardWriter`; live readers `live_dem.py`, `live_s2.py`, `era5.py`; `sampler.py` `WindowSampler`, the one sample geometry |
 | `georvq/sources/` | `Source` interface + registry; `ae.py` (minimal reference), `tessera.py` (dense embeddings with a per-pixel scale), `s2.py` (multi-resolution example), `dem.py` (one band with a mean/std side channel), `era5.py` (gridded physical variables); `prep.py` fitted model-space transforms; `report.py` the per-source reporting surface (metrics, baselines, figures, previews) |
-| `georvq/train/` | `loop.py` the one trainer (it also owns the dead-code reset schedule, `mark_resets`); `stage1.py` σ-conditioned pretrain; `grow.py` grown training; `dist.py` data parallelism for frozen codebooks; `trap.py` a flight recorder and tripwire for gradient spikes; `validate.py`, `figures.py`, `report.py`, `warmstart.py` |
+| `georvq/train/` | `loop.py` the one trainer (it also owns the dead-code reset schedule, `mark_resets`); `stage1.py` σ-conditioned pretrain; `grow.py` grown training; `dist.py` data parallelism for frozen codebooks; `signals.py` the SIGUSR1/SIGTERM stop flag; `validate.py`, `figures.py`, `report.py`, `warmstart.py` |
 | `georvq/eval/` | Held-out extraction, probes, benchmark registry, codec A/B helpers |
-| `georvq/viz/` | Panel/GIF styling and builders |
-| `georvq/inference/` | Source-agnostic deployment machinery: `api.py` Codec/Packet, `stats_codec.py`, `archive.py` rANS (research tool), `refine.py` additive residual refinements, `mean_codec.py` the `stats_cond` channel on the wire, `release.py` bundles + bitstream/decoder ids, `onnx_backend.py` ONNX export + torch-free runtime, `georvq_parquet.py` the GeoParquet release container (layout, writer, range reader, record cache), `bitpack.py` fixed-width records, `onnx_stats.py` ONNX for transmitted-mean models |
-| `georvq/ae/` | **The AlphaEarth release codec**: `v2.py` (codec, `georvq.ae.open`, CLI), `v2_bundle.py`, `v2_resolve.py` (finding the bundle a file names), `index.py`. See `docs/AE_RELEASE.md`. `cli.py`, `cog.py` and `deblock.py` are the earlier release, kept so its bundles still load |
+| `georvq/inference/` | Source-agnostic deployment machinery: `api.py` Codec/Packet, `stats_codec.py`, `refine.py` additive residual refinements, `mean_codec.py` the `stats_cond` channel on the wire, `release.py` bundles + bitstream/decoder ids, `georvq_parquet.py` the GeoParquet release container (layout, writer, range reader, record cache), `bitpack.py` fixed-width records, `onnx_stats.py` ONNX for transmitted-mean models |
+| `georvq/ae/` | **The AlphaEarth release codec**: `v2.py` (codec, `georvq.ae.open`, CLI), `v2_bundle.py`, `v2_resolve.py` (finding the bundle a file names), `index.py`. See `docs/AE_RELEASE.md` |
 | `georvq/tessera/` | **The Tessera release codec** — Tessera-specific policy (transmitted mean, rate ladder, fine-tier refinement). See `docs/TESSERA_RELEASE.md` |
-| `scripts/` | Thin drivers over the above (train, store builders, eval, archive, GIFs) |
+| `scripts/` | Thin drivers over the above (train, store builders, eval, release builds); `scripts/viz/` panel/GIF styling and builders |
 | `analysis/` | Source-characterisation and codec-diagnostic probes (`analysis/README.md`) |
 | `lab/` | The findings ledger and kept experiments (`lab/README.md`); the maintainer's TODO queue |
 | `configs/` | Presets — each reproduces a specific historical run (see Provenance) |
@@ -75,28 +75,34 @@ submodules exist. Everything is assembled from one validated `Config`
 
 1. **VQ numerics must not change.** The repo's value rests on trained
    checkpoints decoding bit-faithfully. `model/vq.py` (and the quantize
-   paths in `codec.py`/`conditioning.py`) are guarded by the
-   golden-checkpoint gate (`tests/test_compat.py`: the released weights
-   must reproduce recorded reconstruction quality exactly, self-skipping
-   where the release bundle is absent). Any change there must keep that
-   test exact, not approximately equal.
+   paths in `codec.py`/`conditioning.py`, and `model/vq_quant.py`) are
+   guarded by the golden gates (`tests/test_ae_v2_bundle.py` and
+   `tests/test_tessera_bundle.py`: the released bundles must reproduce
+   recorded codes and decoded bits exactly, self-skipping where the
+   bundle is absent). Any change there must keep those tests exact, not
+   approximately equal. The recorded hashes hold on torch 2.10 or later
+   with numpy 2; older versions give different codes.
 2. **State-dict names are part of the checkpoint format.** `compat.py` maps legacy
    checkpoint keys onto today's module names by prefix. Renaming modules
    or parameters breaks every existing checkpoint; if you must, extend
    the rename table and prove a legacy checkpoint still loads strict.
-3. **The bitstream excludes the decoder.** A packet/archive is defined by
-   tiers + codebooks + conditioning priors (+ stats codec / CDF tables
-   where used — `docs/BITSTREAM.md`). Decoder-side improvements must
+   Config fields that are removed or renamed go in `RETIRED_FIELDS` or
+   `RENAMED_FIELDS` (`config.py`), so checkpoints that embed them still
+   load.
+3. **The bitstream excludes the decoder.** A packet is defined by
+   tiers + codebooks + conditioning priors (+ stats codec / release-layer
+   state such as a mean channel's tables, where used — `docs/BITSTREAM.md`). Decoder-side improvements must
    never require re-encoding; anything that changes the bitstream
    changes `bitstream_id`, and decoder-specific artifacts are keyed by
    `decoder_id`. Additive refinements (`inference/refine.py`) sit
    *outside* this: they extend a packet without touching its indices, so
    ignoring one always yields a valid decode at a lower rate.
-4. **A released quantizer's payload is frozen.** `georvq/ae`'s `star.tif`
-   is public, so its bytes cannot change even when the code behind them
-   is generalised; `tests/test_refine.py` pins the packing against an
-   inlined copy of the original implementation. Treat any shipped
-   container the same way.
+4. **A released quantizer's payload is frozen.** Shipped files must
+   stay readable even when the code behind them is generalised.
+   `tests/test_ae_v2_bundle.py` reads back a golden GeoParquet tile
+   (`tests/golden/ae_v2_tile.georvq.parquet`), and
+   `tests/test_tessera_bundle.py` pins the bytes of the packed Tessera
+   refinement. Treat any shipped container the same way.
 5. **VQ state stays fp32 under bf16 autocast.** Assignment scores may run
    bf16 (`vq.bf16_scores`); residuals, EMA buffers and codebooks must not.
 6. **Sources own all data-specific behavior.** The shared stack
@@ -115,17 +121,16 @@ submodules exist. Everything is assembled from one validated `Config`
 ## Running things
 
 ```bash
-pip install -e ".[train,loc,archive,eval,viz,dev]"
+pip install -e ".[train,eval,viz,onnx,era5,dev]"
 
 georvq-train -c configs/ae/pyr64.yaml --gpu 0 log.run_tag=my_run   # train
 georvq-train -c configs/ae/pyr64.yaml train.steps=2000 ...          # any override
 
-pytest -m "not slow and not gpu"    # fast suite (~40 s) — run on every change
-pytest                              # + training smokes (CPU, seconds) and GPU tests
+pytest -m "not slow"    # fast suite incl. training smokes (~80 s on 8 CPUs) — run on every change
+pytest                  # + the resume and real-checkpoint tests
 
-python scripts/eval_run_ab.py --dataset <ds> --sanity identity   # eval harness sanity
+python scripts/eval_rate_sweep.py --dataset <ds> --ckpt <ckpt> --sanity identity   # eval harness sanity
 python scripts/eval_rate_sweep.py --dataset <ds> --ckpt <ckpt>   # Pareto-front A/B
-python scripts/build_archive.py --ckpt <ckpt> --store-dir <dir> --out <dir>  # research rANS archives
 
 
 # AlphaEarth release codec (georvq/ae — see docs/AE_RELEASE.md)
@@ -147,9 +152,10 @@ python scripts/build_release_tessera.py --ckpt <ckpt> --out <bundle>
   (bundles, ids, refinements, ONNX export) plus a source-specific release
   layer. `georvq/ae/` and `georvq/tessera/` are two worked examples of
   the same contract, and reading them side by side is the fastest way to
-  see which decisions are policy: they differ on whether a stats channel
-  is sent at all, on which tier carries a refinement, and on whether that
-  refinement is a default or an opt-in — each difference measured, in
+  see which decisions are policy: both send a transmitted mean, but they
+  differ in how it is coded, in the container, and in whether a
+  refinement is offered (only Tessera has one, as an opt-in) — each
+  difference measured, in
   `docs/AE_RELEASE.md` and `docs/TESSERA_RELEASE.md`.
 - **Data end user** (decode compressed data): for AlphaEarth,
   `georvq.ae.open` and the `{stem}.georvq.parquet` files, with
@@ -195,8 +201,9 @@ reproduces a result.
 
 - **`conda run` buffers stdout.** Background training logs stay empty
   until the process exits. To check progress, read the run dir instead:
-  `torch.load(<run>/model_best.pt)["step"/"metrics"]`, or
-  `final_val.json` after completion.
+  `georvq.repro.load_checkpoint(<run>/model_best.pt)["step"/"metrics"]`
+  (plain `torch.load` needs `weights_only=False` on torch 2.6 or later),
+  or `final_val.json` after completion.
 - **Console entry points `sys.exit()` the function's return value.**
   Returning a string from a `cli.py` function makes the command exit
   nonzero after success. Return `None`.
@@ -206,11 +213,26 @@ reproduces a result.
   via residual k-means (`_chunked_assign` is memory-safe).
 - **SatCLIP** is fetched on first use: pinned git clone into
   `~/.cache/georvq/satclip` + HF weights. Offline machines: clone it
-  yourself and set `GEORVQ_SATCLIP_DIR`. Needs the `[loc]` extra.
+  yourself and set `GEORVQ_SATCLIP_DIR`.
 - **Pool nondeterminism.** The background pool refresh makes training
   runs seed-stable but not bit-identical; expect ~±0.001 val-cos between
   identically-configured runs. Bit-exactness claims belong to the model
   (fixed inputs), not the trainer.
+- **Resuming a run.** `train.resume=<run>/model.pt` continues a run
+  from its own checkpoint: weights, optimizer, scheduler, step, best
+  score and RNG state are restored and the schedule carries on from the
+  saved step. It is exclusive with `train.init_from`, which starts a new
+  run from another run's weights.
+- **Stopping on a signal.** SIGUSR1 or SIGTERM makes the trainer write a
+  resumable `model.pt` at the end of the current step and exit 0, so
+  Slurm's `--signal=B:USR1@300` ahead of the time limit, or `scancel`,
+  never kills a run mid-step. The signal reaches the trainer only if the
+  job script `exec`s python or forwards the signal to it.
+- **Warm starts that refit codebooks.** With `vq.warmup_steps > 0` a warm
+  start refits the codebooks by k-means after the warmup, discarding any
+  shape-matching books loaded from `train.init_from`. The trainer
+  refuses to start in that case unless `train.refit_books=true` says the
+  refit is intended.
 - **Multi-group (S2-style) sources** stream through the same `ChipPool`
   and train loop as single-plane ones, as one resident tensor per group
   sharing a slot index and a crop origin. That origin must land on the
@@ -223,8 +245,9 @@ reproduces a result.
 - **New dataset** → builder + `Source` adapter + preset:
   `docs/ADDING_A_SOURCE.md`.
 - **Better decoder / post-decode enhancement** → free under the
-  bitstream contract (`docs/BITSTREAM.md`); the AE deblock decoder
-  (`georvq/ae/deblock.py`, shipped) is the worked example — note its
+  bitstream contract (`docs/BITSTREAM.md`); the seam deblocker
+  (`georvq/model/deblock.py`, exploratory and not shipped) is a worked
+  example — note its
   canonical-recipe pattern: post-processors whose output depends on
   tiling must freeze the tiling into the decoder identity.
 - **Context-adaptive entropy coding** → the achievable rate is already
