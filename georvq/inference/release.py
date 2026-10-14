@@ -145,7 +145,8 @@ def halve_weights(ckpt_path):
     centred cosine by -8.0e-07, some 260x smaller than the difference
     between two consecutive release checkpoints.
     """
-    ck = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+    from georvq.repro import load_checkpoint
+    ck = load_checkpoint(ckpt_path)
     ck["model"] = {k: (v.half() if torch.is_tensor(v) and v.is_floating_point()
                        and v.dtype == torch.float32 else v)
                    for k, v in ck["model"].items()}

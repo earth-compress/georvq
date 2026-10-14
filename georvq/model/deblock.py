@@ -189,7 +189,8 @@ def load_deblocker(path, device="cpu"):
     `trained_against` {bitstream_id, decoder_id} and `provenance`.
     A deblocker is trained on one base decoder's outputs, so callers
     should refuse one whose `trained_against` does not match."""
-    ck = torch.load(path, map_location="cpu", weights_only=False)
+    from georvq.repro import load_checkpoint
+    ck = load_checkpoint(path)
     net = Deblocker(**ck["arch"]).to(device).eval()
     net.load_state_dict(ck["model"])
     for p in net.parameters():
