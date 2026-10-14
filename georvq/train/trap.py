@@ -14,8 +14,8 @@ buffer, and trips when the pre-clip gradient norm crosses a threshold.
 On a trip it saves the model, gradients, optimizer state, batch and RNG
 states BEFORE opt.step() runs, so the saved weights are the ones the
 exploding gradient was computed at and the step can be replayed exactly.
-Optionally it then holds the process open on a localhost pdb socket for
-live inspection (`nc 127.0.0.1 <port>` from the same machine).
+Optionally it then holds the process open on a pdb Unix socket in the
+run directory for live inspection (`nc -U <run_dir>/trap_hold.sock`).
 """
 from __future__ import annotations
 
@@ -41,6 +41,12 @@ def group_of(name: str) -> str:
             if f".{tag}." in r:
                 return f"dec.{stage}.{tag}"
         return f"dec.{stage}.other"
+    if r.startswith("blocks."):
+        blk = "block" + r.split(".")[1]
+        for tag in ("ada", "attn", "mlp"):
+            if f".{tag}." in r:
+                return f"dec.{blk}.{tag}"
+        return f"dec.{blk}.other"
     if r.startswith("stem."):
         return "dec.stem.ada" if ".ada." in r else "dec.stem.mlp"
     if r.startswith("heads."):
@@ -79,9 +85,11 @@ class Trap:
         self.dir = out_dir
         os.makedirs(out_dir, exist_ok=True)
         self.groups: dict[str, list] = {}
+        # every parameter, not only those trainable now: the encoder and
+        # decoder tail can be frozen at construction and released later,
+        # and a param without a grad or Adam state contributes nothing
         for n, p in model.named_parameters():
-            if p.requires_grad:
-                self.groups.setdefault(group_of(n), []).append((n, p))
+            self.groups.setdefault(group_of(n), []).append((n, p))
         self.flight: deque[dict] = deque(maxlen=cfg.flight_maxlen)
         self.ema = None
         self.dumps = 0
@@ -208,27 +216,50 @@ class Trap:
               f" rng)", flush=True)
 
     def hold(self, ns: dict):
-        """Serve a pdb prompt on a localhost socket so the live process
-        (GPU tensors, grads, optimizer) can be inspected in place.
-        Continues training if nobody connects within hold_timeout."""
+        """Serve a pdb prompt on a Unix socket in the run directory so the
+        live process (GPU tensors, grads, optimizer) can be inspected in
+        place. The socket is mode 0600, so only the training user can
+        connect; a TCP port on a shared host would hand a Python prompt
+        to every local user. Continues training if nobody connects within
+        hold_timeout."""
         import pdb
         import socket
-        port = self.cfg.hold_port
-        srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        srv.bind(("127.0.0.1", port))
+        path = os.path.abspath(os.path.join(self.dir, "trap_hold.sock"))
+        if len(path.encode()) > 100:
+            # sockaddr_un holds about 107 bytes; refuse rather than bind a
+            # truncated path somewhere else
+            print(f"TRAP HOLD: socket path {path} is too long for a Unix "
+                  f"socket; not holding", flush=True)
+            return
+        if os.path.exists(path):
+            os.unlink(path)
+        srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        old_umask = os.umask(0o177)
+        try:
+            srv.bind(path)
+        finally:
+            os.umask(old_umask)
+        os.chmod(path, 0o600)
         srv.listen(1)
         srv.settimeout(self.cfg.hold_timeout)
-        print(f"TRAP HOLD: attach with  nc 127.0.0.1 {port}  (same host; "
-              f"waiting up to {self.cfg.hold_timeout}s). Locals of the "
-              f"training step are on the frame above this one; the trap "
-              f"object is `self`, extras in `ns`.", flush=True)
+
+        def _close_srv():
+            srv.close()
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+        print(f"TRAP HOLD: attach with  nc -U {path}  (or socat - "
+              f"UNIX-CONNECT:{path}; waiting up to {self.cfg.hold_timeout}"
+              f"s). Locals of the training step are on the frame above "
+              f"this one; the trap object is `self`, extras in `ns`.",
+              flush=True)
         try:
             conn, _ = srv.accept()
         except socket.timeout:
             print("TRAP HOLD: no connection, resuming training",
                   flush=True)
-            srv.close()
+            _close_srv()
             return
         fh = conn.makefile("rw", buffering=1)
         dbg = pdb.Pdb(stdin=fh, stdout=fh)
@@ -244,6 +275,6 @@ class Trap:
                 conn.close()
             except OSError:
                 pass
-            srv.close()
+            _close_srv()
             print("TRAP HOLD: session closed, resuming training",
                   flush=True)

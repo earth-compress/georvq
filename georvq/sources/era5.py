@@ -38,6 +38,16 @@ _UNITS = {"t": "K", "z": "m2 s-2", "u": "m s-1", "v": "m s-1",
           "q": "kg kg-1"}
 
 
+def _finite_mask(x):
+    """(x with non-finite values zeroed, valid (B, H, W), any_gaps).
+    A gap-free batch is returned as the same tensor, so its values are
+    untouched."""
+    valid = torch.isfinite(x).all(dim=1)
+    if bool(valid.all()):
+        return x, valid, False
+    return torch.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0), valid, True
+
+
 class _FixedNormalizer:
     """Per-level affine with FIXED global moments, so `stats` is unused.
     Exists so the error histogram can draw its second panel in physical
@@ -219,7 +229,7 @@ class Era5Source(Source):
         chosen indices land in self._pick_idx for the moment gather."""
         n = raw.shape[1]
         if getattr(self, "_prep_deterministic", False):
-            h = raw[:, 0, ::5, ::7].double().abs().sum(dim=(1, 2))
+            h = raw[:, 0, ::5, ::7].double().nan_to_num().abs().sum(dim=(1, 2))
             idx = (h * 1e3).long() % n
         else:
             idx = torch.randint(n, (raw.shape[0],), device=raw.device)
@@ -229,9 +239,12 @@ class Era5Source(Source):
 
     def prep(self, raw, device):
         """float32 (B, levels, W, W) physical units -> per-level
-        standardized floats. ERA5 is gap-free, so validity is all-true.
-        With a level subset, the store still serves all 37 levels and
-        the unused ones are dropped here."""
+        standardized floats. A pixel is valid when every level is finite:
+        the store serves NaN where a NaN-coded variable (sst over land)
+        has no value, and those pixels are set to 0 in model space. The
+        reanalysis variables are gap-free, so for them validity is
+        all-true. With a level subset, the store still serves all 37
+        levels and the unused ones are dropped here."""
         if self._single:
             self._pick_idx = None
             if raw.shape[1] != 1 and torch.device(device).type != "cpu":
@@ -249,6 +262,7 @@ class Era5Source(Source):
         if self._single:
             if x.shape[1] != 1:            # cpu path: not yet selected
                 x = self._pick_single(x)
+            x, valid, gaps = _finite_mask(x)
             if self._pick_idx is not None:
                 # picked from a 37-band store: standardize by the
                 # drawn level. A single-level store (--single-level
@@ -257,14 +271,15 @@ class Era5Source(Source):
                 mu = self._mu.view(-1).to(x.device)[idx].view(-1, 1, 1, 1)
                 sd = self._sd.view(-1).to(x.device)[idx].view(-1, 1, 1, 1)
                 x = (x - mu) / sd
-            valid = torch.ones(x.shape[0], *x.shape[2:], dtype=torch.bool,
-                               device=x.device)
+            if gaps:
+                x = torch.where(valid[:, None], x, torch.zeros_like(x))
             return x, valid
+        x, valid, gaps = _finite_mask(x)
         if self._lam is not None:
             x = _boxcox(x.clamp_min(0) + self._bc_eps, self._lam)
         x = (x - self._mu) / self._sd
-        valid = torch.ones(x.shape[0], *x.shape[2:], dtype=torch.bool,
-                           device=x.device)
+        if gaps:
+            x = torch.where(valid[:, None], x, torch.zeros_like(x))
         return x, valid
 
     def named_preps(self):

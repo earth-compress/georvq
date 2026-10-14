@@ -4,7 +4,7 @@ The point is to start a capacity experiment from EXACTLY the trained
 model's function, so any change in quality is attributable to the extra
 capacity being trained rather than to having thrown the weights away. At
 init the grown decoder reproduces its ancestor to floating-point
-round-off; `verify_growth` asserts it.
+round-off; `verify_growth` measures it.
 
 What grows, and why only these:
 
@@ -67,7 +67,7 @@ def grow_decoder(dst_model, src_state, verbose=True, grow_encoder=False):
     """
     frozen = FROZEN_FULL if grow_encoder else FROZEN_DECODER_ONLY
     own = dst_model.state_dict()
-    report = {"exact": 0, "expanded": [], "fresh": [], "missing": []}
+    report = {"exact": 0, "expanded": [], "fresh": []}
 
     with torch.no_grad():
         for k, dv in own.items():
@@ -129,12 +129,14 @@ def _zero_head_paths(model, src_state, sd):
 
 @torch.no_grad()
 def verify_growth(src_model, dst_model, sample, atol=1e-4, **kw):
-    """Assert the grown decoder still computes its ancestor's function.
+    """Check that the grown decoder still computes its ancestor's function.
 
     `sample` is whatever the models' `forward`-equivalent takes; this
     compares full-depth reconstructions, which exercises every grown
     tensor. fp16-stored release weights make exact equality unavailable,
-    hence a tolerance rather than `allclose(..., 0)`.
+    hence a tolerance rather than `allclose(..., 0)`. Returns the max
+    abs difference, the output scale, their ratio and `ok`; the caller
+    decides what to do when `ok` is False.
     """
     src_model.eval(); dst_model.eval()
     a = _full_decode(src_model, sample, **kw)
