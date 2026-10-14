@@ -35,12 +35,14 @@ def test_slim_tier2_fields_still_validate_from_a_checkpoint():
                             "hold_timeout": 14400.0, "snapshot_every": 500,
                             "stats_every": 10, "batch_history_bytes": 0,
                             "flight_maxlen": 20000}
+    raw["data"]["sampler"] = {"name": "window", "params": {"stride": 2}}
     with pytest.raises(Exception):
         Config.model_validate(raw)
     cfg = Config.model_validate(drop_retired(raw))
     assert cfg.model_dump(mode="json") == Config.model_validate(
         _raw()).model_dump(mode="json")
     raw["train"]["trap"] = None
+    raw["data"]["sampler"] = {"name": None, "params": {}}
     Config.model_validate(drop_retired(raw))
 
 

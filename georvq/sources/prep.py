@@ -25,9 +25,6 @@ class Prep:
     """Static model-space transform. Subclasses implement forward and,
     unless `invertible` is False, inverse."""
 
-    #: meta keys forward/inverse need (checked against the sampler's
-    #: `provides` at config resolution)
-    requires: tuple[str, ...] = ()
     invertible: bool = True
 
     def __init__(self, source, model_cfg):
