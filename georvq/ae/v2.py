@@ -485,7 +485,7 @@ def _channel_sha(channel) -> str:
     return h.hexdigest()[:16]
 
 
-def export_onnx(codec: AEV2Codec, out_dir, opset=17) -> dict:
+def export_onnx(codec: AEV2Codec, out_dir, opset=18) -> dict:
     """Export an AEV2Codec for `AEV2OnnxCodec`: the stats_cond graphs and
     codebooks (georvq.inference.onnx_stats) and the mean channel's
     tables, under the codec's bitstream id. Returns the meta dict."""
@@ -1104,7 +1104,7 @@ def main(argv=None):
                                            "for the onnx backend")
     x.add_argument("out")
     model_args(x)
-    x.add_argument("--opset", type=int, default=17)
+    x.add_argument("--opset", type=int, default=18)
 
     f = sub.add_parser("fetch", help="find or download the bundle of a file "
                                      "or bitstream id; prints its directory")
