@@ -35,7 +35,6 @@ class ViTTokenizer(nn.Module):
         # tokens before the finest tier: the late-join prefix runs on
         # these alone, so the split point is a property of the geometry
         self.n_base = 1 + sum(sp.cells for sp in specs[1:-1])
-        fdim = dim
         self.single = len(specs) == 1
         self.pyramid = bool(stem_pyramid) and not self.single
         if self.pyramid:
@@ -60,11 +59,9 @@ class ViTTokenizer(nn.Module):
             # single-vector autoencoder: per-pixel input tokens feed the
             # trunk, the CLS token is the only readout
             self.patches = nn.ModuleList([nn.Conv2d(bands, dim, 1)])
-            fdim = dim
         else:
             self.patches = nn.ModuleList([
-                nn.Conv2d(bands, fdim if sp is specs[-1] else dim,
-                          window // sp.grid, window // sp.grid)
+                nn.Conv2d(bands, dim, window // sp.grid, window // sp.grid)
                 for sp in specs[1:]])
         if not self.pyramid:
             self.cls = nn.Parameter(torch.zeros(1, 1, dim))
@@ -77,7 +74,7 @@ class ViTTokenizer(nn.Module):
             activation="gelu", batch_first=True, norm_first=True)
         self.vit = nn.TransformerEncoder(layer, depth)
         self.out = nn.ModuleList([
-            nn.Linear(fdim if sp is specs[-1] else dim, sp.dim)
+            nn.Linear(dim, sp.dim)
             for sp in specs])
 
     def _run(self, h, layers):

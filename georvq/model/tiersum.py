@@ -153,7 +153,7 @@ class TierSumDecoder(nn.Module):
         sampling guarantees presence is a prefix; a nonzero depth after a
         zero would decode that tier as absent here)."""
         Ls = cond_arg
-        B, dev = Ls.shape[0], Ls.device
+        B = Ls.shape[0]
         c = self._cond(Ls, stats)
         n_present = (Ls > 0).long().sum(1)          # prefix length per row
         out = zqs[0].new_zeros(B, self.ch, self.window, self.window)
