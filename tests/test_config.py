@@ -87,3 +87,61 @@ def test_config_diff(tiny_raw_cfg):
     b = Config.model_validate(raw)
     d = config_diff(a, b)
     assert d == [("train.steps", 10, 99)]
+
+
+def _model_raw(tiny_raw_cfg, **model):
+    raw = copy.deepcopy(tiny_raw_cfg)
+    raw["model"].update(model)
+    return raw
+
+
+def test_validation_raises_without_assert(tiny_raw_cfg):
+    """Validators raise ValueError, so `python -O` keeps them."""
+    import ast
+    import inspect
+
+    import georvq.config as C
+    tree = ast.parse(inspect.getsource(C))
+    assert not [n.lineno for n in ast.walk(tree) if isinstance(n, ast.Assert)]
+    bad = copy.deepcopy(tiny_raw_cfg)
+    bad["data"]["val_frac"] = 5.0
+    with pytest.raises(ValidationError, match="val_frac"):
+        Config.model_validate(bad)
+    with pytest.raises(ValidationError, match="ascending"):
+        Config.model_validate(_model_raw(
+            tiny_raw_cfg, tiers=["4:8:32:3", "1:16:32:3"]))
+
+
+def test_path_sampling_needs_zero_finer_minimums(tiny_raw_cfg):
+    Config.model_validate(_model_raw(
+        tiny_raw_cfg, depth_sampling="path", min_depths=[2, 0]))
+    with pytest.raises(ValidationError, match="min_depths"):
+        Config.model_validate(_model_raw(
+            tiny_raw_cfg, depth_sampling="path", min_depths=[2, 1]))
+    # nested sampling keeps accepting a finer minimum
+    Config.model_validate(_model_raw(tiny_raw_cfg, min_depths=[2, 1]))
+
+
+def test_sigma_with_stats_cond_rejected(tiny_raw_cfg):
+    with pytest.raises(ValidationError, match="stats_cond"):
+        Config.model_validate(_model_raw(
+            tiny_raw_cfg, vq=None, sigma={}, stats_cond={}))
+
+
+def test_local_attn_with_decoder_bank_rejected(tiny_raw_cfg):
+    bank = [{"tiers": 1, "out_px": 4, "dim": 32, "depth": 1, "heads": 4,
+             "head_feat": 8},
+            {"tiers": 2, "out_px": 16, "dim": 32, "depth": 1, "heads": 4,
+             "head_feat": 8}]
+    Config.model_validate(_model_raw(tiny_raw_cfg, decoder_bank=bank))
+    with pytest.raises(ValidationError, match="local_attn"):
+        Config.model_validate(_model_raw(
+            tiny_raw_cfg, decoder_bank=bank, local_attn=[None, 1]))
+
+
+def test_norm_latents_declared_once():
+    import inspect
+
+    import georvq.config as C
+    src = inspect.getsource(C.ModelConfig)
+    assert src.count("norm_latents: bool") == 1
