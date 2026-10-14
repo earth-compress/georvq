@@ -2,7 +2,7 @@
 
 Samples held-out AEF tiles (never seen in training), reads one valid block each
 from S3, carves context crops, samples target pixels, and joins the benchmark's
-label. Writes a self-contained dataset that eval_run_ab.py consumes:
+label. Writes a self-contained dataset that eval_rate_sweep.py consumes:
 
   <out>/windows.npy     (M, 64, crop, crop) int8   de-duplicated context crops
   <out>/targets.parquet  one row per labelled pixel (window_idx, r, c, lon/lat,
