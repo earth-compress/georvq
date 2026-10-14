@@ -74,6 +74,12 @@ class Era5Store:
                                  dtype=np.float64)
         self._offset = np.asarray(root[self.var + "_offset"],
                                   dtype=np.float64)
+        # Variables with missing values (sst over land) reserve int16
+        # -32768 as the NaN code, and their affine starts one code higher
+        # (scripts/backfill_store_era5.py). They are served with NaN at
+        # the missing pixels, which the source's prep marks invalid.
+        self.nan_coded = self.var in set(
+            root.attrs.get("nan_coded_vars", []))
         self.index = pd.read_parquet(
             os.path.join(self.dir, "index.parquet"))
 
@@ -98,13 +104,22 @@ class Era5Store:
 
     # ---- live reads ----
 
+    def _dequant(self, q, s, o):
+        """int16 codes -> float64 physical values with the variable's
+        affine; NaN at the reserved code of a NaN-coded variable."""
+        q = q.astype(np.int64)
+        if not self.nan_coded:
+            return (q + 32768) * s + o
+        x = (q + 32767) * s + o
+        return np.where(q == -32768, np.nan, x)
+
     def read_slice(self, cube: int, hour: int) -> np.ndarray:
         if self.single_level:
             n = len(self._sl_mu)
             hour, lev = divmod(hour, n)
             q = np.asarray(self._arr[cube, lev, hour])
-            x = ((q.astype(np.int64) + 32768) * self._scale[cube, lev]
-                 + self._offset[cube, lev])
+            x = self._dequant(q, self._scale[cube, lev],
+                              self._offset[cube, lev])
             x = (x - self._sl_mu[lev]) / self._sl_sd[lev]
             return x.astype(np.float32)[None]
         if self._pl:
@@ -113,8 +128,7 @@ class Era5Store:
         else:
             q = np.asarray(self._arr[cube, hour])[None]
             s, o = self._scale[cube:cube + 1], self._offset[cube:cube + 1]
-        x = ((q.astype(np.int64) + 32768) * s[:, None, None]
-             + o[:, None, None])
+        x = self._dequant(q, s[:, None, None], o[:, None, None])
         return x.astype(np.float32)
 
     def __repr__(self):
