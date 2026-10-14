@@ -1,7 +1,7 @@
 # Location-gated codebook subsetting on a frozen codec: the selector keeps
 # each window's top `subset_frac` codes per codebook (saving 2 bits/code at
 # subset_frac=0.25); only the selector trains, the codec stays frozen.
-# Requires georvq[loc] and a trained pyramid checkpoint.
+# Requires a trained pyramid checkpoint.
 #
 # Research variant (unvalidated): 4x-oversized codebooks trained from
 # scratch WITH the selector, making the subsetting rate-neutral

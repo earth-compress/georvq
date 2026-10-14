@@ -2,7 +2,7 @@
 # trainable cross-tier predictors; codebooks quantize the residuals. The
 # encoder stays frozen for the whole run — co-adapting it against the
 # frozen prior degrades the pre-quantization ceiling late in training.
-# Requires georvq[loc] and a pretrained prior (scripts/pretrain_location_prior.py).
+# Requires a pretrained prior (scripts/pretrain_location_prior.py).
 inherit: pyr64.yaml
 
 model:
