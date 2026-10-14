@@ -11,6 +11,8 @@ from __future__ import annotations
 import numpy as np
 import torch
 
+from georvq.repro import load_checkpoint
+
 from georvq.eval.extract import dequant_np, l2norm_np
 from georvq.model.codec import monotone_tuples, tuple_bits
 
@@ -18,7 +20,7 @@ from georvq.model.codec import monotone_tuples, tuple_bits
 def load_codec(ckpt_path, device):
     """Model from a checkpoint (embedded-config or legacy format), in eval
     mode. Returns (model, window, specs)."""
-    ck = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+    ck = load_checkpoint(ckpt_path, map_location="cpu")
     if "config" in ck:
         from georvq.factory import from_checkpoint
         model = from_checkpoint(ckpt_path, device)

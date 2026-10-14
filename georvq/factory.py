@@ -74,6 +74,7 @@ def attach_prep(model, state=None):
     the model space it was trained in."""
     from georvq.sources.prep import build_prep
     cfg = model.full_config
-    model.prep = build_prep(cfg.data.prep.name, model.source, cfg.model)
+    model.prep = build_prep(cfg.data.prep.name, model.source, cfg.model,
+                            params=cfg.data.prep.params)
     model.prep.load_state(state or {})
     return model.prep
