@@ -126,8 +126,8 @@ edit to the source.
 
 ## Sources
 
-Sources are at different stages of maturity, tracked in
-`docs/SOURCES.md`. The repository does not rank them. Keep shared code
+Sources are at different stages of maturity. The repository does not
+rank them. Keep shared code
 source-agnostic and put source-specific behaviour in the adapter
 (`georvq/sources/`) or in a release layer. Before designing for a new
 source, read `docs/SOURCE_ONBOARDING.md`: window size, tier grids,
