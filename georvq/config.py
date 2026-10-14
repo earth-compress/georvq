@@ -96,7 +96,7 @@ class DecoderStageConfig(StrictModel):
     dim: int = 384
     depth: int = 12
     heads: int = 8
-    head_feat: int = 64
+    head_feat: Optional[int] = None   # None = decoder.head_feat
     cls_bridge: bool = True
     ff_ratio: Optional[float] = None
 

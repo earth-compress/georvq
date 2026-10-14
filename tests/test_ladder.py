@@ -97,3 +97,15 @@ def test_compile_trunks_reaches_stem_and_stages(ld_cfg):
     compile_trunks(m)
     blocks = list(m.decoder.stem) + [b for st in m.decoder.stages for b in st]
     assert blocks and all("forward" in vars(b) for b in blocks)
+
+
+def test_decoder_ff_ratio_widens_only_the_decoder(ld_cfg):
+    def counts(ff):
+        raw = ld_cfg.model_dump(mode="json")
+        raw["model"]["decoder"]["ff_ratio"] = ff
+        m = build_model(Config.model_validate(raw), torch.device("cpu"))
+        return (sum(p.numel() for p in m.decoder.parameters()),
+                sum(p.numel() for p in m.tokenizer.parameters()))
+    unset, same, wide = counts(None), counts(2.0), counts(3.0)
+    assert unset == same                 # None shares model.ff_ratio (2.0)
+    assert wide[0] > same[0] and wide[1] == same[1]

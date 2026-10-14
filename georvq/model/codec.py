@@ -208,6 +208,8 @@ class PyramidCodec(nn.Module):
         assert cfg.decoder_bank is None or cfg.decoder.kind == "attn", \
             "decoder_bank builds its own members; it cannot be combined " \
             f"with decoder.kind={cfg.decoder.kind}"
+        dec_ff = (cfg.decoder.ff_ratio if cfg.decoder.ff_ratio is not None
+                  else cfg.ff_ratio)
         if cfg.decoder_bank is not None:
             from georvq.model.decoder import DecoderBank
             members = []
@@ -215,8 +217,14 @@ class PyramidCodec(nn.Module):
                 sub = self.specs[:st.tiers]
                 hin = PyramidAttnDecoder.head_in_dim(
                     sub, st.dim, st.cls_bridge)
+                # sources read the head width from decoder.head_feat
+                hcfg = cfg
+                if st.head_feat is not None:
+                    hcfg = cfg.model_copy(update={
+                        "decoder": cfg.decoder.model_copy(
+                            update={"head_feat": st.head_feat})})
                 members.append(PyramidAttnDecoder(
-                    sub, head=source.build_head(cfg, hin, n_tiers=st.tiers,
+                    sub, head=source.build_head(hcfg, hin, n_tiers=st.tiers,
                                                 out_px=st.out_px),
                     dim=st.dim, depth=st.depth, heads=st.heads,
                     cls_bridge=st.cls_bridge,
@@ -237,7 +245,7 @@ class PyramidCodec(nn.Module):
             self.decoder = LadderDecoder(
                 self.specs, cfg.window, cfg.bands, dim=cfg.decoder.dim,
                 depth=cfg.decoder.depth, heads=cfg.decoder.heads,
-                ff_ratio=cfg.ff_ratio, map_px=cfg.decoder.map_px,
+                ff_ratio=dec_ff, map_px=cfg.decoder.map_px,
                 head_feat=cfg.decoder.head_feat,
                 stem_layers=cfg.decoder.solo_layers)
         elif cfg.decoder.kind == "tiersum":
@@ -252,7 +260,7 @@ class PyramidCodec(nn.Module):
             self.decoder = TierSumDecoder(
                 self.specs, cfg.window, cfg.bands, dim=cfg.decoder.dim,
                 depth=cfg.decoder.depth, heads=cfg.decoder.heads,
-                ff_ratio=cfg.ff_ratio, map_px=cfg.decoder.map_px,
+                ff_ratio=dec_ff, map_px=cfg.decoder.map_px,
                 solo_hidden=cfg.decoder.solo_hidden,
                 solo_layers=cfg.decoder.solo_layers,
                 sum_feat=cfg.decoder.sum_feat)
@@ -263,9 +271,7 @@ class PyramidCodec(nn.Module):
                 self.specs, head=source.build_head(cfg, head_in),
                 dim=cfg.decoder.dim, depth=cfg.decoder.depth,
                 heads=cfg.decoder.heads, cls_bridge=cfg.decoder.cls_bridge,
-                ff_ratio=(cfg.decoder.ff_ratio
-                          if cfg.decoder.ff_ratio is not None
-                          else cfg.ff_ratio),
+                ff_ratio=dec_ff,
                 sigma_cond=cfg.sigma is not None,
                 sigma_freqs=cfg.sigma.freqs if cfg.sigma else 8,
                 late_join=cfg.decoder.late_join)
