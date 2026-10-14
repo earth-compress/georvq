@@ -48,8 +48,8 @@ md("""
 ## Configuration
 
 `DATA_ROOT` holds the coded files (`annual/{year}/{zone}/{stem}.georvq.parquet`)
-and their index. It can be a local directory or an HTTP URL; for the
-published sample, use the Hugging Face URL in the comment. `SOURCE_ROOT`
+and their index. It can be a local directory or an HTTP URL, and points
+at the published sample on Hugging Face. `SOURCE_ROOT`
 holds the source tiles, used here only for comparison; Source
 Cooperative serves them publicly over HTTPS.
 
@@ -65,10 +65,11 @@ slowly (a 1024 px window takes about 10 s to decode on 16 CPU threads).
 code("""
 from rasterio.windows import Window
 
-DATA_ROOT = "/home/ali/projects/georvq/scratch/ae-v2/hf_sample/data"
-# DATA_ROOT = "https://huggingface.co/datasets/earth-compress/georvq-ae-v2-sample/resolve/main"
-SOURCE_ROOT = "/data/AE-samples/tiles_full"
-# SOURCE_ROOT = "https://data.source.coop/tge-labs/aef/v1/annual"
+DATA_ROOT = "https://huggingface.co/datasets/earth-compress/georvq-ae-v2-sample/resolve/main"
+SOURCE_ROOT = "https://data.source.coop/tge-labs/aef/v1/annual"
+# local copies work the same way, e.g.
+# DATA_ROOT = "path/to/georvq-ae-v2-sample"
+# SOURCE_ROOT = "path/to/aef/v1/annual"
 SOURCE_REMOTE = "https://data.source.coop/tge-labs/aef/v1/annual"
 
 TILE = "2025/32N/xh72hhha3ih6mroc7-0000008192-0000008192"         # Lower Saxony
@@ -76,10 +77,10 @@ COAST_TILE = "2024/25S/xny2ld0nqj92sstbu-0000000000-0000000000"   # coast of Ala
 # one 1024 px block of TILE, in the source's row order (the AEF tiles are stored bottom-up)
 WINDOW = Window(col_off=5120, row_off=4096, width=1024, height=1024)
 
-# Speed section: True serves the local file through a range server that
-# adds the latency and throughput measured to Source Cooperative; False
-# reads DATA_ROOT as it is (set it to the Hugging Face URL).
-SIMULATE_REMOTE = True
+# Speed section: with a local DATA_ROOT, the file is served through a
+# range server that adds the latency and throughput measured to Source
+# Cooperative; with a URL, the hosted file is read as it is.
+SIMULATE_REMOTE = not DATA_ROOT.startswith(("http://", "https://"))
 """)
 
 code("""
@@ -120,7 +121,10 @@ def source_url(tile):
 def size_of(p):
     if not p.startswith(("http://", "https://")):
         return os.path.getsize(p)
-    with urllib.request.urlopen(urllib.request.Request(p, method="HEAD")) as r:
+    # Source Cooperative refuses urllib's default User-Agent
+    req = urllib.request.Request(p, method="HEAD",
+                                 headers={"User-Agent": "georvq-demo"})
+    with urllib.request.urlopen(req) as r:
         return int(r.headers["Content-Length"])
 
 
