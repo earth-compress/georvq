@@ -72,11 +72,11 @@ def sample_pixels(store_dir, n_chips, per_chip, seed=0, device="cuda"):
 class FSQ(nn.Module):
     """Bounded scalar quantization: tanh then a uniform L-level grid.
 
-    The offset/shift for EVEN L is load-bearing, not cosmetic. Without it,
-    round(tanh(z) * (L-1)/2) reaches only L-1 distinct values -- and at
-    L=2 exactly ONE, a constant, delivering 0 bits while the rate
-    accounting claims 1. That silently made two different rates produce
-    identical models.
+    EVEN L needs the half-step `offset` and its input `shift`. Without them,
+    round(tanh(z) * (L-1)/2) reaches only L-1 distinct values, and at
+    L=2 exactly one, a constant that delivers 0 bits while the rate
+    accounting charges 1, so two different rates produce identical
+    models.
     """
 
     def __init__(self, levels, eps=1e-3):
@@ -286,7 +286,8 @@ def run(X, Xv, dim, quant, steps, lr, batch, device, commit=0.25,
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--store", default="/data/tessera-samples/chips_512")
-    ap.add_argument("--gpu", type=int, default=0)
+    ap.add_argument("--device", default="cuda",
+                    help="torch device; cuda is the card Slurm allocated")
     ap.add_argument("--chips", type=int, default=400)
     ap.add_argument("--per-chip", type=int, default=20000)
     ap.add_argument("--steps", type=int, default=4000)
@@ -304,7 +305,7 @@ def main():
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
 
-    dev = torch.device(f"cuda:{args.gpu}")
+    dev = torch.device(args.device)
     print(f"sampling pixels from {args.chips} chips ...", flush=True)
     t0 = time.time()
     P = sample_pixels(args.store, args.chips, args.per_chip, device=dev)

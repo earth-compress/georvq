@@ -10,7 +10,7 @@ ema_sum = centroid * count). Empty clusters are reseeded at the points
 with the largest quantization error (max-distortion, fps-flavoured).
 
 Usage:
-  python scripts/fit_codebooks.py --gpu 0
+  python scripts/fit_codebooks.py
 """
 from __future__ import annotations
 
@@ -91,13 +91,14 @@ def main():
     ap.add_argument("--config", default="configs/dem/dem128_live_frozen.yaml")
     ap.add_argument("--lat-store", default="/data/georvq-stores/copdem_lat128")
     ap.add_argument("--out", default="checkpoints/dem128_books_corpus/model.pt")
-    ap.add_argument("--gpu", type=int, default=0)
+    ap.add_argument("--device", default="cuda",
+                    help="torch device; cuda is the card Slurm allocated")
     ap.add_argument("--iters", type=int, default=6)
     ap.add_argument("--max-vectors", type=int, default=60_000_000)
     ap.add_argument("--min-valid", type=float, default=0.05)
     args = ap.parse_args()
 
-    dev = torch.device(f"cuda:{args.gpu}")
+    dev = torch.device(args.device)
     cfg = load_config(args.config)
     model = build_model(cfg, dev)
     if cfg.train.init_from:

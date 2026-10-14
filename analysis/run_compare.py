@@ -27,7 +27,6 @@ from __future__ import annotations
 import argparse
 import math
 
-DEFAULT_PROJECT = "alifrancis/georvq"
 # the metrics worth looking at by default on this codec: quantized full
 # depth, the unquantized ceiling, and their mean-removed counterparts
 DEFAULT_KEYS = ["val/cos_full", "val/ccos_full", "val/cos_ceiling",
@@ -191,7 +190,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("mode", choices=["trace", "rates", "leaderboard",
                                      "outliers"])
-    ap.add_argument("--project", default=DEFAULT_PROJECT)
+    ap.add_argument("--project", required=True,
+                    help="wandb <entity>/<project> the runs were logged to")
     ap.add_argument("--runs", default="",
                     help="comma list; 'name' or 'name+OFFSET' to stitch a "
                          "resumed run onto a shared timeline")

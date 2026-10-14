@@ -10,7 +10,7 @@ training used.
 
     python scripts/build_release_tessera.py \
         --ckpt .../statscond_step32500.pt \
-        --out /data/georvq-releases/tessera-beta-v1/bundle --gpu 1
+        --out /data/georvq-releases/tessera-beta-v1/bundle
 """
 from __future__ import annotations
 
@@ -32,7 +32,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--ckpt", required=True)
     ap.add_argument("--out", required=True)
-    ap.add_argument("--gpu", type=int, default=1)
+    ap.add_argument("--device", default="cuda",
+                    help="torch device; cuda is the card Slurm allocated")
     ap.add_argument("--fit-windows", type=int, default=512)
     ap.add_argument("--eval-windows", type=int, default=512)
     ap.add_argument("--chunk", type=int, default=8)
@@ -46,7 +47,7 @@ def main():
     args = ap.parse_args()
 
     torch.set_grad_enabled(False)
-    dev = torch.device(f"cuda:{args.gpu}" if args.gpu >= 0 else "cpu")
+    dev = torch.device(args.device)
     model = from_checkpoint(args.ckpt, dev)
     cfg = model.full_config
     W, src = cfg.model.window, model.source

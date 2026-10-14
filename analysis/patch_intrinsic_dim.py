@@ -24,7 +24,7 @@ carry (~14.5% of total energy; the mean is the other 85.5%).
 The contrast that matters is LOCAL vs GLOBAL. A shared codebook fitted
 across all patches -- which is what the pyramid's VQ does -- has to cover
 every pixel species in the dataset. If a single patch needs far fewer, the
-per-patch palette is buying a genuinely easier problem, and that gap is
+per-patch palette is solving an easier problem, and that gap is
 the argument for spending side-channel bits on it.
 """
 from __future__ import annotations
