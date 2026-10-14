@@ -24,6 +24,45 @@ import pandas as pd
 import torch
 
 
+class GroupBatch(dict):
+    """A multi-resolution batch: `{group_name: (B, bands, px, px) tensor}`.
+
+    Sources see a plain dict (it IS one, so `.items()` and `x["10m"]` work
+    as before). The shared stack, though, handles batches generically --
+    it slices them into chunks, reads `.shape[0]`, moves them to a device
+    or to the host.
+    Implementing just those operations here means validation,
+    figures and the train loop need no `isinstance` branch to carry a
+    multi-group source, and a group dict can never be silently sliced as
+    if it were one plane.
+    """
+
+    @property
+    def device(self):
+        return next(iter(self.values())).device
+
+    @property
+    def shape(self):
+        """Only the batch dimension is shared across groups; the spatial
+        dims differ by each group's ratio, so this is deliberately a
+        1-tuple rather than a full shape."""
+        return (next(iter(self.values())).shape[0],)
+
+    def __getitem__(self, k):
+        if isinstance(k, str):
+            return dict.__getitem__(self, k)
+        return GroupBatch({n: t[k] for n, t in self.items()})
+
+    def to(self, *a, **kw):
+        return GroupBatch({n: t.to(*a, **kw) for n, t in self.items()})
+
+    def float(self):
+        return GroupBatch({n: t.float() for n, t in self.items()})
+
+    def cpu(self):
+        return GroupBatch({n: t.cpu() for n, t in self.items()})
+
+
 class ChipPool:
     def __init__(self, store, rows: pd.DataFrame, pool_size, device,
                  workers=2, refresh_chips_per_s=2.0, seed=0, slot_rows=None,
@@ -32,7 +71,16 @@ class ChipPool:
         128 = full-width row-strips (contiguous per band, zero read
         amplification) -> ~8x more distinct chips resident per GiB.
         period: the store's pixel grid period; `sample_batch(align=True)`
-        snaps crop offsets to multiples of it."""
+        snaps crop offsets to multiples of it.
+
+        Multi-group (multi-resolution) stores are held as one resident
+        tensor PER GROUP, all indexed by the same slot number. Everything
+        that makes the pool what it is -- coverage vs cycle residency, the
+        shuffled full-dataset cursor, the background refresh threads -- is
+        group-agnostic and is written once; only allocation, the shard read
+        and the gather divide by each group's ratio. `sample_batch` then
+        yields a dict of per-group crops that share one crop origin.
+        """
         self.store = store
         self.rows = rows.reset_index(drop=True)
         self.device = device
@@ -43,14 +91,46 @@ class ChipPool:
         # as trailing pseudo-bands; the source's `prep` reinterprets them
         self.aux = getattr(store, "aux_bands", 0)
         self.bands = store.bands + self.aux
-        self.slot_rows = slot_rows or self.chip_px
         self.cycle = cycle
-        self.period = max(int(period), 1)
         self.coverage = (pool_size >= len(self.rows)) and not cycle
-        self.pool = torch.empty(
-            (pool_size, self.bands, self.slot_rows, self.chip_px),
-            dtype=torch.from_numpy(np.zeros(0, dtype=store.dtype)).dtype,
-            device=self.pool_device)
+
+        # --- group geometry (single-plane store = one group, ratio 1) ---
+        self.groups = getattr(store, "groups", None)
+        if self.groups:
+            assert not self.aux, \
+                "multi-group stores with aux sidecar bands are not supported"
+            self.gbands = {g["name"]: g["bands"] for g in self.groups}
+            self.ratio = {g["name"]: self.chip_px // g["px"]
+                          for g in self.groups}
+            # Crop origins are shared across groups, so they must land on
+            # EVERY native grid: the period is at least the coarsest ratio
+            # (6 for S2's 60m bands). Without this a 20m crop would start
+            # half a pixel into its own grid and the groups would decode
+            # out of phase with each other.
+            period = max(int(period), max(self.ratio.values()))
+        else:
+            self.gbands = {None: self.bands}
+            self.ratio = {None: 1}
+        self.period = max(int(period), 1)
+
+        self.slot_rows = slot_rows or self.chip_px
+        if self.groups:
+            assert self.slot_rows % self.period == 0, \
+                (f"slot_rows {self.slot_rows} must be a multiple of the "
+                 f"group period {self.period} so every group's strip is a "
+                 f"whole number of its own rows")
+
+        dtype = torch.from_numpy(np.zeros(0, dtype=store.dtype)).dtype
+        self.gpools = {
+            name: torch.empty(
+                (pool_size, self.gbands[name], self.slot_rows // ratio,
+                 self.chip_px // ratio),
+                dtype=dtype, device=self.pool_device)
+            for name, ratio in self.ratio.items()}
+        # `pool` stays the finest (or only) plane: pool_size, dtype and the
+        # nbytes report all read off it, and single-group behaviour is
+        # unchanged.
+        self.pool = self.gpools[min(self.ratio, key=lambda n: self.ratio[n])]
         self.slot_row = torch.zeros(pool_size, dtype=torch.long,
                                     device=self.pool_device)   # chip-row per slot (side-info)
         self.cuda_lock = threading.Lock()
@@ -60,9 +140,15 @@ class ChipPool:
         if cycle:
             self._build_cursor(seed)
 
+        nbytes = sum(t.nbytes for t in self.gpools.values())
+        shape = (f"({self.bands},{self.slot_rows},{self.chip_px})"
+                 if not self.groups else
+                 " + ".join(f"{n}({self.gbands[n]},"
+                            f"{self.slot_rows // r},{self.chip_px // r})"
+                            for n, r in self.ratio.items()))
         print(f"pool: prefilling {pool_size} {self.pool_device.type}-resident "
-              f"slots of ({self.bands},{self.slot_rows},{self.chip_px}) "
-              f"({self.pool.nbytes / 2**30:.1f} GiB) "
+              f"slots of {shape} "
+              f"({nbytes / 2**30:.1f} GiB) "
               + (f"-> FIFO sweep of {self._n_tiles} tiles "
                  f"({self._n_tiles / pool_size:.1f} pool-fills/epoch) ..."
                  if cycle else f"from {len(self.rows)} train chips ..."),
@@ -74,16 +160,17 @@ class ChipPool:
             # at once (a large pool would otherwise need 2x its size in RAM)
             if cycle:
                 ci, r0 = self._decode_tile(self._cursor[i])
-                t = torch.from_numpy(self._load_tile(ci, r0)); self.slot_row[i] = ci
+                data = self._load_tile(ci, r0); self.slot_row[i] = ci
             else:
                 ridx = i if self.coverage else None
-                arr, ri = self._load(np.random.default_rng(seed + 17 * i), ridx)
-                t = torch.from_numpy(arr); self.slot_row[i] = ri
+                data, ri = self._load(np.random.default_rng(seed + 17 * i),
+                                      ridx)
+                self.slot_row[i] = ri
             if self.pool_device.type == "cuda":
                 with self.cuda_lock:
-                    self.pool[i].copy_(t)
+                    self._write_slot(i, data)
             else:
-                self.pool[i].copy_(t)            # distinct slots -> race-free
+                self._write_slot(i, data)        # distinct slots -> race-free
         with ThreadPoolExecutor(max_workers=16) as ex:
             list(ex.map(_fill, range(pool_size)))
         self.chips_loaded = pool_size
@@ -98,6 +185,63 @@ class ChipPool:
         for w in self.workers:
             w.start()
 
+    def _write_slot(self, i, data, pin=False):
+        """Copy one slot's payload into the resident tensor(s).
+
+        pin: stage through pinned host memory, which is only worth doing
+        for the background refresh's H2D copies (the prefill already runs
+        16-wide and would just pay the pinning cost).
+        """
+        items = data.items() if self.groups else [(None, data)]
+        for name, arr in items:
+            t = torch.from_numpy(arr)
+            if pin and self.pool_device.type == "cuda":
+                t = t.pin_memory()
+            self.gpools[name][i].copy_(t, non_blocking=False)
+
+    def _read_at(self, r, r0):
+        """One slot's payload from the store: a `(bands, slot_rows, px)`
+        array, or -- for a multi-group store -- one such array per group,
+        each cropped at `r0` scaled into its own grid."""
+        if not self.groups:
+            sh = self.store.open_shard(int(r["shard"]))
+            chip = sh[int(r["slot"])]
+            if self.slot_rows < self.chip_px:
+                chip = chip[:, r0:r0 + self.slot_rows]
+            chip = np.ascontiguousarray(chip)
+            if self.aux:
+                chip = np.concatenate([chip, self.store.aux_bytes(
+                    int(r["shard"]), int(r["slot"]), r0,
+                    r0 + self.slot_rows)])
+            return chip
+        out = {}
+        for name, ratio in self.ratio.items():
+            sh = self.store.open_shard(int(r["shard"]), name)
+            chip = sh[int(r["slot"])]
+            if self.slot_rows < self.chip_px:
+                g0, gh = r0 // ratio, self.slot_rows // ratio
+                chip = chip[:, g0:g0 + gh]
+            out[name] = np.ascontiguousarray(chip)
+        return out
+
+    def _rand_r0(self, rng):
+        """A slot's top edge within its chip.
+
+        Multi-group stores snap it to the grid period, because one origin
+        is shared by every group and an unsnapped edge would start a 20m
+        or 60m strip part-way into its own pixel. Single-plane stores keep
+        the unsnapped draw they have always used -- aligning them too
+        would change which pixels every existing preset trains on, which
+        is not this change's business to do without saying so.
+        """
+        if self.slot_rows >= self.chip_px:
+            return 0
+        span = self.chip_px - self.slot_rows
+        if not self.groups:
+            return int(rng.integers(0, span + 1))
+        p = self.period
+        return int(rng.integers(0, span // p + 1)) * p
+
     def _load(self, rng, row_idx=None):
         """Read one train slot (random chip, or a specific one in coverage
         mode), as a whole chip or a random full-width row-strip of it
@@ -105,17 +249,7 @@ class ChipPool:
         ri = int(rng.integers(0, len(self.rows))) if row_idx is None \
             else int(row_idx % len(self.rows))
         r = self.rows.iloc[ri]
-        sh = self.store.open_shard(int(r["shard"]))
-        chip = sh[int(r["slot"])]
-        r0 = 0
-        if self.slot_rows < self.chip_px:
-            r0 = int(rng.integers(0, self.chip_px - self.slot_rows + 1))
-            chip = chip[:, r0:r0 + self.slot_rows]
-        chip = np.ascontiguousarray(chip)
-        if self.aux:
-            chip = np.concatenate([chip, self.store.aux_bytes(
-                int(r["shard"]), int(r["slot"]), r0, r0 + self.slot_rows)])
-        return chip, ri
+        return self._read_at(r, self._rand_r0(rng)), ri
 
     def _refresher(self, seed):
         rng = np.random.default_rng(seed)
@@ -123,12 +257,9 @@ class ChipPool:
             slot = int(rng.integers(0, self.pool.shape[0]))
             # coverage mode: keep every chip resident, just re-roll its strip
             ridx = slot if self.coverage else None
-            arr, ri = self._load(rng, ridx); self.slot_row[slot] = ri
-            chip = torch.from_numpy(arr)
-            if self.pool_device.type == "cuda":
-                chip = chip.pin_memory()         # pinning only helps H2D
+            data, ri = self._load(rng, ridx); self.slot_row[slot] = ri
             with self.cuda_lock:
-                self.pool[slot].copy_(chip, non_blocking=False)
+                self._write_slot(slot, data, pin=True)
             self.chips_loaded += 1
             time.sleep(self._sleep)
 
@@ -162,14 +293,7 @@ class ChipPool:
         bytes (e.g. Tessera's per-pixel scale plane) appended as trailing
         bands when the store has them.
         """
-        r = self.rows.iloc[ci]
-        sh = self.store.open_shard(int(r["shard"]))
-        tile = np.ascontiguousarray(
-            sh[int(r["slot"])][:, r0:r0 + self.slot_rows])
-        if self.aux:
-            tile = np.concatenate([tile, self.store.aux_bytes(
-                int(r["shard"]), int(r["slot"]), r0, r0 + self.slot_rows)])
-        return tile
+        return self._read_at(self.rows.iloc[ci], r0)
 
     def _next_tile(self):
         """(slot, (chip_idx, r0)) for the next FIFO replacement."""
@@ -197,11 +321,9 @@ class ChipPool:
         """
         while not self.stop.is_set():
             slot, (ci, r0) = self._next_tile()
-            chip = torch.from_numpy(self._load_tile(ci, r0)); self.slot_row[slot] = ci
-            if self.pool_device.type == "cuda":
-                chip = chip.pin_memory()
+            data = self._load_tile(ci, r0); self.slot_row[slot] = ci
             with self.cuda_lock:
-                self.pool[slot].copy_(chip, non_blocking=False)
+                self._write_slot(slot, data, pin=True)
             self.chips_loaded += 1
             time.sleep(self._sleep)
 
@@ -233,6 +355,10 @@ class ChipPool:
         onto and reproduce it instead of averaging it away."""
         pdev, dev = self.pool_device, self.device
         p = self.period
+        # A multi-group store has no unaligned mode: one origin is shared
+        # by every group, so it must always land on the coarsest grid.
+        if self.groups:
+            align = True
         ci = torch.randint(0, self.pool.shape[0], (batch,), device=pdev)
         if align and p > 1:
             r = torch.randint(0, (self.slot_rows - token) // p, (batch,), device=pdev) * p
@@ -240,16 +366,30 @@ class ChipPool:
         else:
             r = torch.randint(0, self.slot_rows - token, (batch,), device=pdev)
             c = torch.randint(0, self.chip_px - token, (batch,), device=pdev)
-        tt = torch.arange(token, device=pdev)
-        bands = torch.arange(self.bands, device=pdev)
+
+        def gather(name):
+            ratio = self.ratio[name]
+            t = token // ratio
+            rr, cc = r // ratio, c // ratio
+            tt = torch.arange(t, device=pdev)
+            bands = torch.arange(self.gbands[name], device=pdev)
+            return self.gpools[name][
+                ci[:, None, None, None],
+                bands[None, :, None, None],
+                (rr[:, None] + tt)[:, None, :, None],
+                (cc[:, None] + tt)[:, None, None, :]]
+
         with self.cuda_lock:
-            out = self.pool[ci[:, None, None, None],
-                            bands[None, :, None, None],
-                            (r[:, None] + tt)[:, None, :, None],
-                            (c[:, None] + tt)[:, None, None, :]]
+            if self.groups:
+                out = GroupBatch({n: gather(n) for n in self.ratio})
+            else:
+                out = gather(None)
         if self.cycle:
             self.total_reads += batch        # lock-free counter (benign races)
-        crop = out.to(dev, non_blocking=True) if pdev != dev else out
+        if pdev != dev:
+            crop = out.to(dev, non_blocking=True)
+        else:
+            crop = out
         if return_rows:
             rows = self.slot_row[ci]
             return crop, (rows.to(dev, non_blocking=True) if pdev != dev else rows)
@@ -319,28 +459,54 @@ def fixed_val_tokens(store, rows: pd.DataFrame, token=16, per_chip=16,
     With sat_table (per-row side-info, e.g. a location embedding), also
     returns the per-token side-info."""
     nodata = store.nodata if nodata is None else nodata
+    groups = getattr(store, "groups", None)
+    if groups:
+        ratio = {g["name"]: store.chip_px // g["px"] for g in groups}
+        period = max(ratio.values())
     shards = {}
     grid = np.linspace(0, store.chip_px - token, int(np.sqrt(per_chip)),
                        dtype=int)
+    if groups:
+        # every crop origin has to land on all three native grids
+        grid = (grid // period) * period
     toks, sats = [], []
     for ridx, (_, r) in enumerate(rows.head(max_chips).iterrows()):
-        sh = int(r["shard"])
+        sh, slot = int(r["shard"]), int(r["slot"])
         if sh not in shards:
-            shards[sh] = store.open_shard(sh)
-        a = np.asarray(shards[sh][int(r["slot"])])
-        if getattr(store, "aux_bands", 0):
-            a = np.concatenate([a, store.aux_bytes(
-                sh, int(r["slot"]), 0, store.chip_px)])
+            shards[sh] = ({n: store.open_shard(sh, n) for n in ratio}
+                          if groups else store.open_shard(sh))
+        if groups:
+            planes = {n: np.asarray(shards[sh][n][slot]) for n in ratio}
+            # validity is read off the finest grid, the one `token` counts
+            fine = min(ratio, key=lambda n: ratio[n])
+        else:
+            a = np.asarray(shards[sh][slot])
+            if getattr(store, "aux_bands", 0):
+                a = np.concatenate([a, store.aux_bytes(
+                    sh, slot, 0, store.chip_px)])
         for rr in grid:
             for cc in grid:
-                t = a[:, rr:rr + token, cc:cc + token]
-                if nodata is None or (t[0] != nodata).any():
-                    toks.append(t.copy())
+                if groups:
+                    t = {n: planes[n][:, rr // g:rr // g + token // g,
+                                      cc // g:cc // g + token // g].copy()
+                         for n, g in ratio.items()}
+                    ok = nodata is None or (t[fine][0] != nodata).any()
+                else:
+                    t = a[:, rr:rr + token, cc:cc + token]
+                    ok = nodata is None or (t[0] != nodata).any()
+                    t = t.copy() if ok else t
+                if ok:
+                    toks.append(t)
                     if sat_table is not None:
                         sats.append(sat_table[ridx])
         if len(toks) >= max_tokens:
             break
-    T = torch.from_numpy(np.stack(toks[:max_tokens]))
+    toks = toks[:max_tokens]
+    if groups:
+        T = GroupBatch({n: torch.from_numpy(np.stack([t[n] for t in toks]))
+                        for n in ratio})
+    else:
+        T = torch.from_numpy(np.stack(toks))
     if sat_table is not None:
         return T, torch.stack(sats[:max_tokens])
     return T

@@ -64,17 +64,77 @@ class TokenizerConfig(StrictModel):
     # layer). High-frequency content is local: a few joint layers suffice
     # and the coarse-only prefix runs at a fraction of the sequence length
     late_join: int = 0
+    # One conv pyramid instead of an independent patch embed per tier and
+    # a CLS parameter for the coarsest. The coarse token then arrives with
+    # a convolutional read of the image rather than as a constant the
+    # trunk has to fill by attention. Off by default: it renames the
+    # tokenizer's parameters, so every existing checkpoint needs the
+    # other path.
+    stem_pyramid: bool = False
+
+    # Parameter-free LayerNorm on the token stream entering the trunk.
+    # The patch-embed output is small and low-variance, and layer 0's
+    # pre-norm backward scales by 1/std of it: the tessera trap runs
+    # measured a ~300x single-layer gradient amplification there, the
+    # site of every recorded spike. Normalizing the stream bounds that
+    # factor. New runs only -- it changes the forward, so it must stay
+    # false for existing checkpoints (the default).
+    embed_norm: bool = False
+
+
+class DecoderStageConfig(StrictModel):
+    """One member of a decoder bank: the decoder used when exactly
+    `tiers` tiers carry codes.
+
+    A rung that only sends the coarse tier does not need the compute that
+    decodes 273 tokens to 96 px. Each member covers a prefix of the tier
+    list and emits at `out_px`, which the codec resamples to the model's
+    window so the loss and every metric stay at full resolution.
+    """
+    tiers: int                     # how many tiers this member decodes
+    out_px: int                    # its native output edge, in window px
+    dim: int = 384
+    depth: int = 12
+    heads: int = 8
+    head_feat: int = 64
+    cls_bridge: bool = True
+    ff_ratio: Optional[float] = None
 
 
 class DecoderConfig(StrictModel):
+    # "attn": mixing decoder + per-source pixel head read from the fine
+    # tokens. "tiersum": every present tier gets its own map head, the
+    # maps are bilinearly upsampled and summed, absent tiers contribute
+    # no tokens, and coarse-only rows skip attention entirely (see
+    # georvq/model/tiersum.py). tiersum requires map_px (one output map
+    # size per tier) and fill-order depth sampling.
+    # "ladder": staged decoding with one exit per rate-ladder prefix and
+    # deep supervision of every licensed exit (georvq/model/ladder.py);
+    # map_px gives each exit head's feature-map resolution and
+    # solo_layers the coarse stem depth.
+    kind: Literal["attn", "tiersum", "ladder"] = "attn"
     dim: int = 384
     depth: int = 12
     heads: int = 8
     head_feat: int = 64
     cls_bridge: bool = True
     late_join: int = 0             # same contract as tokenizer.late_join
+    # Decoder-only FFN width multiplier. None = share `model.ff_ratio`
+    # with the tokenizer, which is the historical behaviour. Set it to
+    # widen the DECODER's MLPs without touching the encoder -- required
+    # when the encoder is frozen (a decoder-capacity experiment, or
+    # training from cached latents), because a wider encoder FFN is a
+    # different encoder and its cached latents would no longer apply.
+    ff_ratio: Optional[float] = None
     head_dw: bool = False          # depthwise-separable head convs (8x fewer
                                    # MACs; smooths intra-window tile seams)
+    map_px: Optional[list[int]] = None   # tiersum: per-tier map size, px
+    solo_hidden: int = 512               # tiersum coarse-only MLP width
+    solo_layers: int = 3
+    # tiersum: sum the tiers in a feature space this many channels wide,
+    # then render bands through a shared conv stack FiLM-conditioned on
+    # the depth thermometers. None = sum band maps directly.
+    sum_feat: Optional[int] = None
 
 
 class VQConfig(StrictModel):
@@ -157,17 +217,23 @@ class VQConfig(StrictModel):
 
 
 class StatsCondConfig(StrictModel):
-    """Transmit the per-window mean as a side channel; code what is left.
+    """Transmit per-window stats as a side channel; code what is left.
 
     The mean is subtracted before the encoder and added back after the
     decoder, so loss and metrics stay on the full field. Both encoder and
-    decoder are conditioned on it. See georvq/model/stats_cond.py.
+    decoder are conditioned on the stats. See georvq/model/stats_cond.py.
 
-    use_std is off and BLOCKED, not merely defaulted off: matching the
-    std was measured to hurt full-depth cosine, unlike the S2 version this
-    is ported from, whose bands have genuinely different physical scales.
-    The measurement is in lab/findings/stats-channel-is-per-field.md and the mechanism's reasoning
-    in georvq/model/stats_cond.py.
+    Which stats is a per-field choice
+    (lab/findings/stats-channel-is-per-field.md): matching the std was
+    measured to hurt on Tessera, whose dims are a learned embedding
+    already on comparable scales, while S2 and DEM standardise by both.
+    `use_std` additionally divides by the per-window std after centering
+    (floored at `std_floor` in model units against near-uniform windows),
+    appends it to the conditioning vector, and doubles the channel rate.
+    It requires `subtract_mean`: dividing an un-centred field would scale
+    its offset. The inference mean codec does not yet quantize a std
+    channel, so a use_std model trains and evaluates but cannot ship a
+    real bitstream until that exists.
 
     bits_per_band is rate accounting only -- it does not quantize anything
     during training. 6 bits/band reaches cos 0.9767 against 0.9769 for the
@@ -176,16 +242,18 @@ class StatsCondConfig(StrictModel):
     cond_encoder: bool = True
     cond_decoder: bool = True
     use_std: bool = False
+    std_floor: float = 0.05
     bits_per_band: int = 6
 
     @model_validator(mode="after")
     def _check(self):
-        """Refuse the combinations that would silently do nothing, and
-        `use_std`, which the class docstring above explains is not merely
-        unimplemented but measured to be harmful."""
-        assert not self.use_std, "stats_cond.use_std is not implemented"
+        """Refuse the combinations that would silently do nothing or
+        silently distort (std division without centering)."""
         assert self.subtract_mean or self.cond_encoder or self.cond_decoder, \
             "stats_cond does nothing with every option off"
+        assert not (self.use_std and not self.subtract_mean), \
+            "stats_cond.use_std requires subtract_mean"
+        assert self.std_floor > 0
         assert self.bits_per_band > 0
         return self
 
@@ -233,6 +301,12 @@ class CascadeConfig(StrictModel):
     location: Optional[LocationConfig] = Field(default_factory=LocationConfig)
     hidden: int = 512
     layers: int = 3
+    # Append each child cell's one-hot position within its parent on the
+    # immediately-coarser grid, so the 16 children of one parent get
+    # DISTINCT predictions. Without it the predictor's inputs are
+    # identical across siblings and the prediction is constant within a
+    # parent, which can only remove the child tier's per-parent mean.
+    child_pos: bool = False
 
 
 class SelectConfig(StrictModel):
@@ -280,6 +354,9 @@ class ModelConfig(StrictModel):
     norm_latents: bool = False
     tokenizer: TokenizerConfig = Field(default_factory=TokenizerConfig)
     decoder: DecoderConfig = Field(default_factory=DecoderConfig)
+    # Resolution-matched decoders, one per tier prefix. None keeps the
+    # single decoder every existing preset and checkpoint uses.
+    decoder_bank: Optional[list[DecoderStageConfig]] = None
     vq: Optional[VQConfig] = Field(default_factory=VQConfig)
     # Emit L2-normalized * sqrt(dim) latents from encode_levels, i.e. the
     # geometry encode_stage1 (and therefore stage-1 training) uses. Set
@@ -289,6 +366,13 @@ class ModelConfig(StrictModel):
     # and the bitstream contract are unaffected. (Named `norm_latents`;
     # `normalize_latents` in older checkpoints is migrated on load.)
     norm_latents: bool = False
+    # PCA basis for a source NORMALIZER's stats side channel, fitted by
+    # scripts/fit_stats_pca_s2.py. Distinct from `stats_cond`, which
+    # transmits a mean the model is also conditioned on; a normalizer's
+    # stats are removed before the encoder and merely shipped. It defines
+    # part of the bitstream (docs/BITSTREAM.md), hence model-level. None
+    # ships them raw as f16, which is ~5x larger.
+    stats_pca: Optional[Path] = None
     sigma: Optional[SigmaConfig] = None
     stats_cond: Optional[StatsCondConfig] = None
     conditioning: Optional[Conditioning] = None
@@ -332,6 +416,44 @@ class ModelConfig(StrictModel):
         for m, t in zip(self.min_depths, self.tiers):
             assert 0 <= m <= t.depth, f"min depth {m} > tier depth {t.depth}"
         assert 0.0 <= self.full_frac <= 1.0
+        if self.decoder_bank is not None:
+            b = sorted(self.decoder_bank, key=lambda s: s.tiers)
+            assert [s.tiers for s in b] == list(range(1, len(self.tiers) + 1)), \
+                ("decoder_bank needs one entry per tier prefix, 1..n: got "
+                 f"{[s.tiers for s in b]} for {len(self.tiers)} tiers")
+            assert b[-1].out_px == self.window, \
+                (f"the last decoder_bank entry decodes every tier, so its "
+                 f"out_px must be the window {self.window}, not {b[-1].out_px}")
+            for s in b:
+                g = self.tiers[s.tiers - 1].grid
+                assert s.out_px % g == 0, \
+                    (f"decoder_bank[{s.tiers}]: out_px {s.out_px} not "
+                     f"divisible by that prefix's finest grid {g}")
+                assert self.window % s.out_px == 0, \
+                    (f"decoder_bank[{s.tiers}]: window {self.window} not "
+                     f"divisible by out_px {s.out_px}; the resample back to "
+                     "full resolution has to be an integer factor")
+            if self.stats_cond is not None and self.stats_cond.cond_decoder:
+                # the patch-mean embedding is added to each member's AdaLN
+                # conditioning, and one StatsEmbed serves them all, so the
+                # members have to agree on width
+                bad = [s.tiers for s in b if s.dim != self.decoder.dim]
+                assert not bad, (
+                    "stats_cond.cond_decoder is on, so every decoder_bank "
+                    f"member must use decoder.dim {self.decoder.dim}; "
+                    f"entries {bad} differ")
+            self.decoder_bank = b
+        # The latents must be the TIGHTEST bottleneck in the model: a
+        # trunk narrower than a tier's latent caps that latent's usable
+        # rank and silently confounds any latent-width experiment (the
+        # era5_t64_ladder256 null result was exactly this).
+        widest = max(t.dim for t in self.tiers)
+        assert self.tokenizer.dim >= widest, \
+            f"tokenizer.dim {self.tokenizer.dim} < widest tier latent " \
+            f"{widest}: the encoder trunk would bottleneck the latents"
+        assert self.decoder.dim >= widest, \
+            f"decoder.dim {self.decoder.dim} < widest tier latent " \
+            f"{widest}: the decoder trunk would bottleneck the latents"
         assert (self.vq is None) != (self.sigma is None), \
             "set exactly one of model.vq (quantized) / model.sigma (stage-1 continuous)"
         if self.sigma is not None:
@@ -365,15 +487,37 @@ class PoolConfig(StrictModel):
         return self
 
 
+class SamplerConfig(StrictModel):
+    """Sample geometry (georvq/data/sampler.py). name=None resolves to
+    the source's default sampler (WindowSampler for every source
+    today), which reproduces the historical behaviour exactly."""
+    name: Optional[str] = None
+    params: dict = Field(default_factory=dict)
+
+
+class PrepConfig(StrictModel):
+    """Model-space transform (georvq/sources/prep.py). name=None
+    resolves to the source's default prep, which delegates to the
+    source's existing prep/normalizer pair."""
+    name: Optional[str] = None
+    params: Optional[str] = None    # named fitted-state artifact
+
+
 class DataConfig(StrictModel):
     source: str = "ae"              # key into georvq.sources.SOURCES
     store_dir: Path
+    # How to read store_dir. "auto" detects a chip store, a live_dem store
+    # or a Major-TOM Sentinel-2 root; pin it when a run must not depend on
+    # what happens to be on disk. Live readers copy no pixels.
+    reader: Literal["auto", "chipstore", "live_s2"] = "auto"
     val_frac: float = 0.04
     split_seed: int = 0
     limit_chips: Optional[int] = None   # data-scaling probes: train on a
     #   deterministic subsample of N chips (nested: N ⊂ 2N for the same
     #   split_seed); the val split always stays full
     pool: PoolConfig = Field(default_factory=PoolConfig)
+    sampler: SamplerConfig = Field(default_factory=SamplerConfig)
+    prep: PrepConfig = Field(default_factory=PrepConfig)
 
     @field_validator("val_frac")
     @classmethod
@@ -415,10 +559,54 @@ class BatchRamp(StrictModel):
         return self
 
 
+class TrapConfig(StrictModel):
+    """Instability trap (georvq/train/trap.py): per-step flight recorder
+    plus a tripwire on the pre-clip gradient norm. On a trip the loop
+    saves pre-step weights, gradients, optimizer state, the batch and
+    RNG states, so the offending step can be replayed exactly. `hold`
+    additionally parks the process on a localhost pdb socket for live
+    inspection. Requires train.optim -- the update-ratio telemetry reads
+    Adam moments -- and train.clip_norm, which provides the norm."""
+    gnorm_abs: float = 0.5         # trip only above this absolute norm
+    gnorm_ratio: float = 10.0      # ... and above ratio * running EMA
+    min_step: int = 200            # let init transients through
+    n_dumps: int = 3
+    cooldown: int = 250            # min steps between dumps: a storm
+    #                                trips every step; spacing the dumps
+    #                                samples its whole arc
+    hold: bool = False
+    hold_port: int = 4444
+    hold_timeout: float = 14400.0
+    snapshot_every: int = 500      # rolling pre-history model+opt copy
+    # per-group grad norms + Adam update ratios cost ~1500 small kernels
+    # and a host sync per call; every step was measured at ~27% of
+    # ladder-w320 throughput. The tripwire itself reads only the free
+    # whole-model gnorm, so throttled group stats lose nothing but
+    # flight-record resolution between trips.
+    stats_every: int = 10
+    # per-step CPU copies of the batch (~310 MB/step at batch 1024) buy
+    # pre-trip context only; the trip step's own batch is dumped live.
+    # 0 disables.
+    batch_history_bytes: int = 0
+    flight_maxlen: int = 20000
+
+
 class TrainConfig(StrictModel):
     steps: int = 20000
     batch_windows: int = 512
     batch_ramp: Optional[BatchRamp] = None
+    # Collapse guard: abort (exit 3, after saving a forensic checkpoint)
+    # when the val ceiling falls this far below its running best. A
+    # stage latch (era5_t64_ladder @38k: ceiling 0.9994 -> 0.8025,
+    # frozen thereafter) trips it at the first validation instead of
+    # training dead weights for hours; benign spikes recover between
+    # validations and never trip it. None disables.
+    guard_drop: Optional[float] = 0.05
+    trap: Optional[TrapConfig] = None
+    # Carry optimizer+scheduler state in the periodic model.pt (about 3x
+    # the file) so a resume continues the Adam trajectory instead of
+    # rebuilding fresh moments, which storms; see save_checkpoint.
+    save_optim: bool = True
     amp: bool = True
     grad_ckpt: bool = False
     tf32: bool = True
@@ -470,7 +658,17 @@ class LogConfig(StrictModel):
     run_tag: str = "dev"
     wandb: bool = True
     wandb_project: str = "georvq"
+    # Deferred reporting: figure decodes are harvested on the GPU, then
+    # percentiles/matplotlib/wandb uploads render on a background worker
+    # while training resumes -- recovers most of the GPU idle time at
+    # every fig-interval validation. false = the old synchronous path.
+    # Figures log against their own `figs/step` metric in this mode.
+    async_report: bool = True
     out_dir: Path = Path("checkpoints")
+    # added to the step of every wandb log call, so a run continued from
+    # another run's checkpoint plots on the same x-axis; the schedule and
+    # stdout keep counting from 1
+    step_offset: int = 0
     report: ReportConfig = Field(default_factory=ReportConfig)
 
 

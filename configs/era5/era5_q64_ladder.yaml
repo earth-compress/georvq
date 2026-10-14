@@ -1,0 +1,15 @@
+# ERA5 specific humidity (q) on the ladder w320 recipe -- the reference
+# temperature architecture (era5_t64_ladder_w320) with only the
+# variable changed. q sits at the HIGH end of the family (tier d95
+# 7/15/21), and its standardized values are heavy-tailed (|z| to ~25,
+# excess kurtosis 2.6, measured 2026-09-08): squared error concentrates
+# on those tail pixels, so this untransformed run is the baseline a
+# tail-compressing transform would be judged against.
+inherit: era5_t64_ladder_w320.yaml
+
+data:
+  source: "era5:q"
+  store_dir: /data/ERA5-samples/train/store_q
+
+log:
+  run_tag: era5_q64_ladder

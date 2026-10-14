@@ -21,10 +21,18 @@ def modulate(x, shift, scale):
 
 
 class AdaLNBlock(nn.Module):
-    """Pre-norm transformer block with DiT-style AdaLN-Zero conditioning."""
+    """Pre-norm transformer block with DiT-style AdaLN-Zero conditioning.
 
-    def __init__(self, dim, heads, cond_dim, ff_ratio=4.0):
+    `mod_cap` (optional) soft-caps every modulation parameter with
+    cap*tanh(x/cap). Forensics on the ladder latches showed the ada
+    weights doubling over ~1k steps until the modulations saturated the
+    stream into a zero-output attractor; the cap bounds that channel.
+    Parameter-free, identity near zero, so zero-init behaviour and
+    existing checkpoints are unchanged (default None = no cap)."""
+
+    def __init__(self, dim, heads, cond_dim, ff_ratio=4.0, mod_cap=None):
         super().__init__()
+        self.mod_cap = mod_cap
         self.norm1 = nn.LayerNorm(dim, elementwise_affine=False, eps=1e-6)
         self.attn = nn.MultiheadAttention(dim, heads, batch_first=True)
         self.norm2 = nn.LayerNorm(dim, elementwise_affine=False, eps=1e-6)
@@ -40,7 +48,10 @@ class AdaLNBlock(nn.Module):
         attention branch and again for the MLP branch. `mask` is the
         optional hierarchical local-attention mask.
         """
-        s_msa, sc_msa, g_msa, s_mlp, sc_mlp, g_mlp = self.ada(c).chunk(6, dim=-1)
+        mods = self.ada(c)
+        if self.mod_cap is not None:
+            mods = self.mod_cap * torch.tanh(mods / self.mod_cap)
+        s_msa, sc_msa, g_msa, s_mlp, sc_mlp, g_mlp = mods.chunk(6, dim=-1)
         h = modulate(self.norm1(x), s_msa, sc_msa)
         x = x + g_msa.unsqueeze(1) * self.attn(
             h, h, h, need_weights=False, attn_mask=mask)[0]

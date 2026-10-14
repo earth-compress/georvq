@@ -1,0 +1,16 @@
+# tiersum v2: identical to era5_t64_tiersum except the tiers sum in a
+# 64-channel feature space and a shared FiLM-conditioned conv stack
+# renders bands. v1 converged ~4x faster than the attention decoder
+# with the best unquantized trunk of any run (0.185 K vs 0.226 K
+# ceiling RMSE) but left a 5e-4 quantizer gap and summed band maps
+# that cannot correct each other; the post-sum renderer is the
+# communication step, told via the depth thermometers how quantized
+# the composite it is looking at is.
+inherit: era5_t64_tiersum.yaml
+
+model:
+  decoder:
+    sum_feat: 64
+
+log:
+  run_tag: era5_t64_tiersum2

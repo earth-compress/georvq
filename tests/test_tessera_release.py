@@ -158,3 +158,35 @@ def test_refinement_spec_survives_a_json_round_trip():
                  RefinementSpec(tier=1, bits=3, quantizer="lloyd",
                                 rotate_seed=11)):
         assert RefinementSpec.from_json(spec.to_json()) == spec
+
+
+def _tiny_bundle(tmp_path):
+    from georvq.config import load_config
+    from georvq.factory import build_model
+    cfg = load_config("configs/smoke.yaml", [
+        "model.stats_cond={subtract_mean: true, cond_encoder: true, "
+        "cond_decoder: true, bits_per_band: 6}"])
+    model = build_model(cfg, "cpu")
+    means = np.random.default_rng(0).normal(
+        size=(64, cfg.model.bands)).astype(np.float32)
+    out = tmp_path / "bundle"
+    rel.build_bundle(str(out), model, cfg, means)
+    return out
+
+
+def test_load_accepts_its_own_bundle(tmp_path):
+    out = _tiny_bundle(tmp_path)
+    R = rel.load(str(out))
+    assert R.bundle["bitstream_id"]
+
+
+def test_load_refuses_a_bundle_whose_files_disagree_with_its_id(tmp_path):
+    """A mean channel from another bundle decodes to plausible garbage,
+    so load must refuse it rather than return a working-looking codec."""
+    out = _tiny_bundle(tmp_path)
+    p = out / "mean_channel.npz"
+    d = dict(np.load(p))
+    d["scale"] = d["scale"] * 1.5
+    np.savez(p, **d)
+    with pytest.raises(ValueError, match="bitstream"):
+        rel.load(str(out))

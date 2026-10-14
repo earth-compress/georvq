@@ -21,14 +21,17 @@ embedding fields (e.g. AlphaEarth, Tessera), multispectral imagery
   rate control.
 - **Residual VQ with codebook health.** k-means/data init, EMA decay
   ramps, dead-code resets, fp32 VQ state under bf16 training — the
-  machinery that keeps 16k–65k-entry codebooks alive.
-- **Learned entropy model + honest bytes.** An optional per-tier context
+  machinery that keeps codebooks in use, from K=256 (Tessera) to 16,384
+  (AlphaEarth).
+- **Learned entropy model + honest bytes (exploratory).** An optional per-tier context
   model makes codes cheaper (rate-aware training via soft-rate, gradient
   codebooks) and reports achievable bits; `georvq.inference.archive`
   writes real rANS files with byte-exact verification so claimed ratios
   are realized ones.
 - **Stats side-channel.** Sources that need per-tile normalization ship
-  their stats as ~11-byte adaptive-PCA packets. Sources whose windows
+  their stats alongside the indices, and the rate figures charge them
+  (S2 sends its 26 values as about 10 bytes of PCA-packed stats at low
+  rates and as 53 bytes of float16 at high ones). Sources whose windows
   carry most of their energy in the mean can instead *transmit* it and
   code only what is left — cheap, and worth far more per bit than extra
   pyramid depth where it applies.
@@ -36,15 +39,19 @@ embedding fields (e.g. AlphaEarth, Tessera), multispectral imagery
   quantized and added back at decode, buying back the quantizer gap
   without touching the codebooks. Optional by construction: ignoring one
   still decodes.
-- **Location conditioning (experimental).** Predict-and-subtract cascades
+- **Location conditioning (exploratory).** Predict-and-subtract cascades
   (frozen location→latent prior + cross-tier predictors) and
   location-gated codebook subsetting, via SatCLIP embeddings
   (`georvq[loc]`).
-- **Staged training.** σ-conditioned continuous stage-1 pretraining,
-  warm-start with shape reconciliation, encoder/codec freeze schedules.
+- **Warm starts and staged training.** Warm-start with shape
+  reconciliation and encoder/codec freeze schedules; σ-conditioned
+  continuous stage-1 pretraining (exploratory).
 - **Decoder-independent bitstream.** Packets are defined by tiers +
   codebooks + stats codec only; decoders can be upgraded forever without
   re-encoding (docs/BITSTREAM.md).
+
+Which of these a shipped release depends on, and which are exploratory,
+is tracked per feature in `docs/SOURCES.md`.
 
 Everything is driven by validated pydantic configs; every checkpoint embeds
 its full resolved config (plus git state and config hash) and is rebuilt
@@ -107,19 +114,21 @@ georvq-train-stage1 -c configs/ae/stage1.yaml --gpu 0
 georvq-train -c configs/ae/hybrid_rate.yaml --gpu 0 train.init_from=checkpoints/stage1/model.pt
 ```
 
-Presets in `configs/`, grouped by source: `pyr64` (the standard recipe), `stage1`,
-`hybrid_rate` (entropy model + gradient codebooks), `cascade` and
-`satclip_select` (location conditioning), `tessera_*` (the Tessera
-lineage, ending at the released `tessera_vq8_k256_statscond`), `smoke`
-(CI). Multi-GPU: `torchrun --nproc_per_node N -m georvq.train.dist`.
+Presets live in `configs/<source>/`: `ae/` (`pyr64` the standard
+recipe, plus the exploratory `stage1`, `hybrid_rate`, `cascade` and
+`satclip_select`), `tessera/` (the lineage ending at the released
+`tessera_vq8_k256_statscond`), `s2/`, `dem/` and `era5/`, with
+`smoke.yaml` (CI) at the top level. `docs/SOURCES.md` names the current
+preset for each source. A preset's `data.store_dir` points at the
+group server; override it for your own store.
 
 ## Data
 
 Sources are converted once into a standard chip store (sharded memmaps +
 parquet index + versioned manifest); training streams it through a
 GPU/CPU-resident pool with background refresh (whole-dataset FIFO sweeps
-for multi-TB stores). Builders: `scripts/build_store_ae.py`,
-`scripts/build_store_tessera.py`, `scripts/build_store_s2.py`. Adding a
+for multi-TB stores). Builders: `scripts/build_store_{ae,tessera,s2,dem,era5}.py`;
+S2 and DEM can also be read in place without building a store. Adding a
 source = builder + `Source` adapter + YAML preset — see
 `docs/ADDING_A_SOURCE.md`, and `docs/SOURCE_ONBOARDING.md` for measuring
 the source *before* choosing an architecture for it.
@@ -143,7 +152,7 @@ anywhere georvq is installed:
 ```python
 from georvq.inference.release import load_release
 codec = load_release("releases/my_run", device="cuda")
-xhat = codec.decode(codec.encode(x), depths=[8, 4, 2])
+xhat = codec.decode(codec.encode(x), depths=[8, 4, 0])
 ```
 
 On top of the generic machinery, each shipped source gets its own

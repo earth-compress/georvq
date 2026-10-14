@@ -1,0 +1,14 @@
+/data/ERA5-samples/val (era5:v+std)
+  160 windows of 64px, 37 bands, grids [1, 4, 16]
+
+ tier  grid  cell px   energy     cum  of resid    part.ratio   d90   d95   d99
+    0     1       64   61.53%  61.53%         -       3.3/37      4     6    13
+    1     4       16   30.70%  92.23%     79.8%       2.8/37      6    11    21
+    2    16        4    6.80%  99.03%     17.7%       4.8/37     14    20    27
+ left     -       <4    0.97% 100.00%      2.5%   (unreachable by this pyramid)
+
+READING THIS
+  tier 0 carries 61.5% of the energy in 37 numbers per 64px window.
+  -> transmitting it costs 37*b bits; at 6 bits/band that is 0.054 b/px.
+  latent width floor per tier (d95 of what it transmits): tier0>=6, tier1>=11, tier2>=20
+  unreachable floor: 0.97% of energy sits below 4px and no pyramid depth recovers it.

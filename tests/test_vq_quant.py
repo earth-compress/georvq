@@ -18,10 +18,10 @@ def _on_grid(W, bits):
 
 def test_books_stay_on_grid_through_training():
     torch.manual_seed(0)
-    vq = QuantizedBookVQ(num_codes=32, dim=16, book_bits=8,
-                         reset_interval=3)   # exercise dead resets too
+    vq = QuantizedBookVQ(num_codes=32, dim=16, book_bits=8)
     vq.train()
-    for _ in range(8):
+    for i in range(8):
+        vq.reset_pending = i % 3 == 2      # exercise dead resets too
         z_q, idx, commit = vq(torch.randn(256, 16))
         assert torch.isfinite(z_q).all() and torch.isfinite(commit)
         assert _on_grid(vq.codebook.weight.data, 8)

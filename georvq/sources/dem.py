@@ -65,16 +65,23 @@ class DEMSource(Source):
     def build_stem(self, model_cfg) -> nn.Module:
         return nn.Identity()
 
-    def build_head(self, model_cfg, in_dim) -> nn.Module:
-        fine = model_cfg.tiers[-1]
-        return DenseHead(in_dim, grid=fine.grid,
-                         p=model_cfg.window // fine.grid,
+    def build_head(self, model_cfg, in_dim, n_tiers=None,
+                   out_px=None) -> nn.Module:
+        grid, p = self.head_geom(model_cfg, n_tiers, out_px)
+        return DenseHead(in_dim, grid=grid, p=p,
                          bands=model_cfg.bands,
                          head_feat=model_cfg.decoder.head_feat,
                          normalize=False)
 
     def normalizer(self, model_cfg):
         return self._norm
+
+    def side_bits(self, cfg) -> float:
+        """The window's mean and std, sent as two float32 values, which is
+        how decode uses them. A cheaper encoding is a separate decision:
+        float16 spaces values 8 m apart above 8,192 m, which would land
+        directly in the reconstructed elevations."""
+        return 64.0
 
     def recon_stats(self, out, x, valid):
         mse, _ = masked_recon_stats(out, x, valid)

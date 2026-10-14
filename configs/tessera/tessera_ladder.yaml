@@ -1,0 +1,20 @@
+# The tessera release-candidate recipe with the ladder decoder: one
+# exit per rate-ladder prefix (coarse MLP stem -> 12 blocks over
+# coarse+mid -> 12 over all tokens), deep supervision 1:1:1, per-tier
+# conditioning, PSHead exits at [8, 16, 64] px feature maps. Everything
+# else -- tiers, mean channel, path sampling, QAT books, 20k warmup,
+# from-scratch schedule -- is the release run's. Aims to beat
+# tessera_vq8_k256_statscond (release: step 52k of that run).
+# warmup_truncate off: deep supervision already trains every prefix
+# exit on every row.
+inherit: tessera_vq8_k256_statscond.yaml
+
+model:
+  vq:
+    warmup_truncate: false
+  decoder:
+    kind: ladder
+    map_px: [8, 16, 64]
+
+log:
+  run_tag: tessera_ladder

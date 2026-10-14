@@ -30,8 +30,9 @@ from georvq.model.vqinit import residual_init_rvq
 from georvq.repro import (run_metadata, save_checkpoint, seed_all,
                           write_resolved_config)
 from georvq.train.figures import (codebook_figure, cosdist_figure,
-                                   error_hist_figure, rd_figure,
-                                   recon_figure, reset_figure)
+                                  error_hist_harvest, error_hist_render,
+                                  rd_err_harvest, rd_err_render, rd_figure,
+                                  recon_harvest, recon_render, reset_figure)
 from georvq.sources.report import resolve_report
 from georvq.train.validate import canonical_tuples, load_rd_ref, tname, validate
 from georvq.train import dist as D
@@ -53,6 +54,23 @@ def _reset_offset(reset_interval, val_interval):
     return max(1, gcd(reset_interval, val_interval) // 2)
 
 
+def mark_resets(model, step, first_reset):
+    """Flag the levels whose dead-code reset is due at this global step.
+
+    One schedule for every level, owned by the trainer: a level with
+    period R > 0 is due at first_reset + k*R. A flagged level resets at
+    its next training forward that sees data, so a level that sits out
+    the batch (skip_masked) resets a few steps late without moving the
+    schedule; a flag still pending at the next point is not doubled."""
+    if step < first_reset:
+        return
+    for rvq in model.rvqs:
+        for lev in rvq.levels:
+            R = lev.reset_interval
+            if R > 0 and (step - first_reset) % R == 0:
+                lev.reset_pending = True
+
+
 def resolve_device(gpu):
     if torch.cuda.is_available() and gpu is not None and gpu >= 0:
         return torch.device(f"cuda:{gpu}")
@@ -71,7 +89,7 @@ def setup_data(cfg: Config, source, device):
 
     val_frac=0 is closed-distribution mode (compress a fixed corpus):
     train on every chip and let "val" measure training-set fit."""
-    store = open_store(cfg.data.store_dir)
+    store = open_store(cfg.data.store_dir, cfg.data.reader)
     train_rows, val_rows = store.split(cfg.data.val_frac,
                                        seed=cfg.data.split_seed)
     if cfg.data.val_frac == 0:
@@ -118,9 +136,16 @@ def train(cfg: Config, gpu=0):
 
     specs = cfg.model.tiers
     mins = cfg.model.min_depths
-    tuples = [t for t in monotone_tuples(specs)
-              if all(L >= m for L, m in zip(t, mins))]
-    canon = canonical_tuples(specs, mins)
+    # The tuples validation scores must be ones the run trains. Under path
+    # sampling that is the truncation path itself -- scoring the whole
+    # monotone cone would fill the R-D scatter with balanced tuples like
+    # 4-4-4 that are never sampled and are dominated anyway.
+    if cfg.model.depth_sampling == "path":
+        tuples = [list(t) for t in path_tuples(specs, mins)]
+    else:
+        tuples = [t for t in monotone_tuples(specs)
+                  if all(L >= m for L, m in zip(t, mins))]
+    canon = canonical_tuples(specs, mins, cfg.model.depth_sampling)
     ref_fronts = [load_rd_ref(s) for s in cfg.eval.rd_refs]
     run_dir = os.path.join(cfg.log.out_dir, cfg.log.run_tag)
     os.makedirs(run_dir, exist_ok=True)
@@ -146,6 +171,18 @@ def train(cfg: Config, gpu=0):
               f"figures={list(report.figures)}", flush=True)
     store, train_rows, val_rows, val_s, pool = setup_data(cfg, source, device)
     val_rows.to_parquet(os.path.join(run_dir, "val_chips.parquet"))
+    # geometry and model-space transform resolve by name; the defaults
+    # delegate to pool.sample_batch and Source.prep, so a config that
+    # names neither runs the historical path exactly
+    from georvq.data.sampler import build_sampler
+    from georvq.sources.prep import build_prep
+    sampler = build_sampler(cfg.data.sampler.name, pool, cfg.model,
+                            source=source)
+    prep = build_prep(cfg.data.prep.name, source, cfg.model)
+    missing = [k for k in prep.requires if k not in sampler.provides]
+    assert not missing, (
+        f"prep {cfg.data.prep.name!r} needs meta {missing} that sampler "
+        f"{type(sampler).__name__} does not provide")
 
     # location side-info (conditioner / selector)
     needs_loc = model.conditioner is not None or model.selector is not None
@@ -170,13 +207,29 @@ def train(cfg: Config, gpu=0):
             v.ema_decay != VQConfig.model_fields["ema_decay"].default
             or v.reset_mode != "random"):
         # maturing silently wins over both of these, and a run that set
-        # them meant them -- say so rather than let the run quietly use
-        # decay 0.9995 with resets off
+        # them meant them, so say so rather than let the run use decay
+        # 0.9995 with resets off without reporting it
         print(f"note: mature_warmstart is on, so the warm-started books "
               f"run at decay 0.9995 with resets DISABLED -- overriding "
               f"vq.ema_decay={v.ema_decay} and vq.reset_mode="
               f"{v.reset_mode!r}. Set vq.mature_warmstart=false to keep "
               f"them live.", flush=True)
+    if cfg.train.init_from and v.warmup_steps:
+        # A VQ-free warmup is for training from scratch: it trains the
+        # autoencoder unquantized, then k-means-initialises the books at
+        # warmup_steps + 1. Warm-started books need no init, and that
+        # k-means DISCARDS them -- so inheriting warmup_steps from a
+        # from-scratch preset silently converts a warm-start run into a
+        # from-scratch one, halfway in, with a healthy-looking loss.
+        # Observed: a grown-Tessera run inherited warmup_steps=20000 and
+        # would have thrown away the released codebooks at step 20001.
+        raise ValueError(
+            f"train.init_from is set and model.vq.warmup_steps is "
+            f"{v.warmup_steps}. The VQ-free warmup would k-means "
+            f"re-initialise the warm-started codebooks at step "
+            f"{v.warmup_steps + 1}, discarding them. Set "
+            f"model.vq.warmup_steps: 0 for a warm start, or drop "
+            f"train.init_from to train from scratch.")
     if cfg.train.init_from and not v.mature_warmstart:
         # undo load_partial's maturing: keep the books live at the
         # configured decay with resets (and therefore reset_mode) active
@@ -184,15 +237,6 @@ def train(cfg: Config, gpu=0):
             for lev in rvq.levels:
                 lev.decay = v.ema_decay
                 lev.reset_interval = 2500
-                # Zero the inherited step counters. They come from the
-                # source checkpoint -- already tens of thousands of steps
-                # in, and desynchronised across levels by skip_masked --
-                # so resets would fire at arbitrary offsets in this run.
-                # Observed: resets at 464 / 803 / 2963, the last landing 37
-                # steps before the validation at 3000, which then scored
-                # books with 6828 codes just moved (cos 0.9572 -> 0.9550).
-                lev.step.fill_(2500 - _reset_offset(2500,
-                                                    cfg.train.val_interval))
         print(f"warm-started books kept LIVE: decay {v.ema_decay}, "
               f"resets every 2500 steps, reset_mode={v.reset_mode}",
               flush=True)
@@ -205,10 +249,10 @@ def train(cfg: Config, gpu=0):
         got = [0] * len(specs)
         with torch.no_grad():
             while any(g < n for g, n in zip(got, need)):
-                s = pool.sample_batch(
+                s, m0 = sampler.draw(
                     min(cfg.train.batch_windows, max(need)),
-                    cfg.model.window, align=cfg.data.pool.align_crops)
-                x0, v0 = source.prep(s, device)
+                    align=cfg.data.pool.align_crops)
+                x0, v0, _ = prep(s, m0, device)
                 # must match the training distribution: with stats
                 # conditioning the encoder sees a mean-SUBTRACTED field, so
                 # books fitted on un-centred latents would be fitted to
@@ -222,6 +266,12 @@ def train(cfg: Config, gpu=0):
                 z = torch.cat(samples[i])[:need[i]]
                 rvq.all_levels(z)
         del samples
+    # Resets fire on one global-step schedule (mark_resets), placed
+    # between validations and after the VQ warmup.
+    first_reset = _reset_offset(2500, cfg.train.val_interval)
+    while first_reset <= v.warmup_steps:
+        first_reset += 2500
+
     Ls_full = torch.tensor([sp.depth for sp in specs], device=device)[None]
 
     if cfg.train.freeze_codec:        # only the selector trains
@@ -295,18 +345,68 @@ def train(cfg: Config, gpu=0):
         if s < lr0:                   # AdamW warms its moments at lr=0 first
             return 0.0
         s -= lr0
-        ramp = min(1.0, (s + 1) / warmup)
+        # max(warmup, 1): warmup=0 is the natural way to write
+        # "no warmup" and used to divide by zero here, killing
+        # the run at its first optimiser step -- after the pool
+        # had already spent minutes prefilling.
+        ramp = min(1.0, (s + 1) / max(warmup, 1))
         if const_lr:                  # stoppable at any step
             return ramp
         total = max(cfg.train.steps - lr0, 1)
         return ramp * 0.5 * (1 + np.cos(np.pi * min(1.0, s / total)))
     sched = torch.optim.lr_scheduler.LambdaLR(opt, lr_fn)
 
+    if cfg.train.init_from:
+        ck = torch.load(cfg.train.init_from, map_location=device,
+                        weights_only=False)
+        if "opt" in ck:
+            try:
+                # moments only -- the lr SCHEDULE stays what this run's
+                # config says (resume recipes set their warmup on
+                # purpose); Adam's per-param step counters travel with
+                # the state, so bias correction does not restart either
+                opt.load_state_dict(ck["opt"])
+                print(f"restored optimizer state from "
+                      f"{cfg.train.init_from}", flush=True)
+            except (ValueError, KeyError) as e:
+                print(f"optimizer state in {cfg.train.init_from} does not "
+                      f"match this model ({e}); starting FRESH -- expect "
+                      f"full-lr updates while the moments warm, consider "
+                      f"optim.lr0_steps", flush=True)
+        else:
+            print(f"no optimizer state in {cfg.train.init_from}: fresh "
+                  f"AdamW. Zero second moments give every parameter "
+                  f"full-lr updates at first (the measured storm "
+                  f"trigger); consider optim.lr0_steps to warm the "
+                  f"moments at lr=0.", flush=True)
+        del ck
+
+    trap = None
+    if cfg.train.trap is not None and D.is_main():
+        from georvq.train.trap import Trap
+        assert cfg.model.vq is not None and cfg.model.vq.clip_norm, \
+            "trap needs model.vq.clip_norm for the gnorm"
+        trap = Trap(cfg.train.trap, model, run_dir)
+        print(f"trap armed: abs>{cfg.train.trap.gnorm_abs} and "
+              f"ratio>{cfg.train.trap.gnorm_ratio}x EMA, "
+              f"{cfg.train.trap.n_dumps} dumps, hold="
+              f"{cfg.train.trap.hold}", flush=True)
+
     use_wandb = cfg.log.wandb and D.is_main()
+    step0 = cfg.log.step_offset
+    reporter = None
     if use_wandb:
         import wandb
         wandb.init(project=cfg.log.wandb_project, name=cfg.log.run_tag,
                    config=cfg.model_dump(mode="json") | run_metadata(cfg))
+        if cfg.log.async_report:
+            # figures render on a background worker after the training
+            # thread has moved past `step`, so they log against their own
+            # monotone metric instead of the global step
+            from georvq.train.report import AsyncReporter
+            reporter = AsyncReporter()
+            wandb.define_metric("figs/step")
+            wandb.define_metric("figs/*", step_metric="figs/step")
 
 
     select_weight = (cfg.model.conditioning.weight
@@ -329,6 +429,7 @@ def train(cfg: Config, gpu=0):
     best_q = -math.inf if qm.higher_better else math.inf
     nonfinite_steps = 0
     best_is_quantized = False   # warmup selects on the ceiling; see below
+    best_ceil_guard = -math.inf if report.quality.higher_better else math.inf
     vs, cbt = {}, {}
     for step in range(1, cfg.train.steps + 1):
         if enc_frozen and step > cfg.train.freeze_encoder_steps:
@@ -345,7 +446,8 @@ def train(cfg: Config, gpu=0):
                 step == int(cfg.train.steps * v.reset_freeze_frac):
             for rvq in model.rvqs:
                 for lev in rvq.levels:
-                    lev.reset_interval = 1 << 30
+                    lev.reset_interval = 0
+                    lev.reset_pending = False
             print(f"step {step}: dead-code resets frozen", flush=True)
         if v.ema_decay_final is not None:
             s0, s1 = v.decay_ramp
@@ -370,9 +472,8 @@ def train(cfg: Config, gpu=0):
                 samples = [[] for _ in specs]
                 got = [0] * len(specs)
                 while any(g < w for g, w in zip(got, want)):
-                    xs, vs = source.prep(
-                        pool.sample_batch(batch, cfg.model.window, align=align),
-                        device)
+                    s_, m_ = sampler.draw(batch, align=align)
+                    xs, vs, _ = prep(s_, m_, device)
                     for i, z in enumerate(
                             model.encode_levels(xs, model._stats_of(xs, vs),
                                                 vs)):
@@ -406,16 +507,16 @@ def train(cfg: Config, gpu=0):
                      else batch_full)
         loc = None
         if needs_loc:
-            s, rows = pool.sample_batch(batch, cfg.model.window, align=align,
-                                        return_rows=True)
-            loc = train_loc[rows]
+            s, meta = sampler.draw(batch, align=align, return_rows=True)
+            loc = train_loc[meta["row"]]
         else:
-            s = pool.sample_batch(batch, cfg.model.window, align=align)
-        x, valid = source.prep(s, device)
+            s, meta = sampler.draw(batch, align=align)
+        x, valid, meta = prep(s, meta, device)
         st = model._stats_of(x, valid)   # None unless stats_cond is on
         data_ms = 0.9 * data_ms + 0.1 * (time.time() - td) * 1000
         amp = torch.autocast(device.type, torch.bfloat16, enabled=amp_on)
         select = torch.zeros((), device=device)
+        pt = None
         if v.warmup_steps and step <= v.warmup_steps:
             with amp:
                 zs = model.encode_levels(x, st, valid)
@@ -439,6 +540,7 @@ def train(cfg: Config, gpu=0):
                 out = model.decode(zs, Lw, st, valid)
             out = out.float()
             commit = torch.zeros((), device=device)
+            Ls_used = Lw
         else:
             if cfg.model.depth_sampling == "path":
                 Ls = sample_path_depths(x.shape[0], specs, device, mins=mins,
@@ -462,6 +564,7 @@ def train(cfg: Config, gpu=0):
                 Ls = torch.where(pt[:, None], Ls_full.expand_as(Ls), Ls)
             with amp:
                 zs = model.encode_levels(x, st, valid)
+            mark_resets(model, step, first_reset)
             zqs, commit, select = model.quantize(zs, Ls, loc=loc)
             if pt is not None:
                 # straight replacement, not straight-through: these rows
@@ -472,7 +575,30 @@ def train(cfg: Config, gpu=0):
             with amp:
                 out = model.decode(zqs, Ls, st, valid)
             out = out.float()
+            Ls_used = Ls
         recon_loss, m = source.recon_stats(out, x, valid)
+        # ladder decoder: every exit a row's tuple licenses is supervised
+        # (1:1:1); `out` carries the deepest, the shallower ones are here
+        aux = getattr(model.decoder, "last_aux", None)
+        aux_vals = []
+        if aux:
+            for rows_i, amap in aux:
+                am = amap.float()
+                if model.stats_cond is not None \
+                        and model.stats_cond.subtract_mean:
+                    # decode() uncenters only the returned output; the aux
+                    # exits live in the same centred space and must be
+                    # restored before scoring against the full field
+                    from georvq.model.stats_cond import uncenter
+                    am = uncenter(am, st[rows_i].float(), valid[rows_i])
+                al, _ = source.recon_stats(am, x[rows_i], valid[rows_i])
+                aux_vals.append(al.detach())   # tensor; float at log time
+                recon_loss = recon_loss + al
+            # mean over exit terms, not sum: keeps the exits at 1:1:1 while
+            # holding the loss (and gradient) scale of a single-exit run,
+            # so clip_norm keeps its meaning
+            recon_loss = recon_loss / (1 + len(aux))
+            model.decoder.last_aux = None
         loss = recon_loss + commit_weight * commit + select_weight * select
         # rate term: entropy-model bits/px over a sub-batch (fp32, outside
         # autocast), ramped in over rate.warmup. Shares the encoder with the
@@ -496,6 +622,35 @@ def train(cfg: Config, gpu=0):
         if v.clip_norm:
             gnorm = float(torch.nn.utils.clip_grad_norm_(
                 base_p + rate_p, v.clip_norm))
+            if trap is not None:
+                # observe (and possibly dump) BEFORE the non-finite skip
+                # zeroes the grads and before opt.step() moves the
+                # weights: a dump holds the exact pre-transition state.
+                # Scalars only on stats-cadence or loud steps: each
+                # float() is a host sync (clip has already synced once,
+                # but ~12 conversions per step still add up)
+                tscal = {}
+                if (gnorm > 0.5 * trap.cfg.gnorm_abs
+                        or not math.isfinite(gnorm)
+                        or step % max(trap.cfg.stats_every, 1) == 0):
+                    tscal = {"loss": float(loss.detach()),
+                             "recon": float(recon_loss.detach()),
+                             "commit": float(commit.detach()),
+                             "select": float(select.detach()),
+                             **{f"aux{i}": float(a)
+                                for i, a in enumerate(aux_vals)},
+                             **{f"act_{k}": float(av) for k, av in
+                                getattr(model.decoder, "act_max",
+                                        {}).items()}}
+                if trap.observe(step, gnorm, opt, tscal):
+                    trap.dump(step, model, opt, sched,
+                              batch={"x": x, "valid": valid, "st": st,
+                                     "Ls": Ls_used, "loc": loc, "pt": pt},
+                              scalars={"gnorm": gnorm, **tscal})
+                    if trap.cfg.hold and trap.dumps == 1:
+                        # hold only at the first trip (the onset); later
+                        # trips in the same storm dump and move on
+                        trap.hold({"trap": trap})
             if not math.isfinite(gnorm):
                 # a non-finite gradient would write NaN/inf into Adam's
                 # moments and poison every later step, so drop it entirely
@@ -507,6 +662,10 @@ def train(cfg: Config, gpu=0):
                 sched.step()
                 continue
         opt.step(); sched.step()
+        if trap is not None:
+            trap.after_step(step, model, opt,
+                            {"x": x, "valid": valid, "st": st,
+                             "Ls": Ls_used, "loc": loc, "pt": pt})
 
         rst = {}
         for i, rvq in enumerate(model.rvqs):
@@ -536,7 +695,7 @@ def train(cfg: Config, gpu=0):
                             if k.endswith("_perp_gain")]))}
                 if fr is not None:
                     agg["figs/reset"] = wandb.Image(fr)
-                wandb.log(agg, step=step)
+                wandb.log(agg, step=step + step0)
                 if fr is not None:
                     plt.close(fr)
             worst = max((val, k) for k, val in rst.items()
@@ -556,6 +715,15 @@ def train(cfg: Config, gpu=0):
                    "perf/tokens_per_s": tok_s,
                    "perf/data_wait_ms": data_ms,
                    "perf/pool_chips_loaded": pool.chips_loaded}
+            # Which decoder served how much of the batch. With a bank the
+            # realised step cost depends on how the depth sampler split
+            # the rows, so this is what explains a throughput change, and
+            # a member starved of rows is one whose rung will lag.
+            counts = getattr(model.decoder, "last_counts", None)
+            if counts:
+                tot = sum(counts.values()) or 1
+                for k, c in counts.items():
+                    log[f"train/bucket_frac_{k}"] = c / tot
             if gnorm is not None:
                 # PRE-clip norm: the diagnostic that would have shown the
                 # step-1900 blow-up coming
@@ -563,7 +731,16 @@ def train(cfg: Config, gpu=0):
                 log["train/grad_clipped"] = float(
                     gnorm > v.clip_norm)
                 log["train/nonfinite_steps"] = nonfinite_steps
-            log.update({f"train/{k}": float(val) for k, val in m.items()})
+            # detach: a source may return its loss term among the metrics
+            # (S2 returns "mse"), and float() on a grad tensor warns
+            log.update({f"train/{k}": float(val.detach())
+                        if torch.is_tensor(val) else float(val)
+                        for k, val in m.items()})
+            # per-stage activation maxima (ladder): the latch precursor
+            for k_, v_ in getattr(model.decoder, "act_max", {}).items():
+                log[f"train/act_max_{k_}"] = float(v_)
+            for i_, a_ in enumerate(aux_vals):
+                log[f"train/aux_exit{i_}"] = float(a_)
             if pool.cycle:
                 log["data/epochs"] = pool.epochs
                 log["data/tiles_streamed"] = pool.tiles_streamed
@@ -581,7 +758,7 @@ def train(cfg: Config, gpu=0):
                 print(f"step {step}: loss={loss.item():.5f}{cstr}{rstr} "
                       f"tok/s={tok_s:,.0f}", flush=True)
             if use_wandb:
-                wandb.log(log, step=step)
+                wandb.log(log, step=step + step0)
 
         if (step % cfg.train.val_interval == 0
                 or step == cfg.train.steps) and D.is_main():
@@ -606,7 +783,7 @@ def train(cfg: Config, gpu=0):
             vq_live = not (v.warmup_steps and step <= v.warmup_steps)
             vs, cbt = validate(model, source, val_s, val_ts, canon_names,
                                val_loc=val_loc, quantized=vq_live,
-                               spec=report)
+                               spec=report, prep=prep)
             if cfg.train.freeze_codec:    # keep the codec frozen (no EMA)
                 model.eval()
             if v.freeze_books:            # validate() leaves the model in
@@ -618,13 +795,36 @@ def train(cfg: Config, gpu=0):
             base_str = "".join(
                 f" {b.key}={vs[f'{qm.key}_{b.key}']:.4f}"
                 for b in report.baselines if f"{qm.key}_{b.key}" in vs)
+            # with a decoder bank, say which member served each rung: a
+            # step in the ladder at a member boundary is the continuity
+            # risk of decoding adjacent rates with different networks
+            def _dec(t):
+                if getattr(model.decoder, "members", None) is None:
+                    return ""
+                from georvq.model.decoder import active_tiers
+                return f"[d{active_tiers(list(t)) - 1}]"
+
             print(f"step {step} VAL[{qm.key}]: "
                   + ("" if vq_live else "[warmup: ceiling only] ")
-                  + " ".join(f"{k}({tname(t)})={cbt[tname(t)]:.4f}"
+                  + " ".join(f"{k}({tname(t)}){_dec(t)}={cbt[tname(t)]:.4f}"
                              for k, t in canon.items() if tname(t) in cbt)
                   + f" ceil={vs[f'{qm.key}_ceiling']:.4f}"
                   + extra_str + base_str,
                   flush=True)
+            # The extras PER TUPLE, not just at the ceiling. On a source
+            # with a transmitted mean the headline cosine is inflated --
+            # measured on Tessera, a coarse-only decode reads cos 0.875
+            # against ccos 0.316 -- so a log carrying only the headline
+            # can show a run flat or negative while the reconstruction is
+            # improving. They are computed either way, so printing them
+            # costs nothing.
+            for m in report.extra:
+                by_t = ebt.get(m.key, {})
+                if by_t:
+                    print(f"    {m.key}: "
+                          + " ".join(f"{k}={by_t[tname(t)]:.4f}"
+                                     for k, t in canon.items()
+                                     if tname(t) in by_t), flush=True)
             if use_wandb:
                 scalars = {f"val/{qm.key}_{k}": cbt[tname(t)]
                            for k, t in canon.items() if tname(t) in cbt}
@@ -659,58 +859,130 @@ def train(cfg: Config, gpu=0):
                 # be drawn against unfitted books, so log the scalars and
                 # skip them.
                 if not vq_live:
-                    wandb.log(scalars, step=step)
+                    wandb.log(scalars, step=step + step0)
                 else:
                     sb = model.side_bits()
-                    open_figs = []
-                    if report.has_figure("rd"):
-                        f1 = rd_figure(cbt, vs, specs, val_ts, step, report,
-                                       ref_fronts=ref_fronts,
-                                       px=cfg.model.window ** 2,
-                                       side_bits=sb)
-                        scalars["figs/rd"] = wandb.Image(f1)
-                        open_figs.append(f1)
-                    if report.has_figure("rd_log"):
-                        f1b = rd_figure(cbt, vs, specs, val_ts, step, report,
-                                        ref_fronts=ref_fronts,
-                                        px=cfg.model.window ** 2,
-                                        dist_log=True, side_bits=sb)
-                        scalars["figs/rd_log"] = wandb.Image(f1b)
-                        open_figs.append(f1b)
-                    if report.has_figure("codebook"):
-                        f2 = codebook_figure(vs, specs, step)
-                        scalars["figs/codebook"] = wandb.Image(f2)
-                        open_figs.append(f2)
-                    if "cosdist" in vs and report.has_figure("cosdist"):
-                        f4 = cosdist_figure(vs["cosdist"], None, specs, step)
-                        scalars["figs/cosdist_by_level"] = wandb.Image(f4)
-                        open_figs.append(f4)
-                    wandb.log(scalars, step=step)
-                    for f in open_figs:
-                        plt.close(f)
-                    if report.has_figure("recon") and (
-                            step % cfg.train.fig_interval == 0
-                            or step == cfg.train.steps):
-                        rt = ([[int(x_) for x_ in t.split("-")]
-                               for t in cfg.eval.recon_tuples]
-                              if cfg.eval.recon_tuples else None)
-                        f3 = recon_figure(model, source, val_s, step,
-                                          mins=mins, tuples=rt,
-                                          val_loc=val_loc,
-                                          preview=report.preview)
-                        wandb.log({"figs/recon": wandb.Image(f3)}, step=step)
-                        plt.close(f3)
-                    if report.has_figure("error_hist") and (
-                            step % cfg.train.fig_interval == 0
-                            or step == cfg.train.steps):
-                        # signed error, in model space and -- where the
-                        # source normalizes -- in its own physical unit
-                        f5 = error_hist_figure(model, source, val_s, step,
-                                               mins=mins, val_loc=val_loc,
-                                               unit=report.units)
-                        wandb.log({"figs/error_hist": wandb.Image(f5)},
-                                  step=step)
-                        plt.close(f5)
+                    fig_step = (step % cfg.train.fig_interval == 0
+                                or step == cfg.train.steps)
+                    # figure rows: the configured recon tuples, else the
+                    # canonical points (on the path when training is)
+                    rt = ([[int(x_) for x_ in t.split("-")]
+                           for t in cfg.eval.recon_tuples]
+                          if cfg.eval.recon_tuples
+                          else list(canon.values()))
+                    # HARVEST: every decode the figures need runs now,
+                    # while the model is at hand; the payloads are plain
+                    # subsampled CPU tensors and the model is not touched
+                    # again after this point
+                    payloads = {}
+                    if report.has_figure("recon") and fig_step:
+                        payloads["recon"] = recon_harvest(
+                            model, source, val_s, mins=mins, tuples=rt,
+                            val_loc=val_loc)
+                    if (report.has_figure("rd_err") and fig_step
+                            and source.normalizer(cfg.model) is not None):
+                        payloads["rd_err"] = rd_err_harvest(
+                            model, source, val_s, val_ts,
+                            px=cfg.model.window ** 2, side_bits=sb,
+                            val_loc=val_loc)
+                    if report.has_figure("error_hist") and fig_step:
+                        payloads["hist"] = error_hist_harvest(
+                            model, source, val_s, tuples=rt, mins=mins,
+                            val_loc=val_loc)
+                    # host RSS per val: two 60k runs died on silent ~1
+                    # GB/val growth (glibc arena bloat under the report
+                    # worker's large transient allocs); this makes any
+                    # recurrence a visible slope instead of an OOM kill
+                    try:
+                        with open("/proc/self/status") as f:
+                            for ln in f:
+                                if ln.startswith("VmRSS"):
+                                    scalars["perf/rss_gb"] = \
+                                        int(ln.split()[1]) / 2 ** 20
+                                    break
+                    except OSError:
+                        pass
+                    wandb.log(scalars, step=step + step0)  # scalars stay sync
+
+                    # RENDER: CPU only (percentiles, matplotlib, upload).
+                    # With async_report it runs on the worker while the
+                    # GPU goes back to training; otherwise inline.
+                    vs_snap, cbt_snap = dict(vs), dict(cbt)
+                    ts_snap = [list(t) for t in val_ts]
+
+                    def _render(step=step, payloads=payloads, vs=vs_snap,
+                                cbt=cbt_snap, val_ts=ts_snap, sb=sb,
+                                deferred=reporter is not None):
+                        figs = {"figs/step": step + step0} if deferred else {}
+                        open_figs = []
+
+                        def add(key, f):
+                            figs[key] = wandb.Image(f)
+                            open_figs.append(f)
+                        if report.has_figure("rd"):
+                            add("figs/rd", rd_figure(
+                                cbt, vs, specs, val_ts, step, report,
+                                ref_fronts=ref_fronts,
+                                px=cfg.model.window ** 2, side_bits=sb))
+                        if report.has_figure("rd_log"):
+                            add("figs/rd_log", rd_figure(
+                                cbt, vs, specs, val_ts, step, report,
+                                ref_fronts=ref_fronts,
+                                px=cfg.model.window ** 2, dist_log=True,
+                                side_bits=sb))
+                        if report.has_figure("codebook"):
+                            add("figs/codebook", codebook_figure(
+                                vs, specs, step))
+                        if "cosdist" in vs and report.has_figure("cosdist"):
+                            add("figs/cosdist_by_level", cosdist_figure(
+                                vs["cosdist"], None, specs, step))
+                        if "recon" in payloads:
+                            add("figs/recon", recon_render(
+                                payloads["recon"], step,
+                                preview=report.preview))
+                        if "rd_err" in payloads:
+                            # rate vs physical-unit error (MAE/RMSE/
+                            # p90/p99) over the R-D front's points
+                            add("figs/rd_err", rd_err_render(
+                                payloads["rd_err"], step,
+                                unit=report.units))
+                        if "hist" in payloads:
+                            add("figs/error_hist", error_hist_render(
+                                payloads["hist"], step, unit=report.units))
+                        if deferred:
+                            wandb.log(figs)
+                        else:
+                            wandb.log(figs, step=step + step0)
+                        for f in open_figs:
+                            plt.close(f)
+                    if reporter is not None:
+                        reporter.submit(_render)
+                    else:
+                        _render()
+
+            # Collapse guard: a stage latch is a catastrophic ceiling drop
+            # that never recovers; trip on the FIRST validation past it.
+            ceil_q = vs[f"{qm.key}_ceiling"]
+            if cfg.train.guard_drop is not None:
+                worse = (best_ceil_guard - ceil_q if qm.higher_better
+                         else ceil_q - best_ceil_guard)
+                if worse > cfg.train.guard_drop:
+                    save_checkpoint(
+                        os.path.join(run_dir, "model_collapsed.pt"),
+                        model, cfg, step,
+                        {"quality_key": qm.key,
+                         f"{qm.key}_ceiling": ceil_q,
+                         "best_ceiling": best_ceil_guard})
+                    print(f"step {step}: COLLAPSE GUARD TRIPPED -- "
+                          f"{qm.key}_ceiling {ceil_q:.4f} vs running best "
+                          f"{best_ceil_guard:.4f} (guard_drop="
+                          f"{cfg.train.guard_drop}). Forensic state in "
+                          f"model_collapsed.pt; resume from model_best.pt "
+                          f"or the last periodic save.", flush=True)
+                    raise SystemExit(3)
+                best_ceil_guard = (max(best_ceil_guard, ceil_q)
+                                   if qm.higher_better
+                                   else min(best_ceil_guard, ceil_q))
 
             # Track the ceiling during warmup: cos_full would be the
             # model scored against unfitted books, so model_best.pt would
@@ -730,12 +1002,16 @@ def train(cfg: Config, gpu=0):
             if improved:
                 best_q = full_q
                 save_checkpoint(os.path.join(run_dir, "model_best.pt"),
-                                model, cfg, step, metrics)
+                                model, cfg, step, metrics,
+                                prep_state=prep.state())
         if (step % cfg.train.save_interval == 0
                 or step == cfg.train.steps) and D.is_main():
             save_checkpoint(os.path.join(run_dir, "model.pt"), model, cfg,
                             step, {"quality_key": qm.key,
-                                   f"{qm.key}_full": best_q})
+                                   f"{qm.key}_full": best_q},
+                            opt=opt if cfg.train.save_optim else None,
+                            sched=sched if cfg.train.save_optim else None,
+                            prep_state=prep.state())
 
     if D.is_main():
         # one writer: every rank reaching this line would race on the
@@ -750,6 +1026,9 @@ def train(cfg: Config, gpu=0):
                 # off this name; keep it where it still means the same
                 blob["cos_by_tuple"] = cbt
             json.dump(blob, f, indent=1)
+    if reporter is not None and not reporter.close():
+        print("warning: report worker did not flush before timeout",
+              flush=True)
     pool.shutdown()
     D.cleanup()
     print(f"done -> {run_dir}", flush=True)

@@ -27,14 +27,44 @@ class Source:
         """Raw input plane(s) -> the (B, C, W, W) plane the tokenizer eats."""
         return nn.Identity()
 
-    def build_head(self, model_cfg, in_dim) -> nn.Module:
-        """Decoder fine tokens (B, cells, in_dim) -> pixel output(s)."""
+    def build_head(self, model_cfg, in_dim, n_tiers=None,
+                   out_px=None) -> nn.Module:
+        """Decoder fine tokens (B, cells, in_dim) -> pixel output(s).
+
+        `n_tiers` and `out_px` are set when the head belongs to a member
+        of a decoder bank, which decodes a PREFIX of the tiers to a
+        smaller output than the window. Both None means the whole pyramid
+        at full resolution, which is what every single-decoder model does.
+        """
         raise NotImplementedError
+
+    @staticmethod
+    def head_geom(model_cfg, n_tiers=None, out_px=None):
+        """(grid, patch edge) for a head over the first `n_tiers` tiers.
+
+        The finest tier a head sees owns the token grid, and each token
+        expands to a patch of `out_px // grid` pixels. For the full
+        decoder this is the window and the last tier, unchanged.
+        """
+        fine = model_cfg.tiers[(n_tiers or len(model_cfg.tiers)) - 1]
+        px = out_px or model_cfg.window
+        return fine.grid, px // fine.grid
 
     def normalizer(self, model_cfg):
         """Optional per-tile stats side-channel codec (None if the data
         needs no per-tile normalization)."""
         return None
+
+    def side_bits(self, cfg) -> float:
+        """Per-window bits this source must ship OUTSIDE the index stream.
+
+        A `normalizer` removes per-tile statistics before the encoder, and
+        the decode is meaningless without them, so they are part of the
+        rate whether or not anyone counts them. Declare the cost here and
+        `PyramidCodec.side_bits` folds it into every rate figure. Sources
+        that normalize nothing return 0.
+        """
+        return 0.0
 
     def recon_stats(self, out, x, valid):
         """Reconstruction loss term and quality metrics.
@@ -68,6 +98,11 @@ def get_source(name: str, model_cfg) -> Source:
     from georvq.sources.ae import AESource
     from georvq.sources.tessera import TesseraSource
     from georvq.sources.dem import DEMSource
+    # "era5:<var>" carries the variable in the name so the adapter can
+    # pick that variable's standardization moments
+    if name.startswith("era5:"):
+        from georvq.sources.era5 import Era5Source
+        return Era5Source(model_cfg, var=name.split(":", 1)[1])
     SOURCES = {"ae": AESource, "tessera": TesseraSource,
                "dem": DEMSource}
     try:

@@ -33,7 +33,7 @@ def rd_figure(q_by_tuple, vs, specs, tuples, step, spec, ref_fronts=(),
     sc = ax.scatter(bits, Y(vals), c=L0s, cmap="viridis", s=22, zorder=3)
     for label, front in ref_fronts:
         fb, fc = zip(*front)
-        ax.plot(fb, Y(fc), "--", lw=1.2, alpha=0.8, label=label)
+        ax.plot(fb, Y(fc), ":", lw=1.6, alpha=0.9, label=label)
     fig.colorbar(sc, label="L0 (coarse depth)")
     # Pareto front -- "better" is metric-dependent: an angle or an RMSE
     # improves DOWNWARD, so the frontier tracks the running min there.
@@ -171,51 +171,69 @@ _pca_rgb = PCA_RGB.render
 @torch.no_grad()
 def recon_figure(model, source, val_s, step, n=8, mins=None, tuples=None,
                  val_loc=None, preview=PCA_RGB):
-    """Original vs reconstructions at named depth tuples, PCA-RGB rendered."""
-    # eval() is load-bearing, not hygiene: VectorQuantizer.forward runs its
-    # lazy `_data_init` under `self.training`, so drawing this figure in
-    # train mode INITIALISES the codebooks -- from 8 val windows, by random
-    # sampling rather than the configured init_mode, and at whatever step
-    # the first figure lands on. It also lets an EMA update and a step
-    # increment run on validation data. (stage1_recon_figure below has
-    # always done this correctly; this one never did.)
+    """Original vs reconstructions at named depth tuples, PCA-RGB rendered.
+    One-call form of harvest + render."""
+    return recon_render(
+        recon_harvest(model, source, val_s, n=n, mins=mins, tuples=tuples,
+                      val_loc=val_loc),
+        step, preview=preview)
+
+
+def recon_harvest(model, source, val_s, n=8, mins=None, tuples=None,
+                  val_loc=None):
+    """GPU phase of the reconstruction contact sheet: decode each depth
+    tuple for n val windows spread over the whole val set (the fixed
+    val tokens are overlapping crops per chip in index order, so the
+    first n are near-duplicates of one chip).
+
+    eval() here is a correctness requirement, not hygiene:
+    VectorQuantizer.forward runs its lazy `_data_init` under
+    `self.training`, so harvesting in train mode would INITIALISE the
+    codebooks from 8 val windows, and would let an EMA update and a
+    step increment run on validation data."""
     was_training = model.training
     model.eval()
     try:
-        return _recon_figure(model, source, val_s, step, n, mins, tuples,
-                             val_loc, preview)
+        sel = torch.linspace(0, val_s.shape[0] - 1, n).long()
+        val_x, val_valid = source.prep(val_s[sel], val_s.device)
+        loc = val_loc[sel] if val_loc is not None else None
+        if tuples:
+            pts = {tname(t): t for t in tuples}
+        else:
+            pts = canonical_tuples(model.specs, mins)
+        _, cums = model.level_cumsums(val_x, loc=loc)
+        rows = {"orig": val_x.float().cpu()}
+        for name, t in pts.items():
+            rows[f"{name}\n({tname(t)})"] = \
+                model.eval_tuple(cums, t, val_x).float().cpu()
+        return {"rows": rows, "valid": val_valid.cpu()}
     finally:
         if was_training:
             model.train()
 
 
-def _recon_figure(model, source, val_s, step, n, mins, tuples, val_loc,
-                  preview):
-    """Reconstruction contact sheet: the original over one row per depth
-    tuple, projected to RGB through a shared PCA basis.
+def recon_render(payload, step, preview=PCA_RGB):
+    """CPU phase: per-column PCA bases and the contact sheet.
 
     The basis is fitted on the ORIGINALS and reused for every row, so
     rows are comparable to each other and to the source; a per-row
-    basis would hide exactly the errors this figure exists to show.
-    Call `recon_figure`, which owns the eval-mode guard.
-    """
-    val_x, val_valid = source.prep(val_s[:n], val_s.device)
-    loc = val_loc[:n] if val_loc is not None else None
-    if tuples:
-        pts = {tname(t): t for t in tuples}
-    else:
-        pts = canonical_tuples(model.specs, mins)
-    _, cums = model.level_cumsums(val_x, loc=loc)
-    rows = {"orig": val_x}
-    for name, t in pts.items():
-        rows[f"{name}\n({tname(t)})"] = model.eval_tuple(cums, t, val_x)
-    basis = preview.basis(val_x, val_valid)
+    basis would hide exactly the errors this figure exists to show."""
+    rows = payload["rows"]
+    val_x, val_valid = rows["orig"], payload["valid"]
+    # One basis PER SAMPLE, shared down its column: a basis fitted across
+    # all samples spends its components on the between-sample spread,
+    # which flattens each window's internal variation to low contrast.
+    # Within a column the original and every reconstruction still share
+    # the basis, which is the comparison the figure exists for.
+    n = val_x.shape[0]
+    bases = [preview.basis(val_x[c:c + 1], val_valid[c:c + 1])
+             for c in range(n)]
     fig, axes = plt.subplots(len(rows), n, figsize=(1.3 * n, 1.45 * len(rows)),
                              constrained_layout=True)
     for r, (name, t) in enumerate(rows.items()):
-        rgb = preview.render(t, basis)
         for c in range(n):
-            axes[r, c].imshow(rgb[c]); axes[r, c].axis("off")
+            rgb = preview.render(t[c:c + 1], bases[c])
+            axes[r, c].imshow(rgb[0]); axes[r, c].axis("off")
         axes[r, 0].axis("on"); axes[r, 0].set_xticks([])
         axes[r, 0].set_yticks([]); axes[r, 0].set_ylabel(name, fontsize=7)
     fig.suptitle(f"step {step}", fontsize=9)
@@ -257,13 +275,12 @@ def stage1_recon_figure(model, source, val_s, sigma_max, step, n=6,
 
 
 @torch.no_grad()
-def error_hist_figure(model, source, val_s, step, tuples=None, mins=None,
-                      val_loc=None, max_tokens=1024, chunk=128,
-                      unit="source units"):
-    """Signed reconstruction-error histograms, one colored line per depth
-    tuple (default: the canonical R-D points): model (normalized) space
-    plus, when the source has a per-tile normalizer, the denormalized
-    source units (e.g. DEM metres)."""
+def error_hist_harvest(model, source, val_s, tuples=None, mins=None,
+                       val_loc=None, max_tokens=1024, chunk=128,
+                       cap=4_000_000):
+    """GPU phase of the signed-error histograms: decode every tuple and
+    keep subsampled error vectors (model space, and source units when
+    the source has a normalizer) on the CPU."""
     was_training = model.training
     model.eval()
     pts = ({tname(t): t for t in tuples} if tuples
@@ -283,14 +300,23 @@ def error_hist_figure(model, source, val_s, step, tuples=None, mins=None,
             if norm is not None:
                 absu[k].append((norm.denormalize(out, stats)
                                 - norm.denormalize(x, stats))[m].cpu())
+    if was_training:
+        model.train()
+    sub = lambda d: {k: _subsample(torch.cat(v), cap) for k, v in d.items()}
+    return {"rel": sub(rel), "absu": sub(absu) if absu is not None else None}
+
+
+def error_hist_render(payload, step, unit="source units"):
+    """CPU phase: histograms from a harvest payload."""
+    rel, absu = payload["rel"], payload["absu"]
     panels = [("model space (per-tile normalized)", rel)]
     if absu is not None:
         panels.append((unit, absu))
-    colors = plt.cm.viridis(np.linspace(0.1, 0.9, len(pts)))
+    colors = plt.cm.viridis(np.linspace(0.1, 0.9, len(rel)))
     fig, axes = plt.subplots(1, len(panels), figsize=(5.2 * len(panels), 3.6),
                              constrained_layout=True, squeeze=False)
     for ax, (name, errs) in zip(axes[0], panels):
-        es = {k: torch.cat(v).numpy() for k, v in errs.items()}
+        es = {k: v.numpy() for k, v in errs.items()}
         lim = max(np.quantile(np.abs(e), 0.999) for e in es.values())
         edges = np.linspace(-lim, lim, 202)
         for c, (k, e) in zip(colors, es.items()):
@@ -304,6 +330,96 @@ def error_hist_figure(model, source, val_s, step, tuples=None, mins=None,
         ax.set_xlabel("error (out - x)", fontsize=8)
         ax.legend(fontsize=6.5)
     fig.suptitle(f"recon error by depth tuple, step {step}", fontsize=9)
+    return fig
+
+
+def error_hist_figure(model, source, val_s, step, tuples=None, mins=None,
+                      val_loc=None, max_tokens=1024, chunk=128,
+                      unit="source units"):
+    """Signed reconstruction-error histograms, one colored line per depth
+    tuple (default: the canonical R-D points): model (normalized) space
+    plus, when the source has a per-tile normalizer, the denormalized
+    source units (e.g. DEM metres). One-call form of harvest + render."""
+    return error_hist_render(
+        error_hist_harvest(model, source, val_s, tuples=tuples, mins=mins,
+                           val_loc=val_loc, max_tokens=max_tokens,
+                           chunk=chunk),
+        step, unit=unit)
+
+
+def _subsample(t, cap):
+    """Uniform random subsample of a 1-D tensor down to `cap` elements.
+    Applied at harvest time: it bounds the CPU-side percentile cost (a
+    kthvalue over 78M elements takes seconds; over 4M, milliseconds)
+    and the memory a deferred report holds."""
+    if t.numel() <= cap:
+        return t
+    return t[torch.randint(0, t.numel(), (cap,), device=t.device)]
+
+
+def rd_err_harvest(model, source, val_s, tuples, px, side_bits=0.0,
+                   val_loc=None, max_tokens=512, chunk=128,
+                   cap=4_000_000):
+    """GPU phase of the physical-unit R-D figure: decode every tuple and
+    keep subsampled |error| vectors on the CPU. After this returns, the
+    model is not needed again."""
+    was_training = model.training
+    model.eval()
+    norm = source.normalizer(source.cfg)
+    errs = {tname(t): [] for t in tuples}
+    for i in range(0, min(max_tokens, val_s.shape[0]), chunk):
+        x, v = source.prep(val_s[i:i + chunk], val_s.device)
+        loc = val_loc[i:i + chunk] if val_loc is not None else None
+        _, cums = model.level_cumsums(x, loc=loc)
+        stats = source.last_stats()
+        for t in tuples:
+            out = model.eval_tuple(cums, t, x).float()
+            m = v.unsqueeze(1).expand_as(out)
+            e = (norm.denormalize(out, stats)
+                 - norm.denormalize(x, stats))[m]
+            errs[tname(t)].append(e.abs().cpu())
     if was_training:
         model.train()
+    bits = np.array([tuple_bits(model.specs, t, side_bits)
+                     for t in tuples]) / px
+    return {"errs": {k: _subsample(torch.cat(v), cap)
+                     for k, v in errs.items()},
+            "names": [tname(t) for t in tuples], "bits": bits}
+
+
+def rd_err_render(payload, step, unit="source units"):
+    """CPU phase: percentiles and the plot, from a harvest payload."""
+    bits = payload["bits"]
+    order = np.argsort(bits)
+
+    def _q(a, q):
+        return a.kthvalue(max(1, int(round(q * a.numel())))).values
+
+    series = {"MAE": lambda a: a.mean(),
+              "RMSE": lambda a: a.pow(2).mean().sqrt(),
+              "p90": lambda a: _q(a, 0.90), "p99": lambda a: _q(a, 0.99)}
+    fig, ax = plt.subplots(figsize=(6.5, 4.5), constrained_layout=True)
+    for name, fn in series.items():
+        y = [float(fn(payload["errs"][k])) for k in payload["names"]]
+        ax.plot(bits[order], np.asarray(y)[order], "o-", ms=4, lw=1.2,
+                label=name)
+    ax.set_yscale("log")
+    ax.set_xlabel("bits / pixel")
+    ax.set_ylabel(f"|error| ({unit})")
+    ax.grid(True, which="both", alpha=0.25)
+    ax.legend(fontsize=8)
+    ax.set_title(f"rate vs physical error, step {step}", fontsize=9)
     return fig
+
+
+def rd_err_figure(model, source, val_s, tuples, step, px, side_bits=0.0,
+                  unit="source units", val_loc=None, max_tokens=512,
+                  chunk=128):
+    """Rate vs error in the source's PHYSICAL unit, on one log axis:
+    MAE, RMSE, and the 90th and 99th percentiles of |error|, per depth
+    tuple. One-call form of harvest + render."""
+    return rd_err_render(
+        rd_err_harvest(model, source, val_s, tuples, px,
+                       side_bits=side_bits, val_loc=val_loc,
+                       max_tokens=max_tokens, chunk=chunk),
+        step, unit=unit)

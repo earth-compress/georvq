@@ -1,0 +1,21 @@
+# Third arm of the ERA5 t A/B: mean AND std transmitted, the full
+# per-window standardization DEM and S2 use. The maintainer's read is
+# that temperature is closer to those fields than to tessera's
+# embedding, where the std was measured to hurt
+# (lab/findings/stats-channel-is-per-field.md). Doubles the side
+# channel: 2 x 37 x 6 bits = 444 bits = 0.108 b/px at W=64, charged in
+# the R-D figures. Everything else matches era5_t64, so the three runs
+# (plain / mean / mean+std) differ only in the stats channel.
+inherit: era5_t64.yaml
+
+model:
+  stats_cond:
+    subtract_mean: true
+    cond_encoder: true
+    cond_decoder: true
+    use_std: true
+    std_floor: 0.05    # sigma, model space; against near-uniform windows
+    bits_per_band: 6
+
+log:
+  run_tag: era5_t64_scstd

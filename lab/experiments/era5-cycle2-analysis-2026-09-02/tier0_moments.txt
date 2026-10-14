@@ -1,0 +1,20 @@
+checkpoints/era5_t64_scstd/model_43k_analysis.pt
+  4096 held-out 64px windows; tier grids [1, 4, 16]
+
+         tuple    bits        rel        cos   (quantity: per-window MEAN)
+         4-0-0      36     0.0142    0.99988
+        10-0-0      90     0.0090    0.99995
+        20-0-0     180     0.0077    0.99996
+       20-20-0    3380     0.0039    0.99999
+      20-20-20   59700     0.0034    0.99999
+
+         tuple    bits        rel        cos   (quantity: per-window STD)
+         4-0-0      36     0.2339    0.97583
+        10-0-0      90     0.1986    0.98226
+        20-0-0     180     0.1864    0.98416
+       20-20-0    3380     0.0479    0.99903
+      20-20-20   59700     0.0186    0.99980
+
+for comparison, the dedicated moment coder (moment_rd, full store, 24k steps):
+        dim 64     128     0.1617    0.98529   mean block  (std block: rel 0.1788)
+        dim 64     256     0.1039    0.99379   mean block  (std block: rel 0.1658)

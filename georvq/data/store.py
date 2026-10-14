@@ -41,15 +41,41 @@ def geographic_split(index: pd.DataFrame, val_frac=0.04, cell_deg=10.0,
         index[is_val].reset_index(drop=True)
 
 
-def open_store(store_dir):
-    """ChipStore, or a live store when the manifest says so (currently
-    kind="live_dem": chips read on demand from GLO-30 COGs, no shards)."""
-    mpath = os.path.join(str(store_dir), "manifest.json")
+def open_store(store_dir, reader="auto"):
+    """ChipStore, or a live store that reads the source rasters directly.
+
+    Live stores copy no pixels: `kind="live_dem"` serves chips from the
+    GLO-30 COGs, `kind="era5"` serves hourly variable slices from a cube
+    zarr, and a Major-TOM Sentinel-2 root is served by `LiveS2Store`
+    straight from its GeoTIFFs. `reader` pins the choice when a run should
+    not depend on what happens to be on disk; "auto" detects.
+    """
+    d = str(store_dir)
+
+    def _looks_like_majortom_s2():
+        # iglob, not glob: stop at the FIRST hit. Enumerating every match
+        # here would walk 106k scene directories on every startup.
+        pat = os.path.join(d, "*", "*", "*", "B02.tif")
+        return next(glob.iglob(pat), None) is not None
+
+    if reader == "live_s2" or (
+            reader == "auto"
+            and not os.path.exists(os.path.join(d, "manifest.json"))
+            and _looks_like_majortom_s2()):
+        from georvq.data.live_s2 import LiveS2Store
+        return LiveS2Store(d)
+    if reader == "chipstore":
+        return ChipStore(d)
+    mpath = os.path.join(d, "manifest.json")
     if os.path.exists(mpath):
         with open(mpath) as f:
-            if json.load(f).get("kind") == "live_dem":
-                from georvq.data.live_dem import LiveDEMStore
-                return LiveDEMStore(store_dir)
+            kind = json.load(f).get("kind")
+        if kind == "live_dem":
+            from georvq.data.live_dem import LiveDEMStore
+            return LiveDEMStore(store_dir)
+        if kind == "era5":
+            from georvq.data.era5 import Era5Store
+            return Era5Store(store_dir)
     return ChipStore(store_dir)
 
 

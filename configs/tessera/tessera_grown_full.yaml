@@ -1,0 +1,72 @@
+# Capacity experiment: grow BOTH ends of the released Tessera codec and
+# train everything, from an initialisation that reproduces the release
+# exactly (max|diff| = 0.0 -- see scripts/grow_tessera_decoder.py).
+#
+# THE QUESTION. The decoder-only run that preceded this one held the
+# bitstream fixed and bought ~1-2% of the structural error back
+# (ccos distance 98.15% of the release at 20-20-9, 98.84% at full depth,
+# at step 20k of 40k). That is real but small, and it is bounded by what
+# a decoder can extract from latents it cannot influence. This run frees
+# the encoder as well, so the latents themselves can move.
+#
+# WHAT THAT COSTS. The cached bitstream is void: the index store was
+# built with the released encoder, and a trained encoder puts things
+# somewhere else. So the encoder runs every step and this is far slower
+# per window than the decode-only run was.
+#
+# CODEBOOKS TRAIN. Live EMA at the release's own decay, with dead-code
+# resets as the release had them -- the recipe that produced the shipped
+# model, applied to a grown one. FINDINGS warns that resets can destroy
+# warm-started structure; that is the risk this run accepts, and the
+# coarse tier's perplexity is the thing to watch for it.
+inherit: tessera_vq8_k256_statscond.yaml
+
+model:
+  # encoder: 14 -> 18 blocks, FFN x2 -> x3. Both function-preserving:
+  # norm_first makes a block with zeroed out_proj and linear2 an exact
+  # identity, and widened FFN hidden units are gated out of linear2.
+  ff_ratio: 3.0
+  tokenizer: {dim: 512, depth: 18}
+  # decoder: 12 -> 20 blocks, FFN x2 -> x3, head 128 -> 192. dim stays at
+  # 576 -- widening the residual stream cannot be function-preserving
+  # through mean-subtracting LayerNorm, and attention internals cannot
+  # widen without renaming nn.MultiheadAttention's parameters.
+  decoder: {dim: 576, depth: 20, heads: 8, head_feat: 192,
+            cls_bridge: true, ff_ratio: 3.0}
+  vq:
+    # NOT matured: the encoder is moving, so the books have to follow it.
+    # Maturing (resets off, EMA 0.9995) is right when warm-started books
+    # should barely drift; here drifting with the encoder is the job.
+    mature_warmstart: false
+    # NO VQ-free warmup. The base config carries warmup_steps: 20000,
+    # which is right when training from scratch and ruinous here: it
+    # trains an UNQUANTIZED autoencoder for the first 20k steps and then
+    # k-means-initialises the codebooks at step 20001, discarding exactly
+    # the released books this experiment is built on. Warm-started books
+    # need no init and must be live from step 1.
+    warmup_steps: 0
+
+train:
+  steps: 40000
+  # Measured on this exact model (bf16, grad_ckpt on): throughput
+  # saturates at ~230 windows/s from batch 256 up -- 128/256/512 give
+  # 201/219/230 at 8.2/14.1/25.9 GiB. 512 sees 20.5M windows over 40k
+  # steps, close to the 22.5M the decoder-only run saw, so the two
+  # experiments are comparable on data rather than only on step count.
+  batch_windows: 512
+  # No ramp. The base config quarters the batch for 5000 steps, which
+  # costs this run ~3.9M windows against the decoder-only run it is being
+  # compared with (18.6M vs 22.5M). A capacity comparison should differ
+  # in capacity, not in how much data each side saw.
+  batch_ramp: null
+  init_from: checkpoints/tessera_grown_full/init.pt
+  # Flat zero, then flat low. The experiment asks what capacity buys, so
+  # a decaying schedule would confound that with the schedule's shape.
+  # The lr0 phase is an assertion: the init is bit-identical to the
+  # release, so validation there must reproduce the release's numbers.
+  optim: {lr: 5.0e-5, wd: 0.01, warmup: 1, lr0_steps: 500,
+          schedule: constant}
+
+log:
+  run_tag: tessera_grown_full
+  wandb: true
