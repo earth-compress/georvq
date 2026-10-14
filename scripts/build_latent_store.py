@@ -13,7 +13,7 @@ Output layout (--out-dir):
     manifest.json     scales, encoder checkpoint + hash, geometry
 
 Usage:
-  python scripts/build_latent_store.py --gpu 1
+  python scripts/build_latent_store.py
 """
 from __future__ import annotations
 
@@ -47,7 +47,8 @@ def main():
     ap.add_argument("--ckpt", default="checkpoints/dem128_stage1_live/model.pt")
     ap.add_argument("--store", default="/data/georvq-stores/copdem_live")
     ap.add_argument("--out-dir", default="/data/georvq-stores/copdem_lat128")
-    ap.add_argument("--gpu", type=int, default=1)
+    ap.add_argument("--device", default="cuda",
+                    help="torch device; cuda is the card Slurm allocated")
     ap.add_argument("--batch-chips", type=int, default=384)   # x9 windows
     ap.add_argument("--readers", type=int, default=8)
     ap.add_argument("--calib-chips", type=int, default=2000)
@@ -55,7 +56,7 @@ def main():
     ap.add_argument("--limit", type=int, default=None)
     args = ap.parse_args()
 
-    dev = torch.device(f"cuda:{args.gpu}")
+    dev = torch.device(args.device)
     model = from_checkpoint(args.ckpt, dev)
     source = model.source
     store = open_store(args.store)

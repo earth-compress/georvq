@@ -10,7 +10,7 @@ That is the point of the experiment: `docs/BITSTREAM.md` says decoder
 improvements are free, and this measures how much is actually there.
 
     python scripts/train_decoder_indexed.py --init checkpoints/.../init.pt \
-        --idx-store /data/georvq-stores/tessera_idx64 --gpu 0
+        --idx-store /data/georvq-stores/tessera_idx64
 """
 from __future__ import annotations
 
@@ -54,7 +54,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--init", required=True, help="grown checkpoint")
     ap.add_argument("--idx-store", required=True)
-    ap.add_argument("--gpu", type=int, default=0)
+    ap.add_argument("--device", default="cuda",
+                    help="torch device; cuda is the card Slurm allocated")
     ap.add_argument("--steps", type=int, default=40000)
     ap.add_argument("--batch", type=int, default=256)
     ap.add_argument("--lr", type=float, default=5e-5)
@@ -87,7 +88,7 @@ def main():
     args = ap.parse_args()
 
     seed_all(0)
-    dev = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available()
+    dev = torch.device(args.device if torch.cuda.is_available()
                        else "cpu")
     model = from_checkpoint(args.init, dev)
     cfg = model.full_config

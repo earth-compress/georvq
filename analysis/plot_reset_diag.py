@@ -5,8 +5,8 @@ reset/* scalars, which wandb renders as ~168 unreadable single-value
 panels. This pulls them back down and draws the figure that should have
 been logged in the first place -- one page per reset event.
 
-  python analysis/plot_reset_diag.py tessera_w32hd_e2e_tree
-  python analysis/plot_reset_diag.py <run_id> --out reports/
+  python analysis/plot_reset_diag.py tessera_w32hd_e2e_tree --project <entity>/georvq
+  python analysis/plot_reset_diag.py <run_id> --project <entity>/georvq --out reports/
 """
 from __future__ import annotations
 
@@ -21,13 +21,12 @@ import matplotlib.pyplot as plt
 from georvq.config import load_config
 from georvq.train.figures import reset_figure
 
-PROJECT = "alifrancis/georvq"
-
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("run", help="wandb run id, or the run_tag/display name")
-    ap.add_argument("--project", default=PROJECT)
+    ap.add_argument("--project", required=True,
+                    help="wandb <entity>/<project> the runs were logged to")
     ap.add_argument("--config", default=None,
                     help="config yaml for tier specs (default: infer from "
                          "the run's own stored config)")

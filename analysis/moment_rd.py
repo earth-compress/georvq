@@ -183,7 +183,8 @@ def main():
     ap.add_argument("--win", type=int, default=64)
     ap.add_argument("--min-valid", type=float, default=0.9)
     ap.add_argument("--workers", type=int, default=8)
-    ap.add_argument("--gpu", type=int, default=1)
+    ap.add_argument("--device", default="cuda",
+                    help="torch device; cuda is the card Slurm allocated")
     ap.add_argument("--dims", default="16,32,64,128")
     ap.add_argument("--bits", default="32,64,128,256")
     ap.add_argument("--codes", type=int, default=256)
@@ -201,7 +202,7 @@ def main():
     ap.add_argument("--out", default="")
     args = ap.parse_args()
 
-    dev = torch.device(f"cuda:{args.gpu}")
+    dev = torch.device(args.device)
     M, S, Mv, Sv = load_or_collect(args.store, args.cache, args.chips,
                                    args.val_chips, args.win, args.min_valid,
                                    args.workers)
