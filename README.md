@@ -196,6 +196,13 @@ release, `tests/test_compat.py` for older bundles) verify that released
 weights still decode bit-faithfully; they self-skip where the bundle
 isn't present (`GEORVQ_AE_V2_BUNDLE`, `GEORVQ_AE_BUNDLE`).
 
+## Funding
+
+This work was funded by the Advanced Research and Invention Agency
+(ARIA), as part of the Earth Compress project, a partnership between
+Asterisk Laboratories Co-operative Ltd. and the National Oceanography
+Centre.
+
 ## Licence
 
 The code is licensed under the Apache License 2.0 (`LICENSE`), as are the
