@@ -35,9 +35,10 @@ Note: this information only makes sense if you are familiar with the georvq code
   holding a different codec refuses to decode it.
 - Backends: PyTorch, CPU or CUDA. Decoder passes run in bf16 on CUDA by
   default (`--fp32` or `bf16=False` turns this off) and in fp32 on CPU;
-  encoder passes always run in fp32. Torch-free decode runs through ONNX
-  Runtime (`backend="onnx"`, or `--backend onnx` on the command line);
-  its output matches torch to about 1e-6.
+  encoder passes always run in fp32. Decode can also run through ONNX
+  Runtime when asked for (`backend="onnx"`, or `--backend onnx` on the
+  command line; the `[onnx]` extra, onnxruntime 1.19 or later); its
+  output matches torch to about 1e-6.
 
 ## Data Format
 
@@ -83,18 +84,26 @@ The main principle being followed in the reader's design is to mirror the behavi
 `georvq.ae.open(path_or_url, ...)` returns a lazy-loaded read-only dataset with the
 source tile's georeferencing and shape: `crs`, `transform`, `width`,
 `height`, `count` (64), `dtypes` (int8), `nodata` (-128), `profile`,
-`tags()`, `descriptions`, `block_shapes` and `block_windows()`. The
+`meta`, `tags()`, `descriptions`, `block_shapes`, `block_windows()`,
+`bounds`, `res`, and rasterio's window helpers (`index`, `xy`,
+`window`). `driver` is "GeoRVQParquet", while `profile` and `meta` carry
+the source's driver ("GTiff"), so either can be passed to
+`rasterio.open(..., "w")`. The
 AEF source tiles store their rows bottom-up; the file codes them
-north-up and `read` returns them in the source's own order, so code
+north-up and `read`, `read_masks` and `dataset_mask` return them in the
+source's own order, with rasterio's arguments and results, so code
 written against the rasterio dataset of the source tile can read the
-file instead. Invalid pixels come back as -128 exactly, from the
+file instead. Two differences remain: the file has no overviews, so a
+decimated read samples the full-resolution decode, and there is no
+`colorinterp`. Invalid pixels come back as -128 exactly, from the
 stored mask. The file's header names the release that decodes it, and
-`open` finds that release's bundle by its `bitstream_id`: in a local
-cache (`~/.cache/georvq/bundles/<bitstream_id>/`), at `GEORVQ_AE_BUNDLE`,
-or by downloading it from the `earth-compress` organisation on Hugging
+`open` finds that release's bundle by its `bitstream_id`: at
+`GEORVQ_AE_BUNDLE`, in a local cache
+(`~/.cache/georvq/bundles/<bitstream_id>/`), or by downloading it from
+the `earth-compress` organisation on Hugging
 Face ([`earth-compress/georvq-ae-v2`](https://huggingface.co/earth-compress/georvq-ae-v2)). A bundle whose ids do not match the file is
-refused. The device defaults to CUDA when available, and the backend to
-torch when installed, otherwise ONNX Runtime.
+refused, including one at `GEORVQ_AE_BUNDLE`. The device defaults to
+CUDA when available, and the backend to torch.
 
 ```python
 import georvq.ae
@@ -103,7 +112,8 @@ ds = georvq.ae.open("annual/2021/44N/<stem>.georvq.parquet")
 w = ((0, 1024), (0, 1024))                            # rows, cols in source pixels
 a = ds.read(window=w, quality="8-8-2")                # (64, 1024, 1024) int8
 b = ds.read(3, window=w, quality="p99<=0.02")         # band 3 only, 1-based
-m = ds.read_masks(window=w)
+m = ds.read_masks(window=w)                           # (64, 1024, 1024) uint8, 255 valid
+v = ds.dataset_mask(window=w)                         # (1024, 1024) uint8
 ```
 
 `window` takes a rasterio `Window` or `((row0, row1), (col0, col1))` in
@@ -114,7 +124,10 @@ rung whose encode-time statistic meets it, and to full depth where
 none does; it costs one extra read of the quality rows. The statistics
 are `1 - cos` of the decoded float field against the prepared source,
 over the window's valid pixels, measured with the decode precision the
-header records.
+header records. They are stored log-quantised (32 codes per decade, a
+step of about 7.5%) and the bound is applied to the stored value, so a
+bound is met to within half a step: `p99<=0.02` admits windows whose
+measured p99 is up to about 0.0198.
 
 The command line:
 
@@ -133,7 +146,11 @@ source's profile, block size, compression, tags and band descriptions;
 COG layout and overviews are not reproduced. `encode` writes
 `{stem}.georvq.parquet` into the output directory (the current one by
 default), and `--no-quality` leaves out the quality column, which
-otherwise costs one decode per rung at encode time.
+otherwise costs one decode per rung at encode time. `--source` sets the
+path or URL of the source tile that the header records (by default the
+`src` argument as given, and `encode` warns when that is a local
+absolute path). `--release`, `--release-uri` and `--revision` set the
+release record in the header that readers use to find the bundle.
 
 ## Rate ladder
 
@@ -145,7 +162,7 @@ windows through the training run's own validation harness, with the
 coded mean at both ends. "Real tiles" is the int8 reconstruction
 against the int8 source over the valid pixels of 16 held-out 8192 px
 tiles (2018-2025, latitudes -75 to 75, valid fraction 0.51 to 1.00),
-pixel-weighted; at full depth the tiles range from 0.9963 to 0.9995.
+pixel-weighted; at full depth the tiles range from 0.9963 to 0.9998.
 
 | rung | bits/window | b/px | val cos | real tiles |
 |---|---|---|---|---|
@@ -173,7 +190,7 @@ and a `bundle.json` holding the ids.
 ```bash
 git clone <this repo> && cd georvq
 pip install -e .                    # decode, encode and reconstruct
-pip install -e ".[onnx]"            # adds torch-free decode
+pip install -e ".[onnx]"            # adds ONNX Runtime decode
 hf download earth-compress/georvq-ae-v2 \
     --local-dir georvq-ae-v2
 ```
