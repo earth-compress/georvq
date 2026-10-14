@@ -83,7 +83,6 @@ re-asked as one-off queries every time.
 
 Diagnostics that only report whether a run is healthy, rather than what
 to build, were not kept. Their conclusions are in the ledger. The
-cached-latent DEM fitting chain is still in `scripts/`
-(`build_latent_store.py`, `fit_codebooks.py`, `train_decoder_cached.py`,
-all defaulting to the `/data/georvq-stores/copdem_lat128` latent store);
-whether it stays there is an open question for the maintainer.
+cached-latent DEM fitting chain (`build_latent_store.py`,
+`fit_codebooks.py`, `train_decoder_cached.py`) was removed from
+`scripts/` and remains in the git history.
