@@ -1,7 +1,7 @@
-# The georvq GeoParquet layout (draft for review)
+# The georvq GeoParquet layout
 
-**Status: placeholder.** This data standard is a deliberately simple
-format, written to ship the AE v2 release. It is expected to be
+**Note:** this data standard is a simple, but likely not long-term
+format written to ship the AE v2 release. It is expected to be
 replaced during the Earth Compress project.
 
 A georvq GeoParquet file holds one source data product compressed by a
