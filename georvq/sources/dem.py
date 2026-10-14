@@ -23,6 +23,8 @@ class DEMNormalizer:
     """Per-window masked mean/std over valid pixels: normalize before
     encode, restore after decode. `stats_vector` is [mean, std] (B, 2)."""
 
+    per_sample = True       # denormalize needs the batch's own stats
+
     def normalize(self, x, valid):
         vm = valid.unsqueeze(1).float()
         n = vm.sum((2, 3)).clamp_min(1)
@@ -71,7 +73,8 @@ class DEMSource(Source):
         return DenseHead(in_dim, grid=grid, p=p,
                          bands=model_cfg.bands,
                          head_feat=model_cfg.decoder.head_feat,
-                         normalize=False)
+                         normalize=False,
+                         dw=model_cfg.decoder.head_dw)
 
     def normalizer(self, model_cfg):
         return self._norm

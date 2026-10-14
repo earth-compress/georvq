@@ -1,15 +1,12 @@
 """What a run reports: metrics, baselines, figures — declared per source.
 
 Invariant 6 (`docs/OVERVIEW.md`) says sources own all data-specific
-behavior. Reporting was the last place that wasn't true. `validate()` read
-`recon_stats(...)[1]["cos"]` by name, scored a unit-norm block-mean
-baseline, and drew a 3-component PCA-RGB contact sheet — three statements
-about a many-band unit-norm embedding field, applied to every source that
-came after it. The costs were concrete: a single-band elevation source had
-to publish R² under the key `cos` to keep the shared logging path working,
-and PCA-RGB cannot render one band at all.
+behavior, and reporting is part of that. Cosine, a unit-norm block-mean
+baseline and a 3-component PCA-RGB preview describe a many-band unit-norm
+embedding field; a single-band elevation source needs R² and a grayscale
+preview instead.
 
-So a source declares its reporting surface here, and the shared stack reads
+A source declares its reporting surface here, and the shared stack reads
 the declaration instead of a hardcoded key:
 
 - `quality` — the headline metric. It names the wandb scalars, labels the
