@@ -111,22 +111,45 @@ def from_windows(xw, grid, window=64):
               .reshape(B, C, gh * window, gw * window))
 
 
-def encode_tile(release, embedding, scale=None, batch=64, refine=None):
-    """Encode a whole tile. Returns (packets, grid) for `decode_tile`."""
-    x, valid = prep(embedding, scale, device=release.codec.device)
+class TileGrid(tuple):
+    """The (B, gh, gw) window grid `encode_tile` returns, carrying the
+    tile's pixel validity per window as `valid` ((N, w, w) bool), which
+    `decode_tile` needs to restore nodata."""
+
+    def __new__(cls, grid, valid=None):
+        g = super().__new__(cls, grid)
+        g.valid = valid
+        return g
+
+
+def encode_tile(release, embedding, scale=None, batch=64, refine=None,
+                channels_last=None):
+    """Encode a whole tile. Returns (packets, grid) for `decode_tile`;
+    `grid` carries the tile's validity. channels_last: as for `prep`."""
+    x, valid = prep(embedding, scale, device=release.codec.device,
+                    channels_last=channels_last)
     xw, vw, grid = to_windows(x, valid, release.window)
     packets = []
     for i in range(0, xw.shape[0], batch):
         packets += release.encode(xw[i:i + batch], valid=vw[i:i + batch],
                                   refine=refine)
-    return packets, grid
+    return packets, TileGrid(grid, vw)
 
 
-def decode_tile(release, packets, grid, depths=None, batch=64):
-    """Decode what `encode_tile` produced, back to (B, bands, H, W)."""
+def decode_tile(release, packets, grid, depths=None, batch=64, valid=None):
+    """Decode what `encode_tile` produced, back to (B, bands, H, W).
+
+    Pixels that were nodata come back as zero vectors. `valid` ((N, w, w)
+    per window) defaults to the validity `grid` carries; a grid without
+    it (a plain tuple) decodes every pixel, nodata ones as the window
+    mean."""
+    if valid is None:
+        valid = getattr(grid, "valid", None)
     outs = []
     for i in range(0, len(packets), batch):
-        outs.append(release.decode(packets[i:i + batch], depths=depths))
+        v = None if valid is None else valid[i:i + batch]
+        outs.append(release.decode(packets[i:i + batch], depths=depths,
+                                   valid=v))
     return from_windows(torch.cat(outs), grid, release.window)
 
 

@@ -121,3 +121,44 @@ def test_prep_refuses_to_guess_an_ambiguous_layout():
     with pytest.raises(ValueError, match="cannot tell the layout"):
         io.prep(amb, np.ones((64, 128), np.float32))
     io.prep(amb, np.ones((64, 128), np.float32), channels_last=False)
+
+
+@pytest.fixture(scope="module")
+def tiny_release(tmp_path_factory):
+    from tests.test_tessera_release import _tiny_bundle
+    from georvq.tessera import release as rel
+    torch.manual_seed(0)
+    return rel.load(str(_tiny_bundle(tmp_path_factory.mktemp("tess"))))
+
+
+def _field(c=8, h=32, w=96, seed=0):
+    g = np.random.default_rng(seed)
+    x = g.normal(size=(c, h, w)).astype(np.float32) * 0.1
+    x[:, :, 64:] = 0                       # nodata: all-zero vectors
+    return x
+
+
+def test_decode_tile_restores_nodata(tiny_release):
+    R = tiny_release
+    x = _field()
+    packets, grid = io.encode_tile(R, x)
+    assert tuple(grid) == (1, 32 // R.window, 96 // R.window)
+    out = io.decode_tile(R, packets, grid)
+    assert (out[0, :, :, 64:] == 0).all()
+    assert (out[0, :, :, :64].abs().sum(0) > 0).all()
+    # a plain tuple grid carries no validity: nodata decodes as the mean
+    plain = io.decode_tile(R, packets, tuple(grid))
+    assert plain[0, :, :, 64:].abs().max() > 0
+    assert torch.equal(plain[0, :, :, :64], out[0, :, :, :64])
+    assert torch.equal(io.decode_tile(R, packets, tuple(grid), valid=grid.valid),
+                       out)
+
+
+def test_encode_tile_takes_channels_last(tiny_release):
+    R = tiny_release
+    x = _field(w=128)                      # (8, 32, 128): W equals 128 bands
+    pk, grid = io.encode_tile(R, x, channels_last=False)
+    pk_t, grid_t = io.encode_tile(R, np.ascontiguousarray(x.transpose(1, 2, 0)),
+                                  channels_last=True)
+    assert tuple(grid) == tuple(grid_t)
+    assert torch.equal(io.decode_tile(R, pk, grid), io.decode_tile(R, pk_t, grid_t))
