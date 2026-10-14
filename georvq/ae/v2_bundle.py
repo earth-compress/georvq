@@ -121,6 +121,20 @@ def _numpy(t):
     return t.numpy()
 
 
+def shippable_config(d):
+    """A config dump without the paths of the machine it was trained on:
+    absolute path strings become "" and list entries that start with one
+    are dropped. Building the model reads none of these fields."""
+    if isinstance(d, dict):
+        return {k: shippable_config(v) for k, v in d.items()}
+    if isinstance(d, list):
+        return [shippable_config(v) for v in d
+                if not (isinstance(v, str) and v.startswith("/"))]
+    if isinstance(d, str) and d.startswith("/"):
+        return ""
+    return d
+
+
 def write_bundle(out_dir, model, cfg, channel, source=None, notes="",
                  onnx=False) -> dict:
     """Write a v2 bundle for a loaded model and its mean channel. Returns
@@ -146,7 +160,7 @@ def write_bundle(out_dir, model, cfg, channel, source=None, notes="",
     np.savez(os.path.join(out_dir, "codebooks.npz"), **books)
     channel.save(os.path.join(out_dir, "mean_channel.npz"))
     with open(os.path.join(out_dir, "config.json"), "w") as f:
-        json.dump(cfg.model_dump(mode="json"), f, indent=1)
+        json.dump(shippable_config(cfg.model_dump(mode="json")), f, indent=1)
     files = list(FILES)
     if onnx:
         export_onnx(codec, os.path.join(out_dir, ONNX_DIR))
