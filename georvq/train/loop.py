@@ -25,7 +25,6 @@ from georvq.factory import build_model
 from georvq.model.codec import (monotone_tuples, path_tuples,
                                 sample_monotone_depths,
                                 sample_path_depths, tuple_bits)
-from georvq.model.vq import kmeans_init_rvq
 from georvq.model.vqinit import residual_init_rvq
 from georvq.repro import (run_metadata, save_checkpoint, seed_all,
                           write_resolved_config)

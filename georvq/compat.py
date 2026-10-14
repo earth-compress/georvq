@@ -7,8 +7,6 @@ trained models load strict — no retraining needed.
 """
 from __future__ import annotations
 
-import torch
-
 from georvq.config import (Config, RateConfig, SigmaConfig)
 from georvq.factory import build_model
 
@@ -37,8 +35,8 @@ def config_from_legacy_args(a: dict) -> Config:
                         "supported (only ViT + attention-decoder models)")
     if a.get("cascade") or a.get("satclip_select"):
         raise NotImplementedError(
-            "legacy cascade/select checkpoints: conditioning translation "
-            "lands with georvq.model.conditioning")
+            "legacy cascade/select checkpoints are not supported: their "
+            "conditioning arguments have no translation to georvq configs")
 
     stage1 = "sigma_max" in a
     model = {
@@ -153,7 +151,8 @@ def remap_state_dict(sd: dict, strict=True) -> dict:
 
 def from_legacy_checkpoint(path, device="cpu"):
     """Legacy checkpoint -> (georvq model in eval mode, Config)."""
-    ck = torch.load(path, map_location=device, weights_only=False)
+    from georvq.repro import load_checkpoint
+    ck = load_checkpoint(path, map_location=device)
     cfg = config_from_legacy_args(ck["args"])
     model = build_model(cfg, device)
     model.load_state_dict(remap_state_dict(ck["model"]), strict=True)

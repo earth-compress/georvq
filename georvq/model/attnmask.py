@@ -24,7 +24,6 @@ def build_local_mask(specs, window, radii):
     """specs: tier specs (grid, cells); window: px; radii: per-tier cell
     radius or None (global). Returns bool (N, N), True = masked."""
     assert len(radii) == len(specs), "one radius (or null) per tier"
-    n = sum(sp.cells for sp in specs)
     # per-token spatial center in px, or None for global-tier tokens
     centers, r_px, tier_of = [], [], []
     for ti, (sp, r) in enumerate(zip(specs, radii)):

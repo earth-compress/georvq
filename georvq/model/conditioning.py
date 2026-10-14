@@ -206,7 +206,8 @@ class CodebookSelector(nn.Module):
         specs = model.specs
         n = min(diag_windows, x.shape[0])
         x = x[:n]; loc = loc[:n]; valid = valid[:n]
-        zs = model.encode_levels(x)
+        st = model._stats_of(x, valid)
+        zs = model.encode_levels(x, st, valid)
         B = x.shape[0]
         scores = self(loc)
         out = {}
@@ -251,8 +252,8 @@ class CodebookSelector(nn.Module):
             zq_u.append(torch.stack(pu, -2).sum(-2))
         Lf = torch.tensor([[sp.depth for sp in specs]],
                           device=x.device).expand(B, -1)
-        og = model.decode(zq_g, Lf).float()
-        ou = model.decode(zq_u, Lf).float()
+        og = model.decode(zq_g, Lf, st, valid).float()
+        ou = model.decode(zq_u, Lf, st, valid).float()
         out["sel_gated_cos"] = (og * x).sum(1)[valid].mean().item()
         out["sel_ungated_cos"] = (ou * x).sum(1)[valid].mean().item()
         return out
