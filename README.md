@@ -206,12 +206,11 @@ self-skip where the bundle isn't present (`GEORVQ_AE_V2_BUNDLE`,
 `GEORVQ_AE_BUNDLE`, `GEORVQ_TESSERA_BUNDLE`). The recorded hashes hold
 on torch 2.10 or later with numpy 2; older versions give different codes.
 
-## Funding
+## Development
 
-This work was funded by the Advanced Research and Invention Agency
-(ARIA), as part of the Earth Compress project, a partnership between
-Asterisk Laboratories Co-operative Ltd. and the National Oceanography
-Centre.
+georvq is developed by Asterisk Laboratories Co-operative Ltd. (Asterisk
+Labs) as part of the Earth Compress project, a partnership between
+Asterisk Labs and the National Oceanography Centre.
 
 <p>
   <a href="https://asterisk.coop">
@@ -221,6 +220,11 @@ Centre.
     </picture>
   </a>
 </p>
+
+## Funding
+
+This work was funded by the Advanced Research and Invention Agency
+(ARIA).
 
 ## Licence
 
