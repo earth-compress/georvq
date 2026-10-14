@@ -1,0 +1,85 @@
+# A single from-scratch run that reproduces the recipe of the AE v2
+# release (bitstream f6ad2ff121a473df, weights ownk_sc4_step80000.pt).
+# Those weights came from the ownk warm-start chain, which is not in the
+# repository:
+#   sc2 (job 784): from scratch, 5,000 steps at batch 256 inside the
+#     unquantized warmup, saved at step 5000;
+#   sc3 (job 789): from that checkpoint at batch 2048, ema_decay 0.998,
+#     7,500 more warmup steps, residual tree init at step 7501, stopped
+#     at 42,500 of a planned 72,500;
+#   sc4 (job 809): from sc3's step 42500 on two GPUs (global batch 2048,
+#     EMA books summed across ranks every step, so the per-step recipe
+#     was sc3's), fresh AdamW at peak lr 5e-5, stopped at 80,000 of a
+#     planned 100,000.
+# This run is expected to arrive at a similar model, not the same weights.
+#
+# STEPS. 5,000 at 256 + 42,500 + 80,000 at 2048 = 127,500 steps, the
+# chain's 252M windows (123,125 steps at 2048). batch_ramp gives the
+# 256-window opening and warmup_steps 12,500 puts the codebook fit where
+# the chain had it (5,000 + 7,500).
+#
+# SCHEDULE. The chain's two AdamW restarts and two cosines (1.5e-4 over
+# 72.5k, then 5e-5 over 100k, each stopped early) become one cosine at
+# 1.5e-4 over the whole run. The chain ended at lr 4.8e-6; this one ends
+# at 0. Dead-code resets stop at 90% of the run (reset_freeze_frac); in
+# the chain they never stopped, but sc4's resets revived no codes.
+#
+# MEAN. stats_cond is trained against the exact window mean; bits_per_band
+# 6 is accounting only. The release codes the mean with an RVQ-PCA channel
+# (440 bits) fitted after training by scripts/fit_ae_mean_channel.py,
+# which reads only the store, so the released mean_channel.npz also fits
+# a model from this run.
+#
+# LAUNCH. One A100 80GB, on which sc3 trained batch 2048. The 16,000-slot
+# pool is 94 GiB of host RAM; sc3 ran 45 h under --mem=160G with this
+# pool. sc3 trained at 549 windows/s once quantized (3.73 s/step) and 607
+# in the warmup, so the run takes about 128 h:
+#   sbatch --gpus=1 --cpus-per-task=8 --mem=160G --time=6-00:00:00 \
+#       --signal=B:USR1@300 job.sbatch
+# with the job script ending in
+#   exec georvq-train -c configs/ae/ae_v2.yaml
+# so that the batch shell's SIGUSR1 reaches the trainer, which then saves
+# checkpoints/ae_v2/model.pt and exits. Continue with the same command
+# and train.resume=checkpoints/ae_v2/model.pt.
+inherit: pyr64.yaml
+
+data:
+  pool:
+    size: 16000
+
+model:
+  tiers: ["1:256:2048:8", "4:192:8192:8", "16:64:16384:8"]
+  depth_sampling: path
+  min_depths: [2, 0, 0]
+  full_frac: 0.15
+  stats_cond:
+    subtract_mean: true
+    cond_encoder: true
+    cond_decoder: true
+    bits_per_band: 6
+  vq:
+    commit_weight: 0.25
+    dead_threshold: 0.000625
+    ema_decay: 0.998
+    bf16_scores: true
+    skip_masked: true
+    warmup_steps: 12500
+    kmeans_sample: 32768
+    init_mode: tree
+    init_per_code: 1000
+    reset_mode: split
+    book_bits: 8
+    passthrough_frac: 0.15
+
+train:
+  steps: 127500
+  batch_windows: 2048
+  batch_ramp: {until: 5000, divisor: 8}
+  optim: {lr: 1.5e-4, wd: 0.01, warmup: 1000, lr0_steps: 100}
+  save_interval: 2500
+
+eval:
+  recon_tuples: ["8-0-0", "8-1-0", "8-8-0", "8-8-2", "8-8-8"]
+
+log:
+  run_tag: ae_v2
