@@ -10,6 +10,9 @@ tone + individual structure) plus a per-pixel all-channel cosine-similarity
 quality map on a fixed scale. The rate sweep merges the first checkpoint's
 full operating range with any further checkpoint's high-bitrate tail, and
 animates it over the styled compression bar with end pauses.
+
+Imported by the GIF scripts beside it, which put this directory on
+sys.path; `style` is the sibling module.
 """
 from __future__ import annotations
 
@@ -24,10 +27,9 @@ from georvq.eval.codec_ab import load_codec
 from georvq.eval.extract import dequant_np, l2norm_np
 from georvq.model.codec import tuple_bits
 from georvq.sources.ae import dequant
-from georvq.viz.style import (COS_CMAP, FRAME_MS, HOLD_MS, MUTED, TEXT,
-                              apply_style, axes_center, compression_bar,
-                              cos_colorbar, frame_axes, save_gif,
-                              set_bar_ratio)
+from style import (COS_CMAP, FRAME_MS, HOLD_MS, MUTED, TEXT, apply_style,
+                   axes_center, compression_bar, cos_colorbar, frame_axes,
+                   save_gif, set_bar_ratio)
 
 QUADS = [(0, 0), (0, 1), (1, 0), (1, 1)]
 GROUPS = [(0, 1, 2), (3, 4, 5)]
