@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,7 +8,8 @@ version = "0.1.0"
 description = "Pyramidal residual-VQ compression for geospatial datasets: variable-rate matryoshka codecs with learned entropy models"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE", "LICENSES/*"]
 # The base install is the decode path: georvq.inference, the release
 # layers (georvq.ae, georvq.tessera), georvq.factory/model/sources.
 # tests/test_install_boundary.py checks that it imports and runs without

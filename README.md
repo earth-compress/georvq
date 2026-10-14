@@ -195,3 +195,15 @@ The golden decode tests (`tests/test_ae_v2_bundle.py` for the AlphaEarth
 release, `tests/test_compat.py` for older bundles) verify that released
 weights still decode bit-faithfully; they self-skip where the bundle
 isn't present (`GEORVQ_AE_V2_BUNDLE`, `GEORVQ_AE_BUNDLE`).
+
+## Licence
+
+The code is licensed under the Apache License 2.0 (`LICENSE`), as are the
+model weights on Hugging Face. A few files are derived from third-party
+datasets and carry those datasets' terms instead: test fixtures and
+notebook outputs from AlphaEarth (CC-BY 4.0) and TESSERA (CC-BY-SA 4.0),
+a PCA basis fitted on Major TOM Core-S2L1C (CC-BY-SA 4.0), and ERA5
+statistics (CC-BY 4.0). `NOTICE` lists each file with its attribution;
+the licence texts are in `LICENSES/`. Data encoded or decoded with the AE
+codec is derived from the AlphaEarth dataset and carries its CC-BY 4.0
+licence and attribution.
