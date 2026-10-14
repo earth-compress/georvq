@@ -89,27 +89,18 @@ class Source:
 
 
 def get_source(name: str, model_cfg) -> Source:
-    """Look up a `Source` adapter by its config name.
-
-    S2 is imported lazily and skipped if its optional dependencies are
-    absent, so a missing extra narrows the available sources rather than
-    breaking the import of every other one.
-    """
+    """Look up a `Source` adapter by its config name."""
     from georvq.sources.ae import AESource
     from georvq.sources.tessera import TesseraSource
     from georvq.sources.dem import DEMSource
+    from georvq.sources.s2 import S2Source
     # "era5:<var>" carries the variable in the name so the adapter can
     # pick that variable's standardization moments
     if name.startswith("era5:"):
         from georvq.sources.era5 import Era5Source
         return Era5Source(model_cfg, var=name.split(":", 1)[1])
     SOURCES = {"ae": AESource, "tessera": TesseraSource,
-               "dem": DEMSource}
-    try:
-        from georvq.sources.s2 import S2Source
-        SOURCES["s2"] = S2Source
-    except ImportError:
-        pass
+               "dem": DEMSource, "s2": S2Source}
     if name not in SOURCES:
         raise KeyError(f"unknown data source {name!r}; have {sorted(SOURCES)}")
     return SOURCES[name](model_cfg)

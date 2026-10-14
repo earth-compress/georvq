@@ -21,6 +21,7 @@ from georvq.data.pool import fixed_val_tokens
 from georvq.data.store import ChipStore
 from georvq.model.location import (build_base, build_location_table,
                                    get_location_encoder)
+from georvq.sources.prep import prep_of
 
 
 def load_encoder(path, device):
@@ -43,7 +44,7 @@ def collect_pairs(store, rows, model, enc_loc, device, per_chip, max_chips,
                                   max_tokens=10**9, sat_table=table.cpu())
     zs = []
     for i in range(0, toks.shape[0], batch):
-        x, _ = model.source.prep(toks[i:i + batch], device)
+        x, _ = prep_of(model)(toks[i:i + batch], {}, device)[:2]
         zs.append(model.encode_levels(x)[0][:, 0].float())   # coarse: 1 cell
     return torch.cat(zs), locs.to(device)
 
@@ -53,7 +54,8 @@ def main():
     ap.add_argument("--store-dir", required=True)
     ap.add_argument("--encoder-ckpt", required=True)
     ap.add_argument("--out", default="checkpoints/location_prior/base.pt")
-    ap.add_argument("--gpu", type=int, default=0)
+    ap.add_argument("--device", default="cuda",
+                    help="torch device; cuda is the card Slurm allocated")
     ap.add_argument("--encoder", choices=["satclip", "sphharm"],
                     default="satclip")
     ap.add_argument("--degree", type=int, default=40,
@@ -73,8 +75,7 @@ def main():
     ap.add_argument("--eval-every", type=int, default=100)
     ap.add_argument("--patience", type=int, default=15)
     args = ap.parse_args()
-    device = torch.device(f"cuda:{args.gpu}"
-                          if torch.cuda.is_available() and args.gpu >= 0
+    device = torch.device(args.device if torch.cuda.is_available()
                           else "cpu")
     torch.set_float32_matmul_precision("high")
 

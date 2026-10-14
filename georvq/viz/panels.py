@@ -1,4 +1,8 @@
-"""Variable-compression GIF panels for embedding-field codecs.
+"""Variable-compression GIF panels for AlphaEarth codecs.
+
+AlphaEarth only: chips are int8 AEF windows, and `reconstruct_chips` and
+`reconstruct_slice` dequantize them with `sources.ae.dequant`, so another
+source's checkpoint gives meaningless panels.
 
 Renders original vs reconstruction under two PCA colourings (PCs 0-2 and
 PCs 3-5 as RGB; each a 50/50 blend of a global and a per-patch PCA -- canonical

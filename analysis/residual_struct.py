@@ -49,7 +49,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--ckpt",
                     default="checkpoints/tessera_vq8_split2/model_best.pt")
-    ap.add_argument("--gpu", type=int, default=1)
+    ap.add_argument("--device", default="cuda",
+                    help="torch device; cuda is the card Slurm allocated")
     ap.add_argument("--tokens", type=int, default=1024)
     ap.add_argument("--tuples", default="",
                     help="comma list like 8-0-0,8-8-0,8-8-8; "
@@ -60,7 +61,7 @@ def main():
     # graph alive for every chunk -- the whole forward across all windows
     # stays resident, which is what OOM'd at 62 GiB even at chunk size 8.
     torch.set_grad_enabled(False)
-    dev = torch.device(f"cuda:{args.gpu}")
+    dev = torch.device(args.device)
     m = from_checkpoint(args.ckpt, dev)
     cfg = m.full_config
     store = open_store(cfg.data.store_dir)
@@ -90,7 +91,7 @@ def main():
     for tup in tuples:
         X, R = [], []
         for i in range(0, val.shape[0], 8):
-            x, v = m.source.prep(val[i:i + 8], dev)
+            x, v = m.prep(val[i:i + 8], {}, dev)[:2]
             zs = m.encode_levels(x, m._stats_of(x, v), v)
             Ls = torch.tensor(tup, device=dev)[None].expand(x.shape[0], -1)
             zq, _, _ = m.quantize(zs, Ls)

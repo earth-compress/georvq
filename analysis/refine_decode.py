@@ -37,7 +37,8 @@ from georvq.metrics import centered_cos                        # noqa: E402
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--ckpt", required=True)
-    ap.add_argument("--gpu", type=int, default=0)
+    ap.add_argument("--device", default="cuda",
+                    help="torch device; cuda is the card Slurm allocated")
     ap.add_argument("--tier", type=int, default=2)
     ap.add_argument("--tokens", type=int, default=512)
     ap.add_argument("--fit-tokens", type=int, default=256)
@@ -47,7 +48,7 @@ def main():
 
     sys.stdout.reconfigure(line_buffering=True)
     torch.set_grad_enabled(False)
-    dev = torch.device(f"cuda:{args.gpu}")
+    dev = torch.device(args.device)
     m = from_checkpoint(args.ckpt, dev)
     cfg, W = m.full_config, m.full_config.model.window
     store = ChipStore(cfg.data.store_dir)
@@ -64,7 +65,7 @@ def main():
         """RVQ residual of `tier` at full depth, for a batch of raw tokens."""
         out = []
         for i in range(0, raw.shape[0], args.chunk):
-            x, v = m.source.prep(raw[i:i + args.chunk], dev)
+            x, v = m.prep(raw[i:i + args.chunk], {}, dev)[:2]
             x = x.float()
             st = m._stats_of(x, v)
             zs = m.encode_levels(x, st, v)
@@ -88,7 +89,7 @@ def main():
     ent = {L: [0.0, 0] for L in levels}
 
     for i in range(0, val_s.shape[0], args.chunk):
-        x, v = m.source.prep(val_s[i:i + args.chunk], dev)
+        x, v = m.prep(val_s[i:i + args.chunk], {}, dev)[:2]
         x = x.float()
         n = int(v.sum())
         if not n:

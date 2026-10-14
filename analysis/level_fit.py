@@ -69,7 +69,7 @@ def collect(m, cfg, pool, dev, n_batches, caps, tag=""):
             break
         s = pool.sample_batch(cfg.train.batch_windows, cfg.model.window,
                               align=cfg.data.pool.align_crops)
-        x, _ = m.source.prep(s, dev)
+        x, _ = m.prep(s, {}, dev)[:2]
         for i, z in enumerate(m.encode_levels(x)):
             if pos[i] >= caps[i]:
                 continue
@@ -234,7 +234,8 @@ def level_figure(hist, tier, level, out):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--ckpt", default="checkpoints/tessera_vq8_split2/model.pt")
-    ap.add_argument("--gpu", type=int, default=1)
+    ap.add_argument("--device", default="cuda",
+                    help="torch device; cuda is the card Slurm allocated")
     ap.add_argument("--batches", type=int, default=2000)
     ap.add_argument("--val-batches", type=int, default=200)
     ap.add_argument("--pool", type=int, default=8000)
@@ -250,7 +251,7 @@ def main():
     ap.add_argument("--save-books", default=None)
     args = ap.parse_args()
 
-    dev = torch.device(f"cuda:{args.gpu}")
+    dev = torch.device(args.device)
     m = from_checkpoint(args.ckpt, dev)
     cfg = m.full_config
     specs = cfg.model.tiers

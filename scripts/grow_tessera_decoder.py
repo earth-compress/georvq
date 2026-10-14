@@ -45,13 +45,14 @@ def main():
                          "sense for a run that trains the encoder.")
     ap.add_argument("--enc-ff-ratio", type=float, default=None)
     ap.add_argument("--out", default="checkpoints/tessera_grown/init.pt")
-    ap.add_argument("--gpu", type=int, default=0)
+    ap.add_argument("--device", default="cuda",
+                    help="torch device; cuda is the card Slurm allocated")
     ap.add_argument("--windows", type=int, default=8)
     ap.add_argument("--atol", type=float, default=2e-3)
     args = ap.parse_args()
 
-    dev = torch.device(f"cuda:{args.gpu}" if args.gpu >= 0 and
-                       torch.cuda.is_available() else "cpu")
+    dev = torch.device(args.device if torch.cuda.is_available()
+                       else "cpu")
     src = load_bundle(args.bundle, dev).eval()
     scfg = src.full_config
     print(f"release: decoder dim={scfg.model.decoder.dim} "

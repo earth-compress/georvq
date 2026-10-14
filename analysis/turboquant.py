@@ -51,7 +51,7 @@ from georvq.factory import from_checkpoint
 def collect_latents(m, val, tier, dev, chunk=8, cap=200000):
     zs = []
     for i in range(0, val.shape[0], chunk):
-        x, v = m.source.prep(val[i:i + chunk], dev)
+        x, v = m.prep(val[i:i + chunk], {}, dev)[:2]
         x = x.float()
         st = m._stats_of(x, v)
         z = m.encode_levels(x, st, v)[tier]
@@ -112,7 +112,8 @@ def rel_mse(a, b):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--ckpt", required=True)
-    ap.add_argument("--gpu", type=int, default=0)
+    ap.add_argument("--device", default="cuda",
+                    help="torch device; cuda is the card Slurm allocated")
     ap.add_argument("--tier", type=int, default=2)
     ap.add_argument("--tokens", type=int, default=256)
     ap.add_argument("--cap", type=int, default=200000)
@@ -121,7 +122,7 @@ def main():
 
     sys.stdout.reconfigure(line_buffering=True)
     torch.set_grad_enabled(False)
-    dev = torch.device(f"cuda:{args.gpu}")
+    dev = torch.device(args.device)
     m = from_checkpoint(args.ckpt, dev)
     cfg = m.full_config
     store = ChipStore(cfg.data.store_dir)
