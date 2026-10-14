@@ -238,7 +238,7 @@ def setup_data(cfg: Config, source, device):
                     seed=cfg.train.seed + 1000 * D.rank(),
                     slot_rows=p.slot_rows,
                     pool_device=("cpu" if p.device == "cpu" else device),
-                    cycle=p.cycle, period=period)
+                    cycle=p.cycle, period=period, token=cfg.model.window)
     return store, train_rows, val_rows, val_s.to(device), pool
 
 
