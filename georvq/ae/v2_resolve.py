@@ -148,12 +148,18 @@ def read_bundle_meta(bundle_dir) -> dict:
 def check_files(bundle_dir, meta, names=None):
     """Compare the sha256 of the bundle's files (`names`, default all)
     with the hashes bundle.json records."""
+    redo = (f"If {bundle_dir} is a bundle cache entry, delete it and it is "
+            "downloaded again on the next read.")
     for name in meta["files"] if names is None else names:
         rec = meta["files"][name]
-        got = sha256_file(os.path.join(bundle_dir, name))
+        try:
+            got = sha256_file(os.path.join(bundle_dir, name))
+        except FileNotFoundError:
+            raise BundleError(f"{bundle_dir}/{name} is missing; bundle.json "
+                              f"records it. {redo}") from None
         if got != rec["sha256"]:
             raise BundleError(f"{bundle_dir}/{name}: sha256 {got}, "
-                              f"bundle.json records {rec['sha256']}")
+                              f"bundle.json records {rec['sha256']}. {redo}")
 
 
 def check_bundle(bundle_dir, bitstream_id, found_by) -> dict:
@@ -206,9 +212,19 @@ def download_bundle(uri, revision, bitstream_id, cache_dir=None) -> str:
     staging = tempfile.mkdtemp(prefix=f".{bitstream_id}-", dir=parent)
     at = f"{uri}@{revision or 'default branch'}"
     try:
-        snapshot_download(repo_id=repo_id, repo_type="model",
-                          revision=revision, local_dir=staging,
-                          allow_patterns=[f"{sub}/*"] if sub else None)
+        try:
+            snapshot_download(repo_id=repo_id, repo_type="model",
+                              revision=revision, local_dir=staging,
+                              allow_patterns=[f"{sub}/*"] if sub else None)
+        except Exception as err:
+            # offline, 401/404 from a private or missing repository, 5xx,
+            # timeouts: huggingface_hub, httpx and OSError types alike
+            raise BundleError(
+                f"could not download the bundle for bitstream {bitstream_id} "
+                f"from {uri} at revision {revision or '(default branch)'}: "
+                f"{type(err).__name__}: {err}. A private repository needs a "
+                "Hugging Face token: run `hf auth login` or set HF_TOKEN. "
+                + _how_to_provide(bitstream_id, cache_dir)) from err
         src = os.path.join(staging, sub) if sub else staging
         meta = check_bundle(src, bitstream_id, f"downloaded from {at}")
         check_files(src, meta)

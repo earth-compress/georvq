@@ -389,3 +389,104 @@ def test_cli_encode_writes_what_the_api_writes(tiny, tmp_path):
         want = ds.reader.header
     assert got["codec"]["release"] == want["codec"]["release"]
     assert got["product"]["source"] == str(src)
+
+
+def _response(status):
+    import httpx
+    return httpx.Response(status, request=httpx.Request(
+        "GET", "https://huggingface.co/api/models/earth-compress/georvq-ae-v2"))
+
+
+def _hub_raising(err):
+    def snapshot_download(*a, **kw):
+        raise err
+    return snapshot_download
+
+
+@pytest.mark.parametrize("make", [
+    lambda: huggingface_hub.errors.LocalEntryNotFoundError("offline"),
+    lambda: huggingface_hub.errors.RepositoryNotFoundError(
+        "401 Unauthorized", response=_response(401)),
+    lambda: huggingface_hub.errors.HfHubHTTPError(
+        "500 Server Error", response=_response(500)),
+    lambda: TimeoutError("read timed out"),
+    lambda: OSError("connection reset"),
+])
+def test_download_failures_are_bundle_errors(tiny, tmp_path, monkeypatch,
+                                             capsys, make):
+    monkeypatch.setattr(huggingface_hub, "snapshot_download",
+                        _hub_raising(make()))
+    root = tmp_path / "cache"
+    with georvq.ae.open(tiny["released"], cache_dir=root) as ds:
+        with pytest.raises(BundleError) as err:
+            ds.read()
+    msg = str(err.value)
+    assert "hf://earth-compress/georvq-ae-v2" in msg and "abc123" in msg
+    assert "hf auth login" in msg and "GEORVQ_AE_BUNDLE" in msg
+    assert list((root / "bundles").iterdir()) == []
+    assert v2.main(["fetch", str(tiny["released"]),
+                    "--cache-dir", str(root)]) == 1
+    assert "hf auth login" in capsys.readouterr().err
+
+
+def test_cache_entry_with_a_missing_or_corrupt_file(tiny, tmp_path):
+    root, entry = _cache_with(tiny, tmp_path)
+    (entry / "mean_channel.npz").rename(tmp_path / "moved.npz")
+    with georvq.ae.open(tiny["released"], cache_dir=root) as ds:
+        with pytest.raises(BundleError, match="missing.*delete it") as err:
+            ds.read()
+    assert str(entry) in str(err.value)
+    (tmp_path / "moved.npz").rename(entry / "mean_channel.npz")
+    with open(entry / "mean_channel.npz", "ab") as fh:
+        fh.write(b"\0")
+    with georvq.ae.open(tiny["released"], cache_dir=root) as ds:
+        with pytest.raises(BundleError, match="sha256.*delete it"):
+            ds.read()
+
+
+def test_cli_reports_an_explicit_bundle_for_another_bitstream(tiny, tmp_path,
+                                                             capsys):
+    other = tmp_path / "other"
+    shutil.copytree(tiny["bundle"], other)
+    meta = json.loads((other / "bundle.json").read_text())
+    meta["bitstream_id"] = "0123456789abcdef"
+    (other / "bundle.json").write_text(json.dumps(meta))
+    assert v2.main(["decode", str(tiny["released"]), str(tmp_path / "a.npy"),
+                    "--bundle", str(other), "--device", "cpu"]) == 1
+    assert "cannot decode this file" in capsys.readouterr().err
+
+
+def test_cli_fetch_of_a_missing_file(tmp_path, capsys):
+    assert v2.main(["fetch", str(tmp_path / "missing.georvq.parquet")]) == 1
+    assert "no such file" in capsys.readouterr().err
+
+
+def test_malformed_quality_names_the_accepted_forms(tiny):
+    with v2.open_dataset(tiny["released"], codec=tiny["codec"]) as ds:
+        with pytest.raises(ValueError, match="p99<=0.02") as err:
+            ds.read(quality="p99<0.02")
+        assert "8-8-2" in str(err.value)
+        with pytest.raises(ValueError, match="does not fit"):
+            ds.read(quality="9-9-9-9")
+
+
+def test_encode_warns_on_a_local_source_path(tiny):
+    with pytest.warns(UserWarning, match="product.source records the local"):
+        tiny["encode"]("local.georvq.parquet")
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        tiny["encode"]("given.georvq.parquet",
+                       source="https://example.org/tile.tiff")
+
+
+def test_cli_decode_prints_no_nested_tensor_warning(tiny, tmp_path):
+    import subprocess
+    import sys
+    r = subprocess.run(
+        [sys.executable, "-m", "georvq.ae.v2", "decode", str(tiny["released"]),
+         str(tmp_path / "a.npy"), "--bundle", str(tiny["bundle"]),
+         "--device", "cpu", "--window", "0,0,8,8", "--quality", RUNG],
+        capture_output=True, text=True, cwd=os.getcwd())
+    assert r.returncode == 0, r.stderr
+    assert "enable_nested_tensor" not in r.stderr
