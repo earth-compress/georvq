@@ -48,13 +48,14 @@ def int8_roundtrip(z):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--ckpt", required=True)
-    ap.add_argument("--gpu", type=int, default=0)
+    ap.add_argument("--device", default="cuda",
+                    help="torch device; cuda is the card Slurm allocated")
     ap.add_argument("--tokens", type=int, default=512)
     ap.add_argument("--chunk", type=int, default=8)
     args = ap.parse_args()
 
     torch.set_grad_enabled(False)
-    dev = torch.device(f"cuda:{args.gpu}")
+    dev = torch.device(args.device)
     m = from_checkpoint(args.ckpt, dev)
     cfg = m.full_config
     W = cfg.model.window
@@ -75,7 +76,7 @@ def main():
     acc = {c: [0.0, 0.0, 0] for c in combos}
     acc["ceil"] = [0.0, 0.0, 0]
     for i in range(0, val.shape[0], args.chunk):
-        x, v = m.source.prep(val[i:i + args.chunk], dev)
+        x, v = m.prep(val[i:i + args.chunk], {}, dev)[:2]
         x = x.float()
         st = m._stats_of(x, v)
         zs = m.encode_levels(x, st, v)

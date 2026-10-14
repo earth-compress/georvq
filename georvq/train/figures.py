@@ -140,8 +140,8 @@ def reset_figure(rst, specs, step):
 def cosdist_figure(cosdist, baseline, specs, step):
     """Per-tier cos-dist vs cumulative RVQ level (solid: this model; dotted:
     an optional {tier_name: [dists]} baseline)."""
-    names = ["coarse", "mid", "fine"][:len(specs)] \
-        or [f"tier{i}" for i in range(len(specs))]
+    names = (["coarse", "mid", "fine"][:len(specs)] if len(specs) <= 3
+             else [f"tier{i}" for i in range(len(specs))])
     fig, axes = plt.subplots(1, len(specs), figsize=(3.7 * len(specs), 3.2),
                              constrained_layout=True)
     if len(specs) == 1:
@@ -161,11 +161,59 @@ def cosdist_figure(cosdist, baseline, specs, step):
     return fig
 
 
-# Back-compat aliases: the PCA-RGB renderer moved into the report layer so
-# that a source can declare a different one (grayscale relief, true colour)
-# instead of every plane being forced through three principal components.
-pca_rgb_basis = PCA_RGB.basis
-_pca_rgb = PCA_RGB.render
+def _run_prep(model, source, prep):
+    """The run's prep, or the source's default for ad-hoc callers (the
+    same fallback `validate()` uses)."""
+    if prep is not None:
+        return prep
+    from georvq.sources.prep import SourcePrep
+    return SourcePrep(source, getattr(model, "cfg", None))
+
+
+def _to_physical(source, prep):
+    """fn(model-space tensor) -> source units for the chunk just prepped,
+    or None when the prep has no inverse. The source's own prep keeps its
+    per-tile normalizer (DEM's mean/std of the chunk); any other prep
+    inverts through `prep.inverse`, as validation does."""
+    from georvq.sources.prep import SourcePrep
+    if isinstance(prep, SourcePrep):
+        norm = source.normalizer(source.cfg)
+        if norm is None:
+            return None
+        stats = source.last_stats()
+        return lambda y: norm.denormalize(y, stats)
+    if not prep.invertible:
+        return None
+    return lambda y: prep.inverse(y, {})
+
+
+class _harvest_mode:
+    """eval() and deterministic prep for the duration of a harvest, both
+    restored on the way out whatever happens inside.
+
+    eval() is a correctness requirement, not hygiene:
+    VectorQuantizer.forward runs its lazy `_data_init` under
+    `self.training`, so harvesting in train mode would INITIALISE the
+    codebooks from val windows, and would let an EMA update and a step
+    increment run on validation data. Deterministic prep makes sources
+    that draw inside prep (era5 @single picks a level) decode the same
+    slices as validation."""
+
+    def __init__(self, model, source):
+        self.model, self.source = model, source
+
+    def __enter__(self):
+        self.was_training = self.model.training
+        self.prev_det = getattr(self.source, "_prep_deterministic", False)
+        self.model.eval()
+        self.source._prep_deterministic = True
+        return self
+
+    def __exit__(self, *exc):
+        self.source._prep_deterministic = self.prev_det
+        if self.was_training:
+            self.model.train()
+        return False
 
 
 @torch.no_grad()
@@ -180,36 +228,28 @@ def recon_figure(model, source, val_s, step, n=8, mins=None, tuples=None,
 
 
 def recon_harvest(model, source, val_s, n=8, mins=None, tuples=None,
-                  val_loc=None):
+                  val_loc=None, prep=None):
     """GPU phase of the reconstruction contact sheet: decode each depth
     tuple for n val windows spread over the whole val set (the fixed
     val tokens are overlapping crops per chip in index order, so the
-    first n are near-duplicates of one chip).
-
-    eval() here is a correctness requirement, not hygiene:
-    VectorQuantizer.forward runs its lazy `_data_init` under
-    `self.training`, so harvesting in train mode would INITIALISE the
-    codebooks from 8 val windows, and would let an EMA update and a
-    step increment run on validation data."""
-    was_training = model.training
-    model.eval()
-    try:
+    first n are near-duplicates of one chip). `prep` is the run's
+    model-space transform; the decodes see its validity mask, as in
+    `validate()`. Runs under `_harvest_mode`."""
+    prep = _run_prep(model, source, prep)
+    with _harvest_mode(model, source):
         sel = torch.linspace(0, val_s.shape[0] - 1, n).long()
-        val_x, val_valid = source.prep(val_s[sel], val_s.device)
+        val_x, val_valid, _ = prep(val_s[sel], {}, val_s.device)
         loc = val_loc[sel] if val_loc is not None else None
         if tuples:
             pts = {tname(t): t for t in tuples}
         else:
             pts = canonical_tuples(model.specs, mins)
-        _, cums = model.level_cumsums(val_x, loc=loc)
+        _, cums = model.level_cumsums(val_x, loc=loc, valid=val_valid)
         rows = {"orig": val_x.float().cpu()}
         for name, t in pts.items():
-            rows[f"{name}\n({tname(t)})"] = \
-                model.eval_tuple(cums, t, val_x).float().cpu()
+            rows[f"{name}\n({tname(t)})"] = model.eval_tuple(
+                cums, t, val_x, valid=val_valid).float().cpu()
         return {"rows": rows, "valid": val_valid.cpu()}
-    finally:
-        if was_training:
-            model.train()
 
 
 def recon_render(payload, step, preview=PCA_RGB):
@@ -242,22 +282,23 @@ def recon_render(payload, step, preview=PCA_RGB):
 
 @torch.no_grad()
 def stage1_recon_figure(model, source, val_s, sigma_max, step, n=6,
-                        preview=PCA_RGB):
+                        preview=PCA_RGB, prep=None):
     """Original vs sigma-sweep reconstructions (stage-1 continuous mode)."""
-    was_training = model.training
-    model.eval()
-    x, valid = source.prep(val_s[:n], val_s.device)
-    var = x.reshape(x.shape[0], x.shape[1], -1).var(-1).mean(-1)
-    sel = var.topk(min(n, x.shape[0])).indices
-    x = x[sel]; valid = valid[sel]
-    basis = preview.basis(x, valid)
-    n_tiers = len(model.specs)
-    rows = [("orig", preview.render(x, basis))]
-    for fr in (0.0, 0.25, 0.5, 1.0):
-        sig = torch.full((x.shape[0], n_tiers), sigma_max * fr,
-                         device=x.device)
-        rows.append((f"σ={fr:.2f}×max",
-                     preview.render(model.forward_stage1(x, sig), basis)))
+    prep = _run_prep(model, source, prep)
+    with _harvest_mode(model, source):
+        x, valid, _ = prep(val_s[:n], {}, val_s.device)
+        var = x.reshape(x.shape[0], x.shape[1], -1).var(-1).mean(-1)
+        sel = var.topk(min(n, x.shape[0])).indices
+        x = x[sel]; valid = valid[sel]
+        basis = preview.basis(x, valid)
+        n_tiers = len(model.specs)
+        rows = [("orig", preview.render(x, basis))]
+        for fr in (0.0, 0.25, 0.5, 1.0):
+            sig = torch.full((x.shape[0], n_tiers), sigma_max * fr,
+                             device=x.device)
+            rows.append((f"σ={fr:.2f}×max",
+                         preview.render(model.forward_stage1(x, sig),
+                                        basis)))
     fig, axes = plt.subplots(len(rows), x.shape[0],
                              figsize=(1.4 * x.shape[0], 1.5 * len(rows)),
                              constrained_layout=True)
@@ -269,39 +310,35 @@ def stage1_recon_figure(model, source, val_s, sigma_max, step, n=6,
         axes[r, 0].set_yticks([])
         axes[r, 0].set_ylabel(name, fontsize=8)
     fig.suptitle(f"Stage 1 recon @ step {step}", fontsize=9)
-    if was_training:
-        model.train()
     return fig
 
 
 @torch.no_grad()
 def error_hist_harvest(model, source, val_s, tuples=None, mins=None,
                        val_loc=None, max_tokens=1024, chunk=128,
-                       cap=4_000_000):
+                       cap=4_000_000, prep=None):
     """GPU phase of the signed-error histograms: decode every tuple and
     keep subsampled error vectors (model space, and source units when
-    the source has a normalizer) on the CPU."""
-    was_training = model.training
-    model.eval()
+    the run's prep has an inverse) on the CPU."""
+    prep = _run_prep(model, source, prep)
     pts = ({tname(t): t for t in tuples} if tuples
            else canonical_tuples(model.specs, mins))
-    norm = source.normalizer(source.cfg)
     rel = {k: [] for k in pts}
-    absu = {k: [] for k in pts} if norm is not None else None
-    for i in range(0, min(max_tokens, val_s.shape[0]), chunk):
-        x, v = source.prep(val_s[i:i + chunk], val_s.device)
-        loc = val_loc[i:i + chunk] if val_loc is not None else None
-        _, cums = model.level_cumsums(x, loc=loc)
-        stats = source.last_stats() if norm is not None else None
-        for k, t in pts.items():
-            out = model.eval_tuple(cums, t, x).float()
-            m = v.unsqueeze(1).expand_as(out)
-            rel[k].append((out - x)[m].cpu())
-            if norm is not None:
-                absu[k].append((norm.denormalize(out, stats)
-                                - norm.denormalize(x, stats))[m].cpu())
-    if was_training:
-        model.train()
+    absu = None
+    with _harvest_mode(model, source):
+        for i in range(0, min(max_tokens, val_s.shape[0]), chunk):
+            x, v, _ = prep(val_s[i:i + chunk], {}, val_s.device)
+            phys = _to_physical(source, prep)
+            if absu is None and phys is not None:
+                absu = {k: [] for k in pts}
+            loc = val_loc[i:i + chunk] if val_loc is not None else None
+            _, cums = model.level_cumsums(x, loc=loc, valid=v)
+            for k, t in pts.items():
+                out = model.eval_tuple(cums, t, x, valid=v).float()
+                m = v.unsqueeze(1).expand_as(out)
+                rel[k].append((out - x)[m].cpu())
+                if phys is not None:
+                    absu[k].append((phys(out) - phys(x))[m].cpu())
     sub = lambda d: {k: _subsample(torch.cat(v), cap) for k, v in d.items()}
     return {"rel": sub(rel), "absu": sub(absu) if absu is not None else None}
 
@@ -359,27 +396,28 @@ def _subsample(t, cap):
 
 def rd_err_harvest(model, source, val_s, tuples, px, side_bits=0.0,
                    val_loc=None, max_tokens=512, chunk=128,
-                   cap=4_000_000):
+                   cap=4_000_000, prep=None):
     """GPU phase of the physical-unit R-D figure: decode every tuple and
     keep subsampled |error| vectors on the CPU. After this returns, the
-    model is not needed again."""
-    was_training = model.training
-    model.eval()
-    norm = source.normalizer(source.cfg)
+    model is not needed again. The run's prep must have an inverse."""
+    prep = _run_prep(model, source, prep)
     errs = {tname(t): [] for t in tuples}
-    for i in range(0, min(max_tokens, val_s.shape[0]), chunk):
-        x, v = source.prep(val_s[i:i + chunk], val_s.device)
-        loc = val_loc[i:i + chunk] if val_loc is not None else None
-        _, cums = model.level_cumsums(x, loc=loc)
-        stats = source.last_stats()
-        for t in tuples:
-            out = model.eval_tuple(cums, t, x).float()
-            m = v.unsqueeze(1).expand_as(out)
-            e = (norm.denormalize(out, stats)
-                 - norm.denormalize(x, stats))[m]
-            errs[tname(t)].append(e.abs().cpu())
-    if was_training:
-        model.train()
+    with _harvest_mode(model, source):
+        for i in range(0, min(max_tokens, val_s.shape[0]), chunk):
+            x, v, _ = prep(val_s[i:i + chunk], {}, val_s.device)
+            phys = _to_physical(source, prep)
+            if phys is None:
+                raise RuntimeError(
+                    f"rd_err needs an invertible prep; "
+                    f"{type(prep).__name__} has no inverse")
+            loc = val_loc[i:i + chunk] if val_loc is not None else None
+            _, cums = model.level_cumsums(x, loc=loc, valid=v)
+            px_x = phys(x)
+            for t in tuples:
+                out = model.eval_tuple(cums, t, x, valid=v).float()
+                m = v.unsqueeze(1).expand_as(out)
+                e = (phys(out) - px_x)[m]
+                errs[tname(t)].append(e.abs().cpu())
     bits = np.array([tuple_bits(model.specs, t, side_bits)
                      for t in tuples]) / px
     return {"errs": {k: _subsample(torch.cat(v), cap)

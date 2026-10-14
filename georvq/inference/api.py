@@ -2,7 +2,7 @@
 
 A `Packet` is one window's compressed representation: per-tier code-index
 arrays (cells, depth) plus optional side info (location for conditioned
-models, packed stats bytes for normalized sources). Any monotone depth
+models, the transmitted mean for stats_cond models). Any monotone depth
 tuple can be decoded from the same packet by truncating levels — the
 matryoshka property.
 
@@ -26,17 +26,11 @@ import torch
 class Packet:
     indices: list  # per tier: (cells, depth) int64 ndarray
     loc: Optional[np.ndarray] = None      # location embedding (conditioned models)
-    stats: Optional[bytes] = None
-    # a normalizer's packed side channel (`stats_codec.StatsPacker`), for
-    # sources that RESCALE their input. Not to be confused with `mean`
-    # below, which is part of the reconstruction rather than a rescaling
-    # of it -- the two are different mechanisms and never both in use.
     mean: Optional[np.ndarray] = None
     # (bands,) per-window mean, for models trained with `stats_cond`. It
     # is subtracted before the encoder and added back after the decoder,
-    # so unlike `stats` (a normalizer's packed side channel) it is part
-    # of the reconstruction, not a rescaling of it. Carried as floats
-    # here; a release quantizes it on the way to disk and charges it.
+    # so it is part of the reconstruction. Carried as floats here; a
+    # release quantizes it on the way to disk and charges it.
     refinements: Optional[dict] = None
     # {tier: (cells, dim) float} — that tier's residual after its full RVQ
     # depth. Optional additive refinements: a decoder adds one to its
@@ -45,56 +39,27 @@ class Packet:
     # refining differs by model (see georvq.inference.refine); dropping a
     # refinement always yields a valid decode.
 
-    @property
-    def coarse_residual(self):
-        """The tier-0 refinement, under the name the AlphaEarth release
-        gave it ('8*'). Retained because that release is frozen."""
-        return (self.refinements or {}).get(0)
-
-    @coarse_residual.setter
-    def coarse_residual(self, v):
-        if self.refinements is None:
-            self.refinements = {}
-        if v is None:
-            self.refinements.pop(0, None)
-        else:
-            self.refinements[0] = v
-
-
-def load_codec(ckpt_path, device="cpu"):
-    """Model from a checkpoint (either format), wrapped in a Codec."""
-    ck = torch.load(ckpt_path, map_location="cpu", weights_only=False)
-    if "config" in ck:
-        from georvq.factory import from_checkpoint
-        model = from_checkpoint(ckpt_path, device)
-    else:
-        from georvq.compat import from_legacy_checkpoint
-        model, _ = from_legacy_checkpoint(ckpt_path, device)
-    return Codec(model)
-
 
 class Codec:
     """Encode/decode against a trained PyramidCodec."""
 
-    def __init__(self, model, stats_packer=None):
+    def __init__(self, model):
         self.model = model.eval()
         self.specs = model.specs
         self.window = model.window
-        self.stats_packer = stats_packer
         self.device = next(model.parameters()).device
 
     # ---- encode ----
 
     @torch.no_grad()
-    def encode(self, x, loc=None, refine_tiers=(), valid=None, mean=None,
-               coarse_residual=False) -> list[Packet]:
+    def encode(self, x, loc=None, refine_tiers=(), valid=None, mean=None
+               ) -> list[Packet]:
         """x: (B, C, W, W) prepared model-space input -> one Packet per
         window, at full depth (truncate at decode time for lower rates).
 
         refine_tiers: tier indices whose post-RVQ residual to carry as an
         additive refinement (see georvq.inference.refine). Which tier is
-        worth refining is model-specific. `coarse_residual=True` is the
-        AlphaEarth release's name for `refine_tiers=(0,)`.
+        worth refining is model-specific.
 
         valid/mean: for `stats_cond` models the per-window mean is part
         of the packet. It is measured from the input unless supplied —
@@ -102,8 +67,7 @@ class Codec:
         release will actually transmit, so encoder and decoder agree.
         """
         stacked, res, mean = self.encode_batch(
-            x, loc=loc, refine_tiers=refine_tiers, valid=valid, mean=mean,
-            coarse_residual=coarse_residual)
+            x, loc=loc, refine_tiers=refine_tiers, valid=valid, mean=mean)
         B = stacked[0].shape[0]
         loc_np = (loc.cpu().numpy() if isinstance(loc, torch.Tensor)
                   else loc) if loc is not None else None
@@ -117,7 +81,7 @@ class Codec:
 
     @torch.no_grad()
     def encode_batch(self, x, loc=None, refine_tiers=(), valid=None,
-                     mean=None, coarse_residual=False):
+                     mean=None):
         """The batch form behind `encode`: `(stacked, refinements, mean)`.
 
         `stacked` is one `(B, cells, depth)` index array per tier -- the
@@ -132,7 +96,7 @@ class Codec:
             # (B, bands) mean, or [mean ‖ std] for a use_std model
             mean = m.patch_stats(x, valid)
         zs = m.encode_levels(x, stats=mean, valid=valid)
-        want = set(refine_tiers) | ({0} if coarse_residual else set())
+        want = set(refine_tiers)
         if want and (m.selector is not None or m.conditioner is not None):
             raise NotImplementedError(
                 "refinements are supported for plain codecs only")
@@ -248,13 +212,3 @@ class Codec:
                 sp = self.specs[spec.tier]
                 b += spec.cost_bits(sp.cells, sp.dim)
         return float(b)
-
-    @torch.no_grad()
-    def entropy_bits(self, x) -> Optional[torch.Tensor]:
-        """Entropy-model bits per window (B, total-levels summed); None if
-        the model has no rate model. Real coded sizes come from
-        georvq.inference.archive."""
-        if self.model.rate is None:
-            return None
-        per_tier = self.model.entropy_level_bits(x)
-        return torch.cat(per_tier, -1).sum(-1)

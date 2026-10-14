@@ -1,170 +1,234 @@
 # The AlphaEarth release codec
 
-The frozen, shippable codec for the AlphaEarth Foundations embedding
-tiles. Everything documented here is release policy for this source
-(`georvq/ae/`), built on the source-agnostic machinery in
-`georvq/inference/`. Other sources get their own release layer and their
-own version of this document.
+This document describes the released georvq codec for the AlphaEarth Foundations annual
+embedding tiles. The model that this codec uses is [released on Hugging Face](https://huggingface.co/earth-compress/georvq-ae-v2). 
+We use this codec to encode source tiles into a GeoParquet file that contains the compressed
+blobs used by the decoder. These GeoParquet files can be streamed from their location on the cloud at any of 23 bitrates, with windowed
+range reads over HTTP, allowing users to access lossily compressed AlphaEarth Foundations data at bitrates from ~0.1-7.5 bits per pixel, with cosine similarity going from 97.2% to 99.8%. The code that this release uses is in `georvq/ae/v2.py`, and the GeoParquet file format is defined in `georvq/inference/georvq_parquet.py`.
 
 ## Who is this for
 
-| you are | you touch |
+| you are | recommended points of entry |
 |---|---|
-| **AE data user** — decode archive tiles | `georvq-ae-tile decode/info`, the COG assets, this doc's *Format* + *Controls* sections; never the encoder or training code |
-| **archive operator** — bulk-encode source tiles | `georvq-ae-tile encode` (GPU), the stats/quality outputs, *Economics* below |
-| **codec researcher** — train/improve models | `georvq/{model,train,...}`, `docs/OVERVIEW.md`; this package is your worked example of a release layer |
+| AE data user, reading tiles | `georvq.ae.open`, `python -m georvq.ae.v2 decode/reconstruct/info`, the Reading and Rate sections below |
+| archive operator, bulk-encoding source tiles | `python -m georvq.ae.v2 encode` on a GPU, the quality column, the Encoding cost section |
+| codec researcher | `georvq/{model,train,...}` and `docs/OVERVIEW.md`; `georvq/ae/v2.py` is a worked example of a release layer on the GeoParquet container |
 
-## The release
+## Model details
 
-- Model: `ae_pyr64_divfull` (window 64, tiers 1:256:2048:8 / 4:192:8192:8
-  / 16:64:16384:8), `bitstream_id 2f7c352718b87fe6`. Blobs and models
-  cross-check ids; mismatches are refused (same-architecture codebooks
-  decode each other's indices into plausible garbage).
-- Backends: PyTorch (CPU/CUDA) or ONNX (torch-free at run time; the
-  `[onnx]` extra). `pip install` still pulls torch, a core dependency,
-  and `georvq-ae-tile` needs the `[eval]` extra for rasterio.
-  Encoders are backend-consistent, not bit-identical (fp32 vs bf16
-  assignment flips ~13% of near-tie deep indices at equal quality);
-  decode is deterministic everywhere.
-- Verified (held-out val + real tiles): full-ladder cos ~0.9976-0.998,
-  exact nodata + GeoTIFF-profile round-trip; a 2,250 MiB source tile
-  becomes ~58 MiB of assets.
+Note: this information only makes sense if you are familiar with the georvq codebase, and you can just ignore it if you're more interested in the data.
 
-## Format: one tile = a COG asset directory
+- The model is a `stats_cond` model, which transmits each window's mean,
+  with 8-bit (int8) codebooks. Its window is 64 px with 64 bands, its
+  tiers are `1:256:2048:8` / `4:192:8192:8` / `16:64:16384:8`, and its
+  minimum depths are `2-0-0`. The weights are frozen, and there is no
+  further training or fine-tuning.
+- Each window's mean is subtracted before the encoder and added back
+  after the decoder, so it has to be transmitted with every window, at
+  every rung. It costs 440 bits (55 bytes) per window, against 22 bits
+  for the two coarse levels of the cheapest rung, so at the lowest rates
+  the mean is most of the bitstream. It is coded by
+  `RVQPCAMeanChannel`, with two RVQ levels of 4096 codes (2 x 12 bits)
+  followed by a PCA residual coder with a fixed allocation of 416 bits.
+  Its median relative L2 error on held-out validation means is 0.0060,
+  and on the validation set, decoding with the coded mean instead of the
+  exact one costs about 0.0001 cosine at every rung. The mean channel's
+  tables enter the `bitstream_id`.
+- The `bitstream_id` is `f6ad2ff121a473df` and the `decoder_id` is
+  `d9b0af741f66b682`. A file records the `bitstream_id` and `decoder_id`
+  it was encoded with, and a reader holding a different codec refuses to
+  decode it.
+- Decoding runs on PyTorch, on CPU or CUDA. Decoder passes run in bf16
+  on CUDA by default (`--fp32` or `bf16=False` turns this off) and in
+  fp32 on CPU, whilst encoder passes always run in fp32. Decode can also
+  run through ONNX Runtime, which needs the `[onnx]` extra (onnxruntime
+  1.19 or later), by passing `backend="onnx"`, or `--backend onnx` on
+  the command line. Its output matches torch to about 1e-6.
 
+## Data Format
+
+We are using a mirrored structure to [Taylor Geospatial's AlphaEarth release on source.coop](https://source.coop/tge-labs/aef), where each of our GeoParquet files corresponds to one of their 8192x8192 tiles. Because of the structure of the georvq model's outputs, we've opted to use a GeoParquet file so that we can make independent chunks for different parts of the model's output. These files are named `{source stem}.georvq.parquet` and
+placed at the path that mirrors the source tile's path
+(`annual/{year}/{zone}/{stem}.georvq.parquet`). 
+
+A tile index, `aef_georvq_index.parquet`, is the place to find which
+coded file covers an area and how many bytes it costs at each rate. It
+has the source index's columns with paths to the coded files, plus each
+file's `bitstream_id` and bytes per rung. It is built by
+`scripts/build_ae_index.py` (`georvq/ae/index.py`) and published with the
+files, and the sample's index is in the
+[sample dataset](https://huggingface.co/datasets/earth-compress/georvq-ae-v2-sample).
+The files are GeoParquet 1.1, so pyarrow and DuckDB read their rows
+directly. The georvq header is JSON in the file's key-value metadata,
+and the source tile's profile, tags, band descriptions and orientation
+are kept as JSON in `georvq_aux`. 
+
+Records are grouped into square chunks, with one row and one row group
+per chunk. The chunk size differs by kind of record so that each chunk
+holds roughly 1 MB at full depth (`docs/GEORVQ_PARQUET.md`), which is why
+one `base` chunk covers the whole tile whilst `fine` is chunked at the
+source's 1024 px block:
+
+| kind | chunk | per window |
+|---|---|---|
+| `base` (with `mask`) | 8192 px (the whole tile) | mean (55 B) and the 8 coarse levels (11 B), 66 B |
+| `mid` | 4096 px (2 x 2 chunks) | per level, 16 cells x 13 bits, 26 B |
+| `fine` | 1024 px (8 x 8 chunks, the source's block) | per level, 256 cells x 14 bits, 448 B |
+| `quality` | 8192 px | mean and p99 of `1 - cos` per rung, 46 B |
+
+Each level of a tier is its own column, so reading a tier to depth `L`
+reads the first `L` columns of its row group, which form one contiguous
+byte range. Code columns are stored uncompressed with fixed bit widths.
+The validity mask is stored once for the tile, compressed, and is empty
+for a fully valid tile, and windows with no valid pixel are not coded.
+On the tile measured below (2021, zone 44N, 11% nodata) the file is
+64.2 MB, of which `base` with its mask takes 1.10 MB, `mid` 3.41 MB,
+`fine` 58.8 MB, `quality` 0.75 MB and the footer 0.14 MB.
+
+Functionally, most users will not need to worry about anything beyond this, as our reader handles the filesystem and requests for you. For those interested to learn more about how those files are arranged, refer to `docs/GEORVQ_PARQUET.md`. 
+
+## Reading
+
+The main principle being followed in the reader's design is to mirror the behaviour of a rasterio file object's read method, so that after replacing `rasterio.open()` with `georvq.ae.open()` in your code, the `.read` will work as it did before. This is to make the transition as straightforward as possible for people who are already using the AlphaEarth Foundations dataset on source.coop.
+
+`georvq.ae.open(path_or_url, ...)` returns a lazy-loaded read-only dataset with the
+source tile's georeferencing and shape: `crs`, `transform`, `width`,
+`height`, `count` (64), `dtypes` (int8), `nodata` (-128), `profile`,
+`meta`, `tags()`, `descriptions`, `block_shapes`, `block_windows()`,
+`bounds`, `res`, and rasterio's window helpers (`index`, `xy`,
+`window`). `driver` is "GeoRVQParquet", whilst `profile` and `meta`
+carry the source's driver ("GTiff"), so either can be passed to
+`rasterio.open(..., "w")`.
+
+The AEF source tiles store their rows bottom-up. The file codes them
+north-up, but `read`, `read_masks` and `dataset_mask` return them in the
+source's own order, with rasterio's arguments and results, so code
+written against the rasterio dataset of the source tile can read the
+file instead. Two differences remain. The file has no overviews, so a
+decimated read samples the full-resolution decode, and there is no
+`colorinterp`. Invalid pixels come back as -128 exactly, from the
+stored mask.
+
+The file's header names the release that decodes it, and `open` finds
+that release's bundle by its `bitstream_id`, either at
+`GEORVQ_AE_BUNDLE`, in a local cache
+(`~/.cache/georvq/bundles/<bitstream_id>/`), or by downloading it from
+the `earth-compress` organisation on Hugging
+Face ([`earth-compress/georvq-ae-v2`](https://huggingface.co/earth-compress/georvq-ae-v2)).
+A bundle whose ids do not match the file is refused, including one at
+`GEORVQ_AE_BUNDLE`. The device defaults to CUDA when available, and the
+backend to torch.
+
+```python
+import georvq.ae
+
+ds = georvq.ae.open("annual/2021/44N/<stem>.georvq.parquet")
+w = ((0, 1024), (0, 1024))                            # rows, cols in source pixels
+a = ds.read(window=w, quality="8-8-2")                # (64, 1024, 1024) int8
+b = ds.read(3, window=w, quality="p99<=0.02")         # band 3 only, 1-based
+m = ds.read_masks(window=w)                           # (64, 1024, 1024) uint8, 255 valid
+v = ds.dataset_mask(window=w)                         # (1024, 1024) uint8
 ```
-<tile>/
-  coarse.tif   128x128,  8 uint16 bands   RVQ levels, 640 m cells
-  mid.tif      512x512,  8 uint16 bands   160 m cells
-  fine.tif    2048x2048, 8 uint16 bands    40 m cells
-  star.tif     128x128, 66 uint8 bands    2-bit coarse-residual sidecar
-  mask.tif    8192x8192 validity          exact -128 nodata restore
-  quality/<decoder_id>.tif                measured per-window error per
-                                          rate point (decoder-keyed):
-                                          mean dcos bands + int-step
-                                          bands (mean/p50/p90/p99/max of
-                                          per-pixel max-over-bands
-                                          |recon-src| in int8 steps)
-  metadata.json                           source profile, quality stats,
-                                          specs, bitstream_id
-```
 
-Bands are quantizer levels → rate control is band selection. Blocks
-mirror the source's 1024 px quantum at every level → windowed access is
-stock ranged-COG reads (rasterio/GDAL `/vsicurl`; no custom client).
-Assets are north-up in the source CRS with `BITSTREAM_ID` in the tags.
-Values are code indices, so interpolating them or building averaged
-overviews corrupts them; the quality raster is the one asset that
-averages meaningfully.
+`window` takes a rasterio `Window` or `((row0, row1), (col0, col1))` in
+source pixels. `quality` takes a rung (`"8-8-2"`, `"8,8,2"` or a
+tuple), a bound on a quality statistic (`"mean<=X"` or `"p99<=X"`), or
+`None` for full depth. A bound is resolved per window to the cheapest
+rung whose encode-time statistic meets it, and to full depth where none
+does, at the cost of one extra read of the quality rows. You should
+expect a bound to hold to within a few percent rather than exactly,
+because the statistics are stored log-quantised. The statistics are
+`1 - cos` of the decoded float field against the prepared source, over
+the window's valid pixels, measured with the decode precision the header
+records. They are stored with 32 codes per decade, a step of about 7.5%,
+and the bound is applied to the stored value, so a bound is met to within
+half a step. For example, `p99<=0.02` admits windows whose measured p99
+is up to about 0.0198.
 
-Measured access costs (local ranged-HTTP): whole-tile coarse ~180 KiB /
-4 requests; a 1024 px viewport at browse quality ~150-220 KiB; a point
-query ~1 MiB (one source-block quantum — the source tiff needs ~12 MiB
-for the same read).
-
-## Decoders: plain or deblock
-
-The bitstream is decoder-independent; this release ships two decoders
-against the same blobs:
-
-- **`plain`** (default): the base per-window decoder.
-- **`deblock`** (`--decoder deblock`, torch or ONNX backend): the base
-  decoder
-  plus a 2M-param seam-removal network (the windows decode
-  independently, leaving seams at every 64 px boundary). Validated on
-  held-out val + a real tile: mean dcos −40% at full rate (−22/−16/−6%
-  on val at full/half/low), window-seam adjacency factor 3.7 → 0.7.
-
-The deblock decoder is defined by a canonical recipe:
-512 px frames anchored at the tile origin, each deblocked from its
-frame plus a one-window (64 px) halo clipped at tile bounds, hard-crop
-back to the frame. The network's GroupNorm makes output depend on frame
-extents, so the tiling is part of the decoder identity, and the recipe
-constants are stamped in the bundle (`decoders/deblock.pt`,
-`bundle.json`) and folded into its `decoder_id`. Its locality contract
-is that a deblocked pixel depends on the code indices within 64 px of
-its frame and on nothing else, so per-frame, slab, or ranged-viewport
-decodes all produce the same result (deviation from whole-mosaic
-inference measured at ~1e-5 dcos), and window decodes may be shared
-between frames as a pure optimization. Costs: ~1.25 GB extra VRAM
-(fp32, one 640 px frame), 1.25–1.56× window-decode redundancy depending
-on scheduling, +27%-of-KiB index reads on viewport decodes. At tile
-edges the halo is clipped: the network leaves the tile-boundary seam
-essentially untouched rather than hallucinating (+1.3% dcos in the
-128 px border band; a mosaic-aware client can eliminate even that by
-fetching a 64 px window strip from the neighbor tile — not part of the
-canonical per-tile recipe).
-
-Each decoder has its own `decoder_id`, `quality/<decoder_id>.tif`
-raster and stats namespace in `metadata.json`, all minted server-side
-with the identical canonical routine. Tiles encoded before the deblock
-decoder existed decode with it unchanged, but resolve `--quality`
-against the plain stats (conservative — deblock dominates) until a
-re-stat pass with source access mints the deblock layer in place:
+The same reads are available from the command line, together with
+commands to inspect a file, fetch the release it names and encode new
+tiles:
 
 ```bash
-georvq-ae-tile restat --model <bundle> --device cuda tile_dir/ src.tiff
+python -m georvq.ae.v2 info  tile.georvq.parquet          # header, rungs, bytes per column
+python -m georvq.ae.v2 fetch tile.georvq.parquet          # download the release it names
+python -m georvq.ae.v2 decode tile.georvq.parquet out.npy \
+    --window 0,0,1024,1024 --quality 8-8-2                 # or --quality "p99<=0.02"
+python -m georvq.ae.v2 reconstruct tile.georvq.parquet recon.tif --quality 8-8-2
+python -m georvq.ae.v2 encode src.tif out_dir/ --bundle <bundle dir> --device cuda
 ```
 
-A deblocker is trained against one base decoder's outputs: the package
-stamps the `bitstream_id` + base `decoder_id` it was trained on, and
-loading refuses mismatched bundles.
+`decode` writes a `.npy` in source row order and prints the requests
+and bytes it used. `reconstruct` writes a tiled GeoTIFF with the
+source's profile, block size, compression, tags and band descriptions,
+although COG layout and overviews are not reproduced. `encode` writes
+`{stem}.georvq.parquet` into the output directory (the current one by
+default), and `--no-quality` leaves out the quality column, which
+otherwise costs one decode per rung at encode time.
 
-## Controls: rate or quality
+The other `encode` options set the provenance that the header records.
+`--source` sets the path or URL of the source tile. It defaults to the
+`src` argument as given, and `encode` warns when that is a local
+absolute path. `--release`, `--release-uri` and `--revision` set the
+release record that readers use to find the bundle.
 
-- **Rate control**: `--tuple L0,L1,L2`. The efficient ladder (measured
-  Pareto front) is: max coarse, fill mid, then fine levels one at a
-  time — `8-1-0` (0.07 bpp) ... `8-8-0` (0.43) ... `8-8-8` (7.43).
-  Level costs: coarse 11 / mid 208 / fine 3,584 bits per window.
-- **Quality control**: `--quality STAT<=X` with STAT in
-  mean|p50|p90|p99|max of pixel dcos — resolves to the cheapest ladder
-  point whose *encode-time measured* stats satisfy the bound
-  (`metadata.json`), and reads only that prefix.
-- The 8* sidecar (2-bit coarse residual, 66 B/window) applies
-  automatically whenever the coarse tier decodes at full depth. It
-  recovers the coarse quantizer gap and most of the OOD error tail
-  (worst-0.1% pixel median 0.035 -> 0.009) for +1.5% rate.
+## Rate ladder
 
-**Getting the model**: weights are deliberately not in git.
+The 23 rungs fill one tier at a time: coarse from 2 to 8 levels, then
+mid from 1 to 8, then fine from 1 to 8. A level costs 11 bits per
+window in the coarse tier, 208 in mid and 3,584 in fine, and every rung
+also carries the 440-bit mean. The table gives two quality columns.
+"val cos" is cosine on the held-out validation windows, scored through
+the training run's own validation harness with the coded mean at both
+ends, so it is the figure that the training run itself reports. "Real
+tiles" is closer to what a data user will see. It is the int8
+reconstruction against the int8 source over the valid pixels of 16
+held-out 8192 px tiles, pixel-weighted. The tiles span 2018-2025,
+latitudes -75 to 75 and valid fractions from 0.51 to 1.00, and at full
+depth they range from 0.9963 to 0.9998.
 
-- *On the group server*: `/data/georvq-releases/ae-beta-v1/`
-  (`bundle/` for torch, `onnx/` for torch-free). Notebooks and examples
-  default to it; override with `GEORVQ_AE_BUNDLE`.
-- *Elsewhere*: download `ae-beta-v1.tar.gz` (524 MB) — link in the repo
-  README / from Ali — then:
+| rung | bits/window | b/px | val cos | real tiles |
+|---|---|---|---|---|
+| 2-0-0 | 462 | 0.113 | 0.9722 | 0.9733 |
+| 8-0-0 | 528 | 0.129 | 0.9798 | 0.9805 |
+| 8-1-0 | 736 | 0.180 | 0.9858 | – |
+| 8-2-0 | 944 | 0.230 | 0.9886 | – |
+| 8-4-0 | 1,360 | 0.332 | 0.9912 | 0.9913 |
+| 8-8-0 | 2,192 | 0.535 | 0.9932 | 0.9933 |
+| 8-8-1 | 5,776 | 1.410 | 0.9951 | – |
+| 8-8-2 | 9,360 | 2.285 | 0.9962 | 0.9963 |
+| 8-8-4 | 16,528 | 4.035 | 0.9973 | 0.9974 |
+| 8-8-8 | 30,864 | 7.535 | 0.9981 | 0.9981 |
 
-  ```bash
-  sha256sum -c <<< "d535fe3c692327acbafcfd8816be9d776d4596fe02ea18e6963759fbbbf969b5  ae-beta-v1.tar.gz"
-  tar xzf ae-beta-v1.tar.gz && export GEORVQ_AE_BUNDLE=$PWD/ae-beta-v1/bundle
-  ```
+The header's `rungs` field lists all 23 with their bits per window and
+per pixel, and `info` prints them.
 
-  Verify the checksum before use — `bundle/model.pt` is a torch pickle
-  (arbitrary code on load); the `onnx/` directory is the no-torch,
-  no-pickle alternative and is all that decoding requires.
-- Proper remote distribution (HF Hub registry keyed by bitstream_id) is
-  the planned replacement for the download link.
+## Getting the model
+
+Weights are not in git. They are published on Hugging Face as
+[`earth-compress/georvq-ae-v2`](https://huggingface.co/earth-compress/georvq-ae-v2), without pickled
+files: model tensors, codebooks, mean-channel tables, the rung table
+and a `bundle.json` holding the ids.
 
 ```bash
-georvq-ae-tile encode --model <bundle> --device cuda src.tiff out_dir/
-georvq-ae-tile info   out_dir/
-georvq-ae-tile decode --model <bundle> out_dir/ recon.tiff --quality "p90<=0.02"
-georvq-ae-export-onnx --ckpt <bundle> --out onnx_dir/     # torch-free decode
+git clone <this repo> && cd georvq
+pip install -e .                    # decode, encode and reconstruct
+pip install -e ".[onnx]"            # adds ONNX Runtime decode
+hf download earth-compress/georvq-ae-v2 \
+    --local-dir georvq-ae-v2
 ```
 
-## Economics (server-side encoding)
+A sample of six encoded tiles with their index is on Hugging Face as
+[`earth-compress/georvq-ae-v2-sample`](https://huggingface.co/datasets/earth-compress/georvq-ae-v2-sample), in the same
+`annual/{year}/{zone}/` layout, and `georvq.ae.open` reads them by URL, e.g.
+`https://huggingface.co/datasets/earth-compress/georvq-ae-v2-sample/resolve/main/annual/2025/32N/xh72hhha3ih6mroc7-0000008192-0000008192.georvq.parquet`.
+The full set of encoded tiles will be hosted at
+`<host>/annual/{year}/{zone}/{stem}.georvq.parquet` `[pending: hosting]`.
 
-76 s/tile with full quality stats on one A100 (35 s without), bf16
-decoder forwards + fp32 encoder (indices bit-stable). One annual AEF
-layer (~34k tiles) ~ 30 A100-days -> ~1.9 TB of assets; the source
-bucket is 302,466 tiles over 9 years.
+## Encoding and decoding cost
 
-## Deliberate non-features
+The data comes with precomputed quality metrics that are calculated by encoding once and then decoding 
+at 23 different bitrates. This means that the time taken for encoding is actually dominated by decodes. The encoding takes about 20 s per tile on an A100, but with quality measures, the process takes 113 s per tile. 
 
-- **No entropy coding**: order-0 rANS measured at ~0.6% on real tiles
-  (fine tier ~95% entropy-saturated; deflate recovers the rest) while
-  dominating decode time. The coarse tier's ~30% entropy gap is not
-  exploited (a regional coarse-mosaic product is the fix if it matters).
-- **Lite decoders**: trained and parked below the quality bar (see
-  lab/findings/cheap-decoders-quality-wall.md; that ledger also holds the
-  error-envelope predictor). The deblocker is the one decoder-side
-  addition that met the bar, and ships as the second decoder (above).
+For a user, decoding on one A100 takes 7-9 s for a whole tile at any rung, because the decoder runs at full resolution whatever the depth, and fetching the codes is under 1.3 s of that. A single 1024 px block takes about 0.1 s of GPU time, so reading one over HTTP is dominated by the requests: about 1.6 s in all at the latency and throughput measured from our server to Source Cooperative. On CPU through ONNX Runtime, decoding runs at about 45 windows/s
+with 16 threads, about 6 minutes for a full tile.

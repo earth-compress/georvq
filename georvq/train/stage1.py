@@ -11,23 +11,30 @@ reconstruction is the ceiling.
 """
 from __future__ import annotations
 
+import math
 import os
 import time
 
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import numpy as np
 import torch
 
-from georvq.config import Config
+from georvq.config import Config, TrainConfig
 from georvq.factory import build_model
 from georvq.repro import (run_metadata, save_checkpoint, seed_all,
                           write_resolved_config)
 from georvq.sources.report import resolve_report
 from georvq.train.figures import stage1_recon_figure
-from georvq.train.loop import resolve_device, setup_data
+from georvq.train.loop import make_lr_fn, resolve_device, setup_data
+from georvq.train.signals import stop_on_signals
 from georvq.train.warmstart import load_partial
+
+#: train.* knobs the stage-2 loop implements and this trainer does not.
+#: A stage-1 config that sets one is refused rather than run without it.
+UNSUPPORTED_TRAIN = ("batch_ramp", "guard_drop", "resume",
+                     "freeze_encoder_steps", "freeze_codec",
+                     "refit_books")
 
 SIG_FRACS = [0.0, 0.1, 0.25, 0.5, 1.0]   # val sigma levels (fractions of max)
 
@@ -49,18 +56,34 @@ def sample_sigmas(sig_cfg, batch, n_tiers, device):
     return torch.where(dropped, torch.full_like(sigmas, sig_cfg.max), sigmas)
 
 
+def check_stage1_config(cfg: Config):
+    """Refuse train.* settings this trainer would otherwise ignore."""
+    bad = [k for k in UNSUPPORTED_TRAIN
+           if getattr(cfg.train, k) != TrainConfig.model_fields[k].default]
+    if bad:
+        raise ValueError(
+            f"stage-1 training does not implement train.{', train.'.join(bad)}"
+            f"; leave them at their defaults (the stage-2 trainer, "
+            f"georvq.train.loop, implements them)")
+
+
 @torch.no_grad()
 def validate_stage1(model, source, val_s, sigma_max, device, batch=256,
-                    trunc=False, spec=None):
+                    trunc=False, spec=None, prep=None):
     """Reconstruction quality at several uniform (all-tier) sigma levels.
     frac=0 is the near-lossless ceiling; higher frac = more corruption =
     lossier. Metrics come from the run's `ReportSpec`, so this reports the
-    source's own headline measure rather than a cosine by assumption."""
+    source's own headline measure rather than a cosine by assumption.
+    `prep` is the run's model-space transform (the source's default when
+    None)."""
     if spec is None:
         spec = source.report(getattr(model, "cfg", None))
+    if prep is None:
+        from georvq.sources.prep import SourcePrep
+        prep = SourcePrep(source, getattr(model, "cfg", None))
     model.eval()
     n_tiers = len(model.specs)
-    chunks = [source.prep(val_s[i:i + batch], device)
+    chunks = [prep(val_s[i:i + batch], {}, device)[:2]
               for i in range(0, val_s.shape[0], batch)]
     out = {}
     for frac in SIG_FRACS:
@@ -91,6 +114,14 @@ def validate_stage1(model, source, val_s, sigma_max, device, batch=256,
 
 
 def train(cfg: Config, gpu=0):
+    """Train a stage-1 model. SIGUSR1 or SIGTERM saves `model.pt` at the
+    end of the current step and exits 0."""
+    with stop_on_signals() as stop:
+        return _train(cfg, gpu, stop)
+
+
+def _train(cfg: Config, gpu, stop):
+    check_stage1_config(cfg)
     assert cfg.model.sigma is not None, \
         "stage-1 training needs model.sigma set (and model.vq: null)"
     if cfg.model.sigma.truncate is not None:
@@ -120,6 +151,11 @@ def train(cfg: Config, gpu=0):
           flush=True)
     store, train_rows, val_rows, val_s, pool = setup_data(cfg, source, device)
     val_rows.to_parquet(os.path.join(run_dir, "val_chips.parquet"))
+    from georvq.data.sampler import WindowSampler
+    from georvq.sources.prep import build_prep
+    sampler = WindowSampler(pool, cfg.model)
+    prep = build_prep(cfg.data.prep.name, source, cfg.model,
+                      params=cfg.data.prep.params)
     print(f"model: {sum(p.numel() for p in model.parameters())/1e6:.2f}M "
           f"params", flush=True)
     if cfg.train.init_from:
@@ -127,16 +163,8 @@ def train(cfg: Config, gpu=0):
 
     opt = torch.optim.AdamW(model.parameters(), lr=cfg.train.optim.lr,
                             weight_decay=cfg.train.optim.wd)
-    warmup, lr0 = cfg.train.optim.warmup, cfg.train.optim.lr0_steps
-
-    def lr_fn(s):
-        if s < lr0:                   # AdamW warms its moments at lr=0 first
-            return 0.0
-        s -= lr0
-        total = max(cfg.train.steps - lr0, 1)
-        return (min(1.0, (s + 1) / warmup)
-                * 0.5 * (1 + np.cos(np.pi * min(1.0, s / total))))
-    sched = torch.optim.lr_scheduler.LambdaLR(opt, lr_fn)
+    sched = torch.optim.lr_scheduler.LambdaLR(opt, make_lr_fn(cfg))
+    step0 = cfg.log.step_offset
 
     use_wandb = cfg.log.wandb
     if use_wandb:
@@ -150,17 +178,24 @@ def train(cfg: Config, gpu=0):
     # the GPU computes batch N — hides ~100ms/step of serial stall
     from concurrent.futures import ThreadPoolExecutor
     _fetcher = ThreadPoolExecutor(1)
+    # The prefetch thread draws from its own generator: sharing the global
+    # one with the main thread's sigma and noise draws made the order of
+    # draws, and so the run, depend on thread timing.
+    fetch_gen = torch.Generator(device=pool.pool_device)
+    fetch_gen.manual_seed(cfg.train.seed)
 
     def _fetch():
-        return pool.sample_batch(batch, token=cfg.model.window, align=align)
+        return sampler.draw(batch, align=align, generator=fetch_gen)
     nxt = _fetcher.submit(_fetch)
     t0 = time.time()
     acc = {"loss": 0.0, qm.key: 0.0}; na = 0
     vs = {0.0: {}}
+    nonfinite_steps = 0
+    stopped = None
     for step in range(1, cfg.train.steps + 1):
-        s = nxt.result()
+        s, meta = nxt.result()
         nxt = _fetcher.submit(_fetch)
-        x, valid = source.prep(s, device)
+        x, valid, meta = prep(s, meta, device)
         sigmas = sample_sigmas(cfg.model.sigma, x.shape[0], n_tiers, device)
         # truncation mode: dropped tiers (pinned at sigma=max) are ZEROED —
         # sigma=max noise alone still leaks signal the decoder can mine
@@ -172,7 +207,16 @@ def train(cfg: Config, gpu=0):
         opt.zero_grad(set_to_none=True)
         loss.backward()
         gn = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-        opt.step(); sched.step()
+        if math.isfinite(float(gn)):
+            opt.step()
+        else:
+            # a non-finite gradient would poison Adam's moments
+            opt.zero_grad(set_to_none=True)
+            nonfinite_steps += 1
+            if nonfinite_steps <= 10:
+                print(f"step {step}: non-finite grad norm, update SKIPPED "
+                      f"({nonfinite_steps} so far)", flush=True)
+        sched.step()
         acc["loss"] += loss.item(); na += 1
         # the source's own train-time metrics, whatever it named them.
         # detach first: a source may return its loss term among the
@@ -204,11 +248,11 @@ def train(cfg: Config, gpu=0):
                 if pool.cycle:
                     log["data/epochs"] = pool.epochs
                     log["data/reuse_per_patch"] = pool.reuse_estimate
-                wandb.log(log, step=step)
+                wandb.log(log, step=step + step0)
         if step % cfg.train.val_interval == 0 or step == cfg.train.steps:
             vs = validate_stage1(model, source, val_s, sigma_max, device,
                                  trunc=cfg.model.sigma.truncate is not None,
-                                 spec=report)
+                                 spec=report, prep=prep)
             ceil = vs[0.0][qm.key]
             trunc = {k: v for k, v in vs.items() if isinstance(k, str)}
             extra0 = "".join(f" {m.key}={vs[0.0][m.key]:.4f}"
@@ -235,15 +279,28 @@ def train(cfg: Config, gpu=0):
                         and cfg.model.window >= 16):
                     fig = stage1_recon_figure(model, source, val_s,
                                               sigma_max, step,
-                                              preview=report.preview)
+                                              preview=report.preview,
+                                              prep=prep)
                     log["figs/recon"] = wandb.Image(fig); plt.close(fig)
-                wandb.log(log, step=step)
-        if step % cfg.train.save_interval == 0 or step == cfg.train.steps:
+                wandb.log(log, step=step + step0)
+        if (step % cfg.train.save_interval == 0 or step == cfg.train.steps
+                or stop):
+            with_optim = cfg.train.save_optim
             save_checkpoint(os.path.join(run_dir, "model.pt"), model, cfg,
                             step, {"quality_key": qm.key,
                                    f"{qm.key}_sigma0": vs[0.0].get(qm.key)
-                                   if step >= cfg.train.val_interval else None})
+                                   if step >= cfg.train.val_interval else None},
+                            opt=opt if with_optim else None,
+                            sched=sched if with_optim else None,
+                            prep_state=prep.state())
+        if stop:
+            print(f"step {step}: stopped by {stop.signame}; model.pt "
+                  f"saved", flush=True)
+            stopped = step
+            break
     _fetcher.shutdown(wait=False, cancel_futures=True)
     pool.shutdown()
+    if stopped is not None:
+        raise SystemExit(0)
     print(f"done -> {run_dir}", flush=True)
     return run_dir

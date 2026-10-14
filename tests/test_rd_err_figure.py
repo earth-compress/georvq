@@ -9,6 +9,7 @@ tensor crosses the boundary.
 """
 import matplotlib
 matplotlib.use("Agg")
+import pytest
 import torch
 
 from georvq.config import load_config
@@ -26,7 +27,7 @@ class _StubCodec:
     def train(self):
         return self
 
-    def level_cumsums(self, x, loc=None):
+    def level_cumsums(self, x, loc=None, valid=None):
         return None, None
 
     def eval_tuple(self, cums, t, ref, valid=None):
@@ -65,3 +66,15 @@ def test_rd_err_figure_past_the_quantile_size_limit():
     labels = [t.get_text() for t in fig.legends[0].texts] if fig.legends \
         else [l.get_label() for l in fig.axes[0].lines]
     assert {"MAE", "RMSE", "p90", "p99"} <= set(labels)
+
+
+@pytest.mark.parametrize("n_tiers", [1, 3, 4, 5])
+def test_cosdist_figure_any_tier_count(n_tiers):
+    import matplotlib.pyplot as plt
+    from georvq.train.figures import cosdist_figure
+    cosdist = [[0.5, 0.2, 0.1] for _ in range(n_tiers)]
+    fig = cosdist_figure(cosdist, None, [None] * n_tiers, step=7)
+    titles = [ax.get_title() for ax in fig.axes]
+    assert len(titles) == n_tiers
+    assert titles[0].startswith("coarse" if n_tiers <= 3 else "tier0")
+    plt.close(fig)

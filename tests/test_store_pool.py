@@ -84,8 +84,8 @@ def test_pool_aligned_crops(store):
     # reproduce the offset draws sample_batch makes with align=True
     torch.manual_seed(3)
     _ = torch.randint(0, 4, (64,), device=pdev)      # ci draw
-    r = torch.randint(0, (32 - 16) // 2, (64,), device=pdev) * 2
-    c = torch.randint(0, (64 - 16) // 2, (64,), device=pdev) * 2
+    r = torch.randint(0, (32 - 16) // 2 + 1, (64,), device=pdev) * 2
+    c = torch.randint(0, (64 - 16) // 2 + 1, (64,), device=pdev) * 2
     assert (r % 2 == 0).all() and (c % 2 == 0).all()
     torch.manual_seed(3)
     s = pool.sample_batch(64, token=16, align=True)
@@ -119,3 +119,62 @@ def test_shard_writer_append_dedupe(tmp_path):
     s = ChipStore(d)
     assert len(s.index) == 7
     assert s.index.chip_id.is_unique
+
+
+def _coded_pool(store, **kw):
+    """Coverage pool whose band 0 holds each pixel's column and band 1 its
+    row, so a crop's first pixel gives its offset."""
+    pool = ChipPool(store, store.index, pool_size=len(store.index),
+                    device=torch.device("cpu"), workers=0, seed=0,
+                    pool_device="cpu", **kw)          # no refresh threads
+    g = pool.gpools[None]
+    g[:, 0] = torch.arange(g.shape[-1], dtype=g.dtype)[None, None, :]
+    g[:, 1] = torch.arange(g.shape[-2], dtype=g.dtype)[None, :, None]
+    return pool
+
+
+@pytest.mark.parametrize("align", [False, True])
+def test_pool_crop_offsets_reach_the_last_position(store, align):
+    pool = _coded_pool(store, slot_rows=32)
+    torch.manual_seed(0)
+    s = pool.sample_batch(4000, token=16, align=align)
+    c, r = s[:, 0, 0, 0].long(), s[:, 1, 0, 0].long()
+    step = pool.period if align else 1
+    assert set(c.tolist()) == set(range(0, 64 - 16 + 1, step))
+    assert set(r.tolist()) == set(range(0, 32 - 16 + 1, step))
+    pool.shutdown()
+
+
+def test_pool_crop_equal_to_slot(store):
+    pool = _coded_pool(store, slot_rows=16, token=16)
+    for align in (False, True):
+        s = pool.sample_batch(8, token=16, align=align)
+        assert (s[:, 1, 0, 0] == 0).all()
+    pool.shutdown()
+
+
+def test_pool_rejects_crop_larger_than_slot(store):
+    with pytest.raises(ValueError, match="slot_rows >= 32"):
+        _mk_pool(store, slot_rows=16, token=32)
+    pool = _mk_pool(store, slot_rows=16)
+    with pytest.raises(ValueError, match="does not fit"):
+        pool.sample_batch(2, token=32)
+    pool.shutdown()
+
+
+def test_sample_batch_draws_from_a_given_generator(store):
+    """A seeded generator makes the draws independent of the global one, so
+    a prefetch thread can sample without racing the main thread."""
+    pool = ChipPool(store, store.index, pool_size=len(store.index),
+                    device=torch.device("cpu"), workers=0, seed=0,
+                    pool_device="cpu")         # resident: no refresh between draws
+    draw = lambda g: pool.sample_batch(6, token=8, generator=g)
+    g1, g2 = torch.Generator().manual_seed(3), torch.Generator().manual_seed(3)
+    a = draw(g1)
+    torch.rand(100)                               # consume the global generator
+    b = draw(g2)
+    assert torch.equal(a, b)
+    torch.manual_seed(5); c = pool.sample_batch(6, token=8)
+    torch.manual_seed(5); d = pool.sample_batch(6, token=8)
+    assert torch.equal(c, d)
+    pool.shutdown()

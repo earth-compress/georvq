@@ -32,9 +32,20 @@ from georvq.sources import Source
 _STATS_PATH = os.path.join(os.path.dirname(__file__), "era5_stats.json")
 
 # Units of the DEQUANTIZED store values, per variable (ECMWF conventions).
+# Only variables with moments in era5_stats.json can load; add a unit
+# here when its moments are added there.
 _UNITS = {"t": "K", "z": "m2 s-2", "u": "m s-1", "v": "m s-1",
-          "q": "kg kg-1", "msl": "Pa", "t2m": "K", "u10": "m s-1",
-          "v10": "m s-1"}
+          "q": "kg kg-1"}
+
+
+def _finite_mask(x):
+    """(x with non-finite values zeroed, valid (B, H, W), any_gaps).
+    A gap-free batch is returned as the same tensor, so its values are
+    untouched."""
+    valid = torch.isfinite(x).all(dim=1)
+    if bool(valid.all()):
+        return x, valid, False
+    return torch.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0), valid, True
 
 
 class _FixedNormalizer:
@@ -104,13 +115,14 @@ class Era5BoxcoxPrep:
     source grammar (kept for old resolved configs); new configs write
     `data.prep: {name: boxcox}`."""
 
-    requires: tuple = ()
     invertible = True
 
     def __init__(self, source, model_cfg):
         # a boxcox-mode twin of the source does the arithmetic; the
-        # outer source (plain moments) keeps serving the model/report
-        self._src = Era5Source(model_cfg, var=source.var + "+boxcox")
+        # outer source (plain moments) keeps serving the model/report.
+        # The twin is built from the outer source's full spec so a level
+        # subset (@std13) carries over.
+        self._src = Era5Source(model_cfg, var=source.spec + "+boxcox")
 
     def forward(self, raw, meta, device):
         x, valid = self._src.prep(raw, device)
@@ -118,6 +130,11 @@ class Era5BoxcoxPrep:
 
     def inverse(self, y, meta):
         return self._src.normalizer(None).denormalize(y, None)
+
+    def load_state(self, state):
+        """The exponents and moments come from era5_stats.json, which
+        the module docstring freezes, so the embedded copy is not read
+        back."""
 
     def state(self):
         return {"boxcox": {"lam": self._src._lam.view(-1).tolist(),
@@ -146,6 +163,9 @@ class Era5Source(Source):
             var = var[:-len("+boxcox")]
             self._bc = True
         self._single = False
+        #: "<var>[@subset]" without "+boxcox": what a named prep rebuilds
+        #: its twin from
+        self.spec = var
         if "@" in var:
             var, subset = var.split("@", 1)
             if subset == _SINGLE:
@@ -156,6 +176,13 @@ class Era5Source(Source):
                 raise KeyError(f"unknown era5 level subset {subset!r}; "
                                f"have {sorted(_LEVEL_SUBSETS)} + "
                                f"{_SINGLE!r}")
+        if self._bc and self._single:
+            # the @single path standardizes by the drawn level's moments
+            # and never applies the transform, and the Box-Cox inverse
+            # needs the level, which is not carried past prep
+            raise ValueError(
+                f"era5:{self.spec}: Box-Cox is not supported with "
+                f"@{_SINGLE}")
         self.var = var
         with open(_STATS_PATH) as f:
             stats = json.load(f)
@@ -201,7 +228,7 @@ class Era5Source(Source):
         chosen indices land in self._pick_idx for the moment gather."""
         n = raw.shape[1]
         if getattr(self, "_prep_deterministic", False):
-            h = raw[:, 0, ::5, ::7].double().abs().sum(dim=(1, 2))
+            h = raw[:, 0, ::5, ::7].double().nan_to_num().abs().sum(dim=(1, 2))
             idx = (h * 1e3).long() % n
         else:
             idx = torch.randint(n, (raw.shape[0],), device=raw.device)
@@ -211,9 +238,12 @@ class Era5Source(Source):
 
     def prep(self, raw, device):
         """float32 (B, levels, W, W) physical units -> per-level
-        standardized floats. ERA5 is gap-free, so validity is all-true.
-        With a level subset, the store still serves all 37 levels and
-        the unused ones are dropped here."""
+        standardized floats. A pixel is valid when every level is finite:
+        the store serves NaN where a NaN-coded variable (sst over land)
+        has no value, and those pixels are set to 0 in model space. The
+        reanalysis variables are gap-free, so for them validity is
+        all-true. With a level subset, the store still serves all 37
+        levels and the unused ones are dropped here."""
         if self._single:
             self._pick_idx = None
             if raw.shape[1] != 1 and torch.device(device).type != "cpu":
@@ -231,6 +261,7 @@ class Era5Source(Source):
         if self._single:
             if x.shape[1] != 1:            # cpu path: not yet selected
                 x = self._pick_single(x)
+            x, valid, gaps = _finite_mask(x)
             if self._pick_idx is not None:
                 # picked from a 37-band store: standardize by the
                 # drawn level. A single-level store (--single-level
@@ -239,14 +270,15 @@ class Era5Source(Source):
                 mu = self._mu.view(-1).to(x.device)[idx].view(-1, 1, 1, 1)
                 sd = self._sd.view(-1).to(x.device)[idx].view(-1, 1, 1, 1)
                 x = (x - mu) / sd
-            valid = torch.ones(x.shape[0], *x.shape[2:], dtype=torch.bool,
-                               device=x.device)
+            if gaps:
+                x = torch.where(valid[:, None], x, torch.zeros_like(x))
             return x, valid
+        x, valid, gaps = _finite_mask(x)
         if self._lam is not None:
             x = _boxcox(x.clamp_min(0) + self._bc_eps, self._lam)
         x = (x - self._mu) / self._sd
-        valid = torch.ones(x.shape[0], *x.shape[2:], dtype=torch.bool,
-                           device=x.device)
+        if gaps:
+            x = torch.where(valid[:, None], x, torch.zeros_like(x))
         return x, valid
 
     def named_preps(self):
@@ -261,8 +293,7 @@ class Era5Source(Source):
         return DenseHead(in_dim, grid=grid, p=p,
                          bands=model_cfg.bands,
                          head_feat=model_cfg.decoder.head_feat,
-                         normalize=False,
-                         dw=model_cfg.decoder.head_dw)
+                         normalize=False)
 
     def normalizer(self, model_cfg):
         if self._lam is not None:

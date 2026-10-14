@@ -10,20 +10,42 @@ from __future__ import annotations
 
 import torch
 
+from georvq.repro import load_checkpoint
+
 ENCODER_PREFIXES = ("tokenizer.", "stem.")
 
 
+def _level_prefix(key):
+    """'rvqs.{i}.levels.{j}.' for a key inside one RVQ level, else None."""
+    parts = key.split(".")
+    if len(parts) > 4 and parts[0] == "rvqs" and parts[2] == "levels":
+        return ".".join(parts[:4]) + "."
+    return None
+
+
 def load_partial(model, path, device):
-    """Shape-reconciled warm start. Returns (n_copied, codebooks_loaded)."""
-    ck = torch.load(path, map_location=device, weights_only=False)
+    """Shape-reconciled warm start. Returns (n_copied, codebooks_loaded).
+
+    A level whose `codebook.weight` is not copied takes none of the
+    source's per-level state either. Its `initialized` and `step` buffers
+    are 0-dim and would shape-match any checkpoint, and a copied
+    `initialized=True` would stop the lazy data init from firing, leaving
+    the book at its random init."""
+    ck = load_checkpoint(path, map_location=device)
     sd = ck["model"]
     if "config" not in ck:                      # legacy checkpoint naming
         from georvq.compat import remap_state_dict
         sd = remap_state_dict(sd, strict=False)
     own = model.state_dict()
+    fresh_levels = {pre for k in own
+                    if k.endswith("codebook.weight")
+                    and (pre := _level_prefix(k)) is not None
+                    and not (k in sd and sd[k].shape == own[k].shape)}
     copied = 0
     with torch.no_grad():
         for k, v in sd.items():
+            if _level_prefix(k) in fresh_levels:
+                continue
             if k in own and own[k].shape == v.shape:
                 own[k].copy_(v); copied += 1
             elif (k in own and k.endswith("to_patch.weight")
@@ -50,11 +72,46 @@ def load_partial(model, path, device):
     return copied, loaded_cb
 
 
+def check_warm_start(cfg, books_loaded: bool):
+    """Refuse a warm start whose VQ-free warmup would discard loaded books.
+
+    `vq.warmup_steps` trains the autoencoder unquantized and then
+    k-means-initialises the books at warmup_steps + 1. That is the
+    intended path when the init_from checkpoint has no books, or books of
+    another shape (a stage-1 encoder, a new K). When it supplied
+    shape-matching books, the k-means throws them away halfway into the
+    run with nothing in the loss to show it. Observed: a grown-Tessera
+    run inherited warmup_steps=20000 and would have discarded the
+    released codebooks at step 20001. `train.refit_books` states that
+    the refit is intended."""
+    v = cfg.model.vq
+    if v is None or not cfg.train.init_from or not v.warmup_steps:
+        return
+    if books_loaded and not cfg.train.refit_books:
+        raise ValueError(
+            f"train.init_from={cfg.train.init_from} supplied codebooks of "
+            f"this model's shape, and model.vq.warmup_steps="
+            f"{v.warmup_steps} would k-means re-initialise them at step "
+            f"{v.warmup_steps + 1}, discarding them. Set "
+            f"model.vq.warmup_steps: 0 to keep them, or train.refit_books: "
+            f"true if the refit is intended.")
+
+
+def book_shapes(model_cfg):
+    """{state-dict key: (codes, dim)} of every codebook the config builds;
+    empty for a model without VQ. Matches `PyramidCodec.rvqs`."""
+    if model_cfg.vq is None:
+        return {}
+    return {f"rvqs.{i}.levels.{j}.codebook.weight": (sp.codes, sp.dim)
+            for i, sp in enumerate(model_cfg.tiers)
+            for j in range(sp.depth)}
+
+
 def mature_codebooks(model, decay=0.9995):
     """Warm-started codebooks: freeze dead-code resets, slow the EMA.
 
-    This OVERRIDES `vq.ema_decay` and disables `vq.reset_interval` /
-    `vq.reset_mode` for the run. That is right when the books arrive
+    This OVERRIDES `vq.ema_decay` and disables the dead-code resets (and
+    with them `vq.reset_mode`) for the run. That is right when the books arrive
     already fitted and should barely move, and wrong when the point of
     the run is to keep them live -- set `vq.mature_warmstart: false`
     then. It is on by default, so any run with `train.init_from` gets it
@@ -86,21 +143,6 @@ def freeze_books(model):
             lev.codebook.weight.requires_grad_(False)
     return sum(l.codebook.weight.numel() for rvq in model.rvqs
                for l in rvq.levels)
-
-
-def decoder_tail_names(model, n_blocks):
-    """Names of the last `n_blocks` decoder blocks plus the output head."""
-    import re
-    idx = {int(m.group(1)) for n, _ in model.named_parameters()
-           if (m := re.match(r"decoder\.blocks\.(\d+)\.", n))}
-    tail = {i for i in sorted(idx)[-n_blocks:]} if n_blocks > 0 else set()
-    keep = set()
-    for n, _ in model.named_parameters():
-        m = re.match(r"decoder\.blocks\.(\d+)\.", n)
-        if (m and int(m.group(1)) in tail) or \
-                n.startswith(("decoder.head.", "decoder.norm_out.")):
-            keep.add(n)
-    return keep
 
 
 def set_params_frozen(model, names, frozen: bool):

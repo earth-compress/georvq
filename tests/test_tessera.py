@@ -138,31 +138,6 @@ def test_scale_sidecar_layout(tmp_path):
     assert (s0[3] == planes[3]).all() and (s1[1] == planes[5]).all()
 
 
-def test_limit_chips_nested_subsample(tmp_path):
-    """data.limit_chips trains on a deterministic nested subset; val full."""
-    from georvq.config import load_config
-    from georvq.data.build import build_synthetic_store
-    from georvq.sources import get_source
-    from georvq.train.loop import setup_data
-    build_synthetic_store(tmp_path / "store", n_chips=12, bands=8,
-                          chip_px=64, shard_size=4)
-    base = [f"data.store_dir={tmp_path / 'store'}"]
-
-    def train_ids(limit):
-        cfg = load_config("configs/smoke.yaml",
-                          base + [f"data.limit_chips={limit}"])
-        src = get_source(cfg.data.source, cfg.model)
-        _, train_rows, val_rows, _, pool = setup_data(cfg, src, "cpu")
-        pool.shutdown()
-        return set(train_rows.chip_id), len(val_rows)
-
-    ids3, nval3 = train_ids(3)
-    ids6, nval6 = train_ids(6)
-    assert len(ids3) == 3 and len(ids6) == 6
-    assert ids3 < ids6                        # nested for the same split_seed
-    assert nval3 == nval6                     # val split untouched
-
-
 def _write_scale_sidecars(store_dir, n_chips, shard_size, chip_px, seed=7):
     """Random positive fp16 scale planes matching the store's shard/slot
     layout, as the tessera builder would have written them."""
@@ -209,7 +184,6 @@ def test_store_aux_planes_reach_prep(tmp_path):
     assert torch.allclose(x[0][:, valid[0]], ref[:, valid[0]], atol=1e-5)
 
 
-@pytest.mark.slow
 def test_tessera_training_smoke(tmp_path):
     """End-to-end pyramid smoke on a synthetic 128-band tessera store."""
     from georvq.config import load_config

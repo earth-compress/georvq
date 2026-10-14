@@ -244,6 +244,11 @@ def test_recon_figure_never_runs_the_model_in_train_mode():
     x, v = _batch(cfg, B=8, nodata=False)
 
     class Src:
+        name = "stub"
+
+        def normalizer(self, cfg):
+            return None
+
         def prep(self, raw, device):
             return x, v
 
@@ -252,3 +257,29 @@ def test_recon_figure_never_runs_the_model_in_train_mode():
     assert seen["training"] is False, \
         "recon_figure ran the model in train mode -> lazy _data_init fires"
     assert spy.training is True, "recon_figure left the model in eval mode"
+
+
+def test_eval_helpers_pass_the_stats():
+    """entropy_level_bits, encode_stage1 and codebook_health run on a
+    stats_cond model and use the valid mask for the stats."""
+    cfg, m = _model(extra=["model.rate={model_dim: 16, blocks: 1, ctx_dim: 8}"])
+    m.eval()
+    x, v = _batch(cfg)
+    bits = m.entropy_level_bits(x, valid=v)
+    assert [b.shape for b in bits] == [(3, sp.depth) for sp in m.specs]
+    zs = m.encode_stage1(x, m.patch_stats(x, v), v)
+    assert torch.allclose(zs[0].norm(dim=-1),
+                          torch.full_like(zs[0][..., 0], 16 ** 0.5),
+                          atol=1e-4)
+    h_valid = m.codebook_health(x, valid=v)
+    h_none = m.codebook_health(x)
+    assert h_valid.keys() == h_none.keys()
+
+
+def test_selector_diagnostics_on_a_stats_cond_model():
+    cfg, m = _model(extra=[
+        "model.conditioning={kind: select, proj_dim: 8, subset_frac: 1.0}"])
+    m.eval()
+    x, v = _batch(cfg)
+    d = m.selector.diagnostics(m, x, torch.randn(x.shape[0], 256), v)
+    assert d["sel_recall_p0_mean"] == pytest.approx(1.0)

@@ -5,13 +5,21 @@ codec was trained for), reconstructs every labelled pixel at each rate, and runs
 the frozen-embedding probes on the reconstruction -- giving downstream
 performance (and its gap to the original embedding) as a function of bits/pixel.
 Emits a tidy CSV, a console table, and a rate-distortion-style plot. Overlay
-multiple checkpoints (e.g. a 64px and a 128px codec) on one axis.
+multiple checkpoints (e.g. a 64px and a 128px codec) on one axis. A single
+tuple (`--tuples 8-8-8`) is the plain A/B of one operating point.
 
-Example:
+`--sanity identity|noise` adds a codec stand-in that checks the harness
+without a checkpoint: identity should give a delta of zero, and noise
+(`--noise-sigma`) a small negative one. Stand-in rows have no rate and are
+left off the plot.
+
+Examples:
   python scripts/eval_rate_sweep.py --dataset /data/AE-samples/eval/aster_ged \
       --ckpt checkpoints/pyr128/model_best.pt \
              checkpoints/pyr64/model_best.pt \
       --n-front 8 --out-dir plots/ae_downstream --wandb
+  python scripts/eval_rate_sweep.py --dataset /data/AE-samples/eval/aster_ged \
+      --sanity noise --noise-sigma 0.05 --out-dir plots/ae_downstream
 """
 from __future__ import annotations
 
@@ -30,7 +38,6 @@ import torch
 
 from georvq.eval import codec_ab
 from georvq.eval.probes import run_probes
-from georvq.model.codec import tuple_bits
 
 
 def model_tag(path):
@@ -52,14 +59,13 @@ def sweep_ckpt(ckpt, windows, t, X_orig, y, groups, meta, args, device):
 
     win, inv, lr, lc = codec_ab.unique_windows(windows, t, W)
     recons = codec_ab.reconstruct_tuples(model, win, inv, lr, lc, tuples,
-                                         device,
-                                         source=meta.get("source", "ae"))
+                                         device)
     budgets = [None if b == "all" else int(b) for b in args.budgets.split(",")]
     probes = tuple(args.probes.split(","))
 
     rows = []
     for ls, Xr in zip(tuples, recons):
-        bpp = tuple_bits(specs, ls) / (W * W)
+        bpp = codec_ab.bits_per_px(model, ls)
         cos = float((X_orig * Xr).sum(1).mean())
         rr = run_probes(Xr, y, groups, meta["task"], budgets, probes,
                         args.test_frac, args.seed)
@@ -74,6 +80,31 @@ def sweep_ckpt(ckpt, windows, t, X_orig, y, groups, meta, args, device):
     return pd.DataFrame(rows)
 
 
+def sanity_rows(kind, X_orig, y, groups, meta, args):
+    """Probe a codec stand-in: the original embeddings (identity) or
+    those plus Gaussian noise, renormalised (noise)."""
+    from georvq.eval.extract import l2norm_np
+    if kind == "identity":
+        Xr = X_orig.copy()
+    else:
+        rng = np.random.default_rng(args.seed)
+        Xr = l2norm_np(X_orig + rng.normal(
+            0, args.noise_sigma, X_orig.shape).astype(np.float32))
+    budgets = [None if b == "all" else int(b) for b in args.budgets.split(",")]
+    probes = tuple(args.probes.split(","))
+    cos = float((X_orig * Xr).sum(1).mean())
+    rr = run_probes(Xr, y, groups, meta["task"], budgets, probes,
+                    args.test_frac, args.seed)
+    tag = f"sanity_{kind}"
+    print(f"\n=== {tag}: cos={cos:.4f}  "
+          + "  ".join(f"{r['probe']}/{r['budget']}={r['value']:.3f}"
+                      for r in rr), flush=True)
+    return pd.DataFrame([{"model": tag, "window": np.nan, "tuple": kind,
+                          "bits_per_px": np.nan, "embed_cos": cos,
+                          "probe": r["probe"], "budget": r["budget"],
+                          "recon": r["value"]} for r in rr])
+
+
 def plot_report(df, orig, meta, out_png):
     import matplotlib
     matplotlib.use("Agg")
@@ -81,7 +112,7 @@ def plot_report(df, orig, meta, out_png):
 
     m = meta["metric"]
     bud = "all" if "all" in df.budget.unique() else df.budget.iloc[0]
-    d = df[df.budget == bud]
+    d = df[(df.budget == bud) & df.bits_per_px.notna()]
     probes = list(dict.fromkeys(d.probe))
     models = list(dict.fromkeys(d.model))
     cmap = plt.get_cmap("tab10")
@@ -114,7 +145,11 @@ def plot_report(df, orig, meta, out_png):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dataset", required=True)
-    ap.add_argument("--ckpt", nargs="+", required=True)
+    ap.add_argument("--ckpt", nargs="+", default=[])
+    ap.add_argument("--sanity", choices=["identity", "noise"], default=None,
+                    help="codec stand-in that checks the harness without "
+                         "a checkpoint")
+    ap.add_argument("--noise-sigma", type=float, default=0.05)
     ap.add_argument("--n-front", type=int, default=8,
                     help="auto-pick N rate points spread across bits "
                          "(0 => use the checkpoint's recon_tuples)")
@@ -124,8 +159,7 @@ def main():
     ap.add_argument("--probes", default="knn3,linear")
     ap.add_argument("--test-frac", type=float, default=0.3)
     ap.add_argument("--seed", type=int, default=0)
-    # GPU0 usually carries other people's jobs on this box -- default to 1
-    ap.add_argument("--device", default="cuda:1" if torch.cuda.is_available()
+    ap.add_argument("--device", default="cuda" if torch.cuda.is_available()
                     else "cpu")
     ap.add_argument("--out-dir", default="plots/ae_downstream")
     ap.add_argument("--label-col", default="label",
@@ -137,6 +171,8 @@ def main():
                          "both sources are probed on the same points")
     ap.add_argument("--wandb", action="store_true")
     args = ap.parse_args()
+    if not args.ckpt and not args.sanity:
+        ap.error("pass --ckpt <model.pt> ... and/or --sanity {identity,noise}")
     os.makedirs(args.out_dir, exist_ok=True)
 
     meta = json.load(open(os.path.join(args.dataset, "meta.json")))
@@ -175,6 +211,8 @@ def main():
 
     parts = [sweep_ckpt(c, windows, t, X_orig, y, groups, meta, args,
                         args.device) for c in args.ckpt]
+    if args.sanity:
+        parts.append(sanity_rows(args.sanity, X_orig, y, groups, meta, args))
     df = pd.concat(parts, ignore_index=True)
     df["orig"] = [orig[(p, b)] for p, b in zip(df.probe, df.budget)]
     df["delta"] = df.recon - df.orig
@@ -188,14 +226,15 @@ def main():
           f"{show[['model','tuple','bits_per_px','embed_cos','probe','orig','recon','delta']].to_string(index=False)}",
           flush=True)
     print(f"\nwrote {out_csv}", flush=True)
-    plot_report(df, orig, {**meta, "benchmark": tag},
-                os.path.join(args.out_dir, f"ratesweep_{tag}.png"))
+    if args.ckpt:
+        plot_report(df, orig, {**meta, "benchmark": tag},
+                    os.path.join(args.out_dir, f"ratesweep_{tag}.png"))
 
     if args.wandb:
         import wandb
         wandb.init(project="georvq", job_type="downstream_ratesweep",
                    name=f"{tag}_ratesweep",
-                   config={**meta, "label_col": lc,
+                   config={**meta, "label_col": lc, "sanity": args.sanity,
                            "ckpts": [model_tag(c) for c in args.ckpt]})
         wandb.log({"table": wandb.Table(dataframe=df)})
         wandb.finish()

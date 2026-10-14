@@ -58,13 +58,14 @@ def gauss_bits(A, rel_targets):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--cache", required=True)
-    ap.add_argument("--gpu", type=int, default=1)
+    ap.add_argument("--device", default="cuda",
+                    help="torch device; cuda is the card Slurm allocated")
     ap.add_argument("--per-chip", type=int, default=63,
                     help="windows per chip in the cache (for the stride arm)")
     args = ap.parse_args()
 
     torch.set_grad_enabled(False)
-    dev = torch.device(f"cuda:{args.gpu}")
+    dev = torch.device(args.device)
     z = np.load(args.cache)
     X = torch.from_numpy(np.concatenate([z["M"], z["S"]], 1)).double().to(dev)
     Xv = torch.from_numpy(np.concatenate([z["Mv"], z["Sv"]], 1)) \

@@ -95,3 +95,15 @@ def test_forward_train_backward_reaches_all_paths(ts_cfg):
     assert m.decoder.solo[0].weight.grad is not None
     assert m.decoder.heads[1].weight.grad is not None
     assert m.decoder.blocks[0].mlp[0].weight.grad is not None
+
+
+def test_decoder_ff_ratio_widens_only_the_decoder(ts_cfg):
+    def counts(ff):
+        raw = ts_cfg.model_dump(mode="json")
+        raw["model"]["decoder"]["ff_ratio"] = ff
+        m = build_model(Config.model_validate(raw), torch.device("cpu"))
+        return (sum(p.numel() for p in m.decoder.parameters()),
+                sum(p.numel() for p in m.tokenizer.parameters()))
+    unset, same, wide = counts(None), counts(2.0), counts(3.0)
+    assert unset == same                 # None shares model.ff_ratio (2.0)
+    assert wide[0] > same[0] and wide[1] == same[1]

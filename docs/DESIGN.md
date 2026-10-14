@@ -3,7 +3,7 @@
 # How georvq works, and why it is built that way
 
 The first half of this document explains the method, including details
-about the model architecture and quantization approach. The second half
+about the model architecture and quantisation approach. The second half
 gives the reasoning which drove some of those design decisions, citing the findings
 ledger (`lab/findings/`, searchable with `lab/query.py`), which gives more detail about specific 
 experiments and what was run. Whilst the specific configurations and parameters
@@ -11,7 +11,7 @@ differ between data sources, the main method doesn't. For specific solutions tha
 now released, see the other docs (`docs/AE_RELEASE.md`,
 `docs/TESSERA_RELEASE.md`).
 
-## Part 1 -- How it works
+## How it works
 
 ### The idea
 
@@ -19,9 +19,9 @@ georvq is a learned compressor for geospatial data. Unlike a classical codec
 like JPEG, which applies one fixed mathematical recipe to everything, georvq
 trains a neural network on the kind of data it will compress. By doing so, the
 network learns what that data tends to look like and can describe it
-in fewer bits. Each map tile is cut into small windows; 64 x 64
-pixels with B bands per pixel in the example used throughout. An encoder network reduces each window to a
-handful of vectors; those vectors are snapped to entries in learned
+in fewer bits. Each map tile is cut into small windows, which in the
+example used throughout are 64 x 64 pixels with B bands per pixel. An encoder network reduces each window to a
+handful of vectors, and those vectors are snapped to entries in learned
 lookup tables (codebooks), where each successive codebook approximates the residual from the last, 
 getting us closer and closer to the real vector. Only small integer IDs need to be
 stored. At decode time, the IDs are turned back into reconstructions of the original latent vectors, then fed through
@@ -125,15 +125,14 @@ of the data to understand a sensible configuration. However, whilst informed by 
 arguments, the design is ultimately arrived at through trial-and-error 
 for each source.
 
-### Codebooks, and quantizing by successive approximation
+### Codebooks, and quantising by successive approximation
 
-A codebook is a learned lookup table: a list of K prototype vectors
+A codebook is a learned lookup table, a list of K prototype vectors
 that between them cover the kinds of cell summaries the encoder
-produces. To store a cell you do not store its numbers; you find the
-closest prototype and store its index, which costs log2(K) bits
-however many dimensions the vector has.
+produces. A cell is stored as the index of its closest prototype, which
+costs log2(K) bits however many dimensions the vector has.
 
-One lookup alone is too crude, so georvq quantizes in rounds, in the
+One lookup alone is too crude, so georvq quantises in rounds, in the
 way a number is written down digit by digit. Each round has its own
 codebook, trained on whatever the previous rounds failed to capture:
 
@@ -155,19 +154,20 @@ codebook, trained on whatever the previous rounds failed to capture:
    reconstruction:   q1 + q2 + ... + qL  -- and you may stop at any L
 ```
 
-This is residual vector quantization (residual VQ, or RVQ). Each round
+This is residual vector quantisation (residual VQ, or RVQ). Each round
 costs one integer per cell, log2(K) bits for that tier's codebook. The
 corrections shrink quickly round over round on typical content, and
-the size of the late corrections is a useful health signal: if the
-last rounds are still making large moves, the quantizer is struggling
-with this window, and exactly that is used as an error predictor.
+the size of the late corrections is a useful health signal. Large
+corrections in the last rounds mean that the codebooks fit this window
+poorly, and their size is used to predict the window's reconstruction
+error.
 
 The codebooks are learned during training by exponential moving
-averages, with the machinery that keeps every entry in use: k-means
-initialization, resets for entries that fall out of use. That is most
-of `model/vq.py`, and its numerics must never drift, because the value
-of the repository rests on trained checkpoints decoding bit-identically
-forever.
+averages, with k-means initialisation, and with resets for entries that
+fall out of use so that every entry keeps being used. That is most of
+`model/vq.py`, and its numerics must never change, because files
+encoded with a trained checkpoint have to keep decoding bit-identically
+(see the invariants in `docs/OVERVIEW.md`).
 
 ### Variable compression from a single model
 
@@ -175,57 +175,55 @@ Many codecs require a quality setting at encode time. georvq is
 trained so the choice can wait until decode time, because the encoded
 data is structured in an ordered list of importance.
 
-The mechanism is in training. For every window the decoder is handed a
-randomly chosen number of quantization rounds per tier -- perhaps
-every coarse round, half the mid rounds and no fine at all -- and is
-told what it got (the depth tuple conditions the network). Having
-practised at every budget, it degrades gracefully instead of failing
-when codes are missing. At encode time everything is stored once at
-full depth; readers then decode whatever prefix suits them.
+During training, the decoder receives a randomly chosen number of
+quantisation rounds per tier for every window, for example every coarse
+round, half the mid rounds and no fine rounds at all, and the depth
+tuple is passed to the network as conditioning. Because it has been
+trained at every budget, the decoder's output becomes gradually worse as
+codes are removed, rather than failing. At encode time everything is
+stored once at full depth, and readers then decode whatever prefix suits
+them.
 
 The tiers have very different costs. A round is log2(K) bits per cell,
 and on the 1/4/16 example the fine tier has 256 cells to the coarse
 tier's one, so a fine round costs more than two orders of magnitude
 more than a coarse round.
 The efficient path up the quality ladder is therefore to saturate
-coarse first, then mid, then add fine rounds one at a time. That
-ordering is measured, not assumed: depth-tuple sweeps on validation
-data show balanced tuples losing to same-cost alternatives
+coarse first, then mid, then add fine rounds one at a time.
+Depth-tuple sweeps on validation data confirm this ordering, with
+balanced tuples losing to same-cost alternatives
 ([`rate-ladder-asymmetry`](../lab/findings/rate-ladder-asymmetry.md),
 [`cells-dominate-rate`](../lab/findings/cells-dominate-rate.md)).
 
 ### Residual sidecars
 
 Usually, an encoder-decoder's performance will still be significantly
-higher when using unquantized vectors, versus the full stream of codebooks.
+higher when using unquantised vectors, versus the full stream of codebooks.
 This is because in high dimensional space, after all N codebooks, a vector 
 will still have a significant residual, and that leftover can
-be shipped directly: scalar-quantized at a bit or two per number and
+be shipped directly: scalar-quantised at a bit or two per number and
 added back at decode, without touching the codebooks or the index
 stream. This usually works because after many codebooks, the residual
-is white noise, and so optimal quantization is a relatively simple task
+is white noise, and so optimal quantisation is a relatively simple task
 and doesn't require more codebooks to get the best performance.
 Whether this pays, and on which tier, is a fact about the
 trained model rather than the architecture. The available gain is
-bounded by the tier's ceiling gap (the improvement in performance when a completely unquantized
+bounded by the tier's ceiling gap (the improvement in performance when a completely unquantised
 vector is used, against using all the codebooks) which is measured first
 ([`refinement-budget-is-the-ceiling-gap`](../lab/findings/refinement-budget-is-the-ceiling-gap.md)),
 and the slack sits on different tiers in different models
 ([`refinement-tier-differs-per-model`](../lab/findings/refinement-tier-differs-per-model.md)).
-On AlphaEarth the coarse tier holds it, where the leftover is
-concentrated in unusual windows the coarse codebook never learned well
-([`ae-outlier-tail-is-coarse`](../lab/findings/ae-outlier-tail-is-coarse.md));
-on Tessera it is the fine tier. Because a sidecar's cost scales with
-the tier's cell count, a coarse sidecar can ship on by default while a
-fine one has to be an opt-in
+On Tessera it is the fine tier. Because a sidecar's cost scales with
+the tier's cell count, a coarse sidecar could ship on by default while a
+fine one, as on Tessera, has to be an opt-in
 ([`refinement-cost-scales-with-cells`](../lab/findings/refinement-cost-scales-with-cells.md)).
 
-### Stats normalization
+### Stats normalisation
 
-The stats normalization module is a key design choice that must be
+The stats normalisation module is a key design choice that must be
 decided per source. Currently, three modes are supported and used in different
-sources. No normalization (AE), mean-only normalization (TESSERA) and 
-mean+std normalization (Sentinel-2). If normalization is used, then the input is
+sources. No normalisation, mean-only normalisation (AE and TESSERA) and 
+mean+std normalisation (Sentinel-2). If normalisation is used, then the input is
 first debiased by the per-band mean of the patch, and divided by the per-band standard deviation,
 making each band zero-centred and with a roughly equal spread of values. Whilst removed from the input,
 those vectors _are_ seen by the encoder and decoder, through conditioning channels. At the output of the
@@ -236,7 +234,7 @@ done for it, saving its expressive capacity for spatial features and variations 
 However, especially for sources with a large number of channels, the number of bits used to encode the 
 mean and standard deviation is large compared to the coarse tier's tokens, and so this can significantly 
 lift the bitrate of the most extreme compression rates, whilst having very little impact on the bitrate 
-of the full bitstream. Therefore, quantization and compression of those statistics, and the effect of
+of the full bitstream. Therefore, quantisation and compression of those statistics, and the effect of
 quality on the decoder, should always be an area of active research for sources.
 
 ### Experimental submodules
@@ -257,76 +255,72 @@ amount of data needed is similar in size to the model (on the order of
 hundreds of MB for most sources), therefore, no model weights or codebooks
 are part of any bitstream; see `docs/BITSTREAM.md` for more information.
 
-## Part 2 -- Why it is built that way
+## Why it is built that way
 
 Each claim cites a record in the findings ledger, which holds the
 numbers and their measurement context.
 
-## Architecture
+### Architecture
 
-The encoder is a ViT tokenizer and the decoder an attention trunk
+The encoder is a ViT tokeniser and the decoder an attention trunk
 because both beat convolutional alternatives on dense embedding fields
-([`vit-beats-conv`](../lab/findings/vit-beats-conv.md)). Convolutional patch stems remain as the per-source
-plug point.
+([`vit-beats-conv`](../lab/findings/vit-beats-conv.md)). Convolutional
+patch stems remain as the part of the encoder that each source sets for
+itself.
 
 One checkpoint serves every rate because training samples monotone
 per-tier depth tuples and conditions the decoder on the tuple. Minimum
 depths concentrate capacity on the operating points that get used
 ([`matryoshka-min-depths`](../lab/findings/matryoshka-min-depths.md)). The current recipe (`depth_sampling: path`,
-used by the Tessera release and the S2, DEM and ERA5 presets) samples
+used by the AE and Tessera releases and the S2, DEM and ERA5 presets) samples
 depth uniformly along the truncation path so that deep fine-tier levels
 see enough training traffic ([`depth-sampling-along-path`](../lab/findings/depth-sampling-along-path.md)). The schema
 default is still `nested`, which the older AE presets, including the one
-behind the AE release, were trained with.
+behind the first AE release, were trained with.
 
-## Quantization
+### Quantisation
 
 VQ state is kept in fp32 under bf16 training, since lower precision in
 the residuals, EMA buffers or codebooks degrades them
-([`vq-state-stays-fp32`](../lab/findings/vq-state-stays-fp32.md)). Large codebooks survive only with the full set
-of health measures, from k-means init to traffic-scaled dead-code
-resets ([`codebook-health-machinery`](../lab/findings/codebook-health-machinery.md)).
+([`vq-state-stays-fp32`](../lab/findings/vq-state-stays-fp32.md)). Large codebooks stay in use only with the full set
+of health measures, from k-means initialisation to traffic-scaled
+dead-code resets ([`codebook-health-machinery`](../lab/findings/codebook-health-machinery.md)).
 
-Codebook size is derived, not chosen. A codebook needs a minimum number
-of training vectors per codeword inside its EMA window, which ties K to
+The codebook size K follows from how many training vectors each
+codeword sees. A codebook needs a minimum number of training vectors per codeword inside its EMA window, which ties K to
 batch size, cell count and reset cadence, and means K should grow with
 tier rather than being fixed globally ([`codebook-sample-budget`](../lab/findings/codebook-sample-budget.md)). Where a
 tier is well sampled, larger codebooks seem to beat deeper stacks at matched
-rate ([`bigger-k-beats-more-levels`](../lab/findings/bigger-k-beats-more-levels.md)); the two records state the contexts
+rate ([`bigger-k-beats-more-levels`](../lab/findings/bigger-k-beats-more-levels.md)), and the two records state the contexts
 in which each applies. Once fitted, codebooks are best frozen, because
 continued EMA training can degrade a good fit ([`ema-can-degrade-a-good-fit`](../lab/findings/ema-can-degrade-a-good-fit.md)). 
 Codebook quality is judged on rate-distortion, never on usage or
-perplexity, which can be gamed to perfection while explaining almost
-none of the energy ([`perplexity-is-gameable`](../lab/findings/perplexity-is-gameable.md)).
+perplexity, because a codebook can reach perfect usage and perplexity
+whilst explaining almost none of the energy ([`perplexity-is-gameable`](../lab/findings/perplexity-is-gameable.md)).
 
-## Rate
+### Rate
 
 Cell count quadratically increases in the pyramid, so the efficient ladder
 saturates the coarse tier first and adds fine levels last
 ([`cells-dominate-rate`](../lab/findings/cells-dominate-rate.md), [`rate-ladder-asymmetry`](../lab/findings/rate-ladder-asymmetry.md)). Static entropy coding of
-the indices is not worth its decode cost on healthy codebooks; the
-achievable gain sits in cross-tier context and needs the learned
+the indices is not worth its decode cost on healthy codebooks. The
+achievable gain is in cross-tier context, which needs the learned
 context model ([`order0-entropy-coding-marginal`](../lab/findings/order0-entropy-coding-marginal.md)).
 
-## Side channels and refinements
+### Side channels and refinements
 
 Whether a stats side channel pays is a property of the data, measured
-per source. Some fields want the window mean transmitted, none measured
-so far wants the standard deviation forced, and a unit-norm field wants
-nothing ([`stats-channel-is-per-field`](../lab/findings/stats-channel-is-per-field.md)).
+per source. Transmitting the window mean has paid on some fields,
+including the unit-norm AlphaEarth field in its current release, whilst
+forcing the standard deviation has not paid on any source measured so
+far ([`stats-channel-is-per-field`](../lab/findings/stats-channel-is-per-field.md)).
 
-A tier's post-quantization residual can be scalar-quantized and added
-back at decode without touching the bitstream. The available gain is
-bounded by the tier's ceiling gap, which must be measured first
-([`refinement-budget-is-the-ceiling-gap`](../lab/findings/refinement-budget-is-the-ceiling-gap.md)); which tier holds the slack is a
-fact about the model, not the architecture
-([`refinement-tier-differs-per-model`](../lab/findings/refinement-tier-differs-per-model.md)); and cost scales with cell count,
-which is why a coarse refinement can ship on by default while a fine
-one is an opt-in ([`refinement-cost-scales-with-cells`](../lab/findings/refinement-cost-scales-with-cells.md)). The residual
-itself is best coded with a seeded random rotation and a Lloyd scalar
-quantizer ([`rotate-then-lloyd-beats-pca`](../lab/findings/rotate-then-lloyd-beats-pca.md)).
+The reasoning behind refinements, with the records it rests on, is
+given under Residual sidecars above. One further result is that the
+residual itself is best coded with a seeded random rotation and a Lloyd
+scalar quantiser ([`rotate-then-lloyd-beats-pca`](../lab/findings/rotate-then-lloyd-beats-pca.md)).
 
-## Conditioning
+### Conditioning
 
 Location conditioning targets the coarse tier, where location explains
 most of the variance it can reach ([`location-explains-coarse-variance`](../lab/findings/location-explains-coarse-variance.md)).
@@ -334,25 +328,31 @@ The encoder is frozen while conditioning trains, because co-adaptation
 against a frozen prior degrades the model late in training
 ([`coadaptation-degrades-ceiling`](../lab/findings/coadaptation-degrades-ceiling.md)).
 
-## Evaluation
+### Evaluation
 
 Splits are geographic, never random, at every level from chips to
-latent datasets ([`geographic-splits-only`](../lab/findings/geographic-splits-only.md), [`split-latent-data-by-window`](../lab/findings/split-latent-data-by-window.md)).
+latent datasets, because spatial autocorrelation lets a random split
+leak near-identical neighbours between training and test data
+([`geographic-splits-only`](../lab/findings/geographic-splits-only.md), [`split-latent-data-by-window`](../lab/findings/split-latent-data-by-window.md)).
 Quality targets come from downstream tasks, because reconstruction
 cosine does not transfer between sources ([`cosine-not-transferable`](../lab/findings/cosine-not-transferable.md)) and
 compression can be nearly free downstream long before cosine looks
 perfect ([`compression-nearly-free-downstream`](../lab/findings/compression-nearly-free-downstream.md),
-[`tessera-transparency-point`](../lab/findings/tessera-transparency-point.md)). A probe's noise floor is established before reading it
-([`probe-noise-floors`](../lab/findings/probe-noise-floors.md)), models with a transmitted mean are tracked on
-centred cosine ([`transmitted-mean-inflates-cosine`](../lab/findings/transmitted-mean-inflates-cosine.md)), and classical
-baselines are compared at actual file bytes ([`baselines-at-actual-bytes`](../lab/findings/baselines-at-actual-bytes.md)).
+[`tessera-transparency-point`](../lab/findings/tessera-transparency-point.md)). A probe's noise floor is established before reading it,
+so that a difference smaller than the probe's own variation across split
+seeds is not read as a result ([`probe-noise-floors`](../lab/findings/probe-noise-floors.md)). Models with a transmitted
+mean are tracked on centred cosine, because plain cosine is inflated by
+a mean channel that is already paid for ([`transmitted-mean-inflates-cosine`](../lab/findings/transmitted-mean-inflates-cosine.md)). Classical
+baselines are compared at their actual file bytes rather than at a
+nominal rate ([`baselines-at-actual-bytes`](../lab/findings/baselines-at-actual-bytes.md)).
 
-## Release engineering
+### Release engineering
 
 Encoders run fp32 and decoders bf16, which keeps bitstreams bit-stable
-across hardware at most of the speed win ([`bf16-decoder-only`](../lab/findings/bf16-decoder-only.md)). Encoding
+across hardware whilst keeping most of the speed gain of bf16 ([`bf16-decoder-only`](../lab/findings/bf16-decoder-only.md)). Encoding
 measures its own error by decoding the rate ladder as it goes, which is
 what makes quality-controlled delivery possible without a predictor
-network ([`encode-time-self-measurement`](../lab/findings/encode-time-self-measurement.md)). Window seams are removed by a
+network ([`encode-time-self-measurement`](../lab/findings/encode-time-self-measurement.md)). Window seams can be removed by a
 boundary-conditioned deblocker at decode, at no rate cost
-([`seam-deblocker`](../lab/findings/seam-deblocker.md)).
+([`seam-deblocker`](../lab/findings/seam-deblocker.md)). No release applies one now, and the
+network is kept in `georvq/model/deblock.py` as an exploratory tool.

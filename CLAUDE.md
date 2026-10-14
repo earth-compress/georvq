@@ -75,6 +75,12 @@ Sweep for them before presenting a draft:
 
     grep -rniE 'sacred|load-bearing|spine|quietly|genuinely|north star|landmine|graveyard|plumbing|wiring|crown jewel|battle-tested|first-class citizen|the story|in short|the upshot|worth noting|crucially|interestingly' docs/ README.md
 
+Beyond avoiding the habits above, prose for the maintainer (docs,
+READMEs, reports, PR descriptions) should read the way he writes: full
+sentences joined into paragraphs rather than runs of standalone facts,
+the reason for each choice stated next to it, numbers instead of size
+adjectives, and British spelling.
+
 ## Getting oriented
 
 Read `docs/OVERVIEW.md` before making changes. It has the module map,
@@ -84,9 +90,13 @@ training and evaluation.
 The documentation is split in two:
 
 - `docs/` is written for people. It is short, and its wording is
-  controlled by the maintainer. If a change needs new text in `docs/`,
-  `README.md` or the notebooks, write a draft and ask for review; do not
-  settle the final wording yourself.
+  controlled by the maintainer. When a code change makes something in
+  `docs/` or `README.md` untrue (a renamed flag, a removed feature, a new
+  default, an install line or test command), correct it in the same
+  change, keeping his sentences and changing only what is false, and
+  check each fact against the code. New prose, such as a new section, a
+  new claim about results or a change of framing, is written as a draft
+  and goes to him for review.
 - `lab/` is the working record for agents. Empirical results go there as
   findings records, each carrying its date, git commit, source, and the
   context of the experiment, with links to the experiment that produced
@@ -99,35 +109,52 @@ The documentation is split in two:
 
 ## Rules that protect released codecs
 
-- Never edit the numerics in `georvq/model/vq.py`. Trained checkpoints
-  must decode bit-for-bit forever, and `tests/test_compat.py` checks
-  this against released weights. It must stay exact, not approximately
-  equal.
+- Never edit the numerics in `georvq/model/vq.py` or
+  `georvq/model/vq_quant.py`. Trained checkpoints must decode
+  bit-for-bit forever. `tests/test_ae_v2_bundle.py` checks the AE v2
+  release's codes and decodes against the released bundle, and reads
+  back a golden GeoParquet tile; `tests/test_tessera_bundle.py` checks
+  the Tessera release's codes and decodes. Both must stay exact, not
+  approximately equal. The recorded hashes hold on torch 2.10 or later
+  with numpy 2.
 - State dict names are part of the checkpoint format. Renaming modules
   or parameters breaks every existing checkpoint. If a rename is
   unavoidable, extend the rename table in `georvq/compat.py` and show
-  that a legacy checkpoint still loads strictly.
-- The bytes of shipped payloads are frozen. The AlphaEarth `star.tif`
-  bytes are public and pinned by `tests/test_refine.py`. Generalising
-  the code behind a shipped format is fine; changing its output bytes is
-  not.
+  that a legacy checkpoint still loads strictly. Config fields are part
+  of it too, because a checkpoint embeds its config: a removed field
+  goes in `RETIRED_FIELDS` and a renamed one in `RENAMED_FIELDS`
+  (`georvq/config.py`), so that old checkpoints still load.
 - `georvq/ae/` and `georvq/tessera/` hold source-specific release
   policy (`docs/AE_RELEASE.md`, `docs/TESSERA_RELEASE.md`);
   `georvq/inference/` stays source-agnostic. Keep that boundary.
+- Load checkpoints with `georvq.repro.load_checkpoint`, which uses
+  `torch.load(weights_only=True)` so that opening a file cannot run
+  pickled code. Anything new written into a checkpoint has to load that
+  way, so store plain types (floats, lists, tensors) rather than numpy
+  or other Python objects.
+- There are no users of earlier releases to keep compatible with, so a
+  superseded release is removed together with the code that only
+  existed to support it, rather than kept alongside under an alias. The
+  AE v1 release was removed this way in October 2026.
 
 ## Verifying changes
 
-Run `pytest -m "not slow and not gpu"` (about 20 seconds) on every
-change. For anything touching training, prefer `configs/smoke.yaml`, or
-a few hundred steps with overrides, over a long run. Configs are
+Run `pytest -m "not slow"` (about 80 seconds on 8 CPUs, training
+smokes included) on every change; `slow` marks only the resume and
+real-checkpoint tests. The conda environment's editable install points
+at the main checkout, so when working in another worktree run Python
+from that worktree with `PYTHONPATH` set to it, otherwise the tests
+import the main checkout's code instead of yours. For anything touching training, prefer
+`configs/smoke.yaml`, or a few hundred steps with overrides, over a
+long run. Configs are
 validated by pydantic with `extra="forbid"`; anything that affects a run
 belongs in the `Config` schema, not in an environment variable or an
 edit to the source.
 
 ## Sources
 
-Sources are at different stages of maturity, tracked in
-`docs/SOURCES.md`. The repository does not rank them. Keep shared code
+Sources are at different stages of maturity. The repository does not
+rank them. Keep shared code
 source-agnostic and put source-specific behaviour in the adapter
 (`georvq/sources/`) or in a release layer. Before designing for a new
 source, read `docs/SOURCE_ONBOARDING.md`: window size, tier grids,
@@ -159,7 +186,11 @@ Do not commit:
   likewise the maintainer's calls.
 - figures, PDFs, archives and other outputs: they belong in run
   directories or untracked folders, never at the repository root;
-- checkpoints and datasets;
+- checkpoints and datasets. Small data files that a test or the code
+  needs (golden fixtures, fitted statistics) are the exception, and any
+  file derived from a third-party dataset must be listed in `NOTICE`
+  with that dataset's licence and attribution, CC-BY-SA where the
+  source requires share-alike;
 - sweep configs with no finding attached. `configs/` holds only the
   presets that reproduce a release, presets for sources in active
   development, and `smoke.yaml`; configs that exist to back a finding
@@ -167,4 +198,6 @@ Do not commit:
 
 At the end of a piece of work, list what you produced, say what you
 propose to commit and what to discard, and ask if the split is not
-obvious. The default for exploratory code is untracked.
+obvious. The default for exploratory code is untracked. Once a branch
+is merged, remove its worktree and delete the branch, so that finished
+work does not accumulate as clutter.

@@ -7,7 +7,7 @@ tier, conditioned on: the cumulative within-tier reconstruction z_q^{(<l)}
 
 `PyramidRateModel` owns the per-tier models plus the cross-tier context
 projections and implements both the differentiable training rate
-(`rate_bits`, R = -(softmax(-d/tau) . log q)) and the honest eval-time
+(`rate_bits`, R = -(softmax(-d/tau) . log q)) and the eval-time
 hard-index bits (`level_bits`) — the same model is the arithmetic coder's
 distribution at deployment.
 """
@@ -25,8 +25,7 @@ class ContextRateModel(nn.Module):
 
     def __init__(self, cells: int, dim: int, num_codes: int, num_levels: int,
                  model_dim: int = 256, n_blocks: int = 4, heads: int = 8,
-                 coarse_dim: int = 0, head_per_level: bool = False,
-                 bottleneck: int = 0, head_layers: int = 2):
+                 coarse_dim: int = 0):
         super().__init__()
         self.cells = cells
         self.num_codes = num_codes
@@ -39,25 +38,7 @@ class ContextRateModel(nn.Module):
         self.blocks = nn.ModuleList(
             [AdaLNBlock(model_dim, heads, num_levels) for _ in range(n_blocks)])
         self.norm = nn.LayerNorm(model_dim, elementwise_affine=False, eps=1e-6)
-        self.head_per_level = head_per_level
-        # optional narrow bottleneck: squeeze context to `bottleneck` dims
-        # before the per-level readout (regularizer).
-        self.bottleneck = bottleneck
-        hin = bottleneck if bottleneck else model_dim
-        if bottleneck:
-            self.bneck = nn.Linear(model_dim, bottleneck)
-
-        def _mk_head():           # hin -> (2*hin ->)^head_layers -> num_codes
-            hw = 2 * hin
-            seq = [nn.Linear(hin, hw), nn.GELU()]
-            for _ in range(head_layers - 1):
-                seq += [nn.Linear(hw, hw), nn.GELU()]
-            seq += [nn.Linear(hw, num_codes)]
-            return nn.Sequential(*seq)
-        if head_per_level:        # independent MLP readout per level
-            self.heads = nn.ModuleList([_mk_head() for _ in range(num_levels)])
-        else:
-            self.head = nn.Linear(hin, num_codes)
+        self.head = nn.Linear(model_dim, num_codes)
 
     def forward(self, z_prev, level, coarse=None):
         """z_prev: (B, cells, dim) cumulative recon of levels < `level`
@@ -74,10 +55,6 @@ class ContextRateModel(nn.Module):
         for blk in self.blocks:
             x = blk(x, cond)
         x = self.norm(x[:, n_pre:])                              # current-tier cells
-        if self.bottleneck:
-            x = self.bneck(x)                                    # (B, cells, bottleneck)
-        if self.head_per_level:        # uniform level per call -> index by scalar
-            return self.heads[int(level.reshape(-1)[0])](x)      # (B, cells, K)
         return self.head(x)                                      # (B, cells, K)
 
 
@@ -155,7 +132,7 @@ class PyramidRateModel(nn.Module):
     def level_bits(self, zs, rvqs):
         """Eval-time entropy-coded cost. Per tier returns (B, depth)
         HARD-index bits summed over cells: -log2 q(chosen_idx | within-tier
-        recon^{<l}, full coarse recon, level) — the honest range-coder rate
+        recon^{<l}, full coarse recon, level) — the range-coder rate
         (not the soft train surrogate). One full-depth pass; any tuple's
         rate = sum of its included levels. Coarse context uses the FULL
         coarse reconstruction -> EXACT for operating points with full coarse
@@ -167,7 +144,7 @@ class PyramidRateModel(nn.Module):
             B = z.shape[0]
             residual, cum, tier_bits = z, torch.zeros_like(z), []
             for l, lev in enumerate(rvq.levels):
-                q, idx, _ = lev(residual)                # hard assign (eval: no EMA)
+                q, idx, _ = lev(residual, update=False)  # hard assign, no state change
                 level = torch.full((B,), l, device=z.device, dtype=torch.long)
                 logits = rm(cum, level, coarse)          # ctx = recon^{<l}
                 log_q = torch.log_softmax(logits, dim=-1)

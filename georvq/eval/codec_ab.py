@@ -11,15 +11,16 @@ from __future__ import annotations
 import numpy as np
 import torch
 
+from georvq.repro import load_checkpoint
+
 from georvq.eval.extract import dequant_np, l2norm_np
-from georvq.model.codec import monotone_tuples, tuple_bits
-from georvq.sources.ae import dequant
+from georvq.model.codec import path_tuples, tuple_bits
 
 
 def load_codec(ckpt_path, device):
     """Model from a checkpoint (embedded-config or legacy format), in eval
     mode. Returns (model, window, specs)."""
-    ck = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+    ck = load_checkpoint(ckpt_path, map_location="cpu")
     if "config" in ck:
         from georvq.factory import from_checkpoint
         model = from_checkpoint(ckpt_path, device)
@@ -63,36 +64,54 @@ def unique_windows(windows, t, W):
 
 @torch.no_grad()
 def reconstruct_tuples(model, win_int8, inv, lr, lc, tuples_ls, device,
-                       chunk=256, source="ae"):
+                       chunk=256):
     """Reconstruct every target pixel at each rate tuple. Encodes each window
     once; decodes all tuples from the cached cumulative codes. Returns a list
     (aligned to tuples_ls) of (N, bands) L2-normed reconstructions."""
+    from georvq.sources.prep import prep_of
+    prep = prep_of(model)
     N, bands = len(inv), model.cfg.bands
     out = [np.empty((N, bands), np.float32) for _ in tuples_ls]
     for a in range(0, len(win_int8), chunk):
         b = min(a + chunk, len(win_int8))
         raw = torch.from_numpy(win_int8[a:b])
-        if source == "ae":
-            # historical AE eval path: plain dequant, no re-norm/mask
-            x = dequant(raw.to(device))
-        else:
-            x, _ = model.source.prep(raw, device)    # exact training prep
-        _, cums = model.level_cumsums(x)
+        x, valid, _ = prep(raw, {}, device)          # the run's training prep
+        _, cums = model.level_cumsums(x, valid=valid)
         mask = (inv >= a) & (inv < b)
         idx = np.nonzero(mask)[0]
         loc, lrm, lcm = inv[mask] - a, lr[mask], lc[mask]
         for j, ls in enumerate(tuples_ls):
-            o = model.eval_tuple(cums, ls, x).float().cpu().numpy()
+            o = model.eval_tuple(cums, ls, x, valid).float().cpu().numpy()
             out[j][idx] = l2norm_np(o[loc, :, lrm, lcm])
     return out
 
 
+def bits_per_px(model, ls):
+    """Nominal bits/px of depth tuple `ls`, including the fixed side
+    channels (the stats_cond mean, a source normalizer's statistics) that
+    are sent at every depth, as the training loop charges them."""
+    return tuple_bits(model.specs, ls, model.side_bits(ls)) / model.window ** 2
+
+
+def trained_ladder(specs, min_depths):
+    """The operating points a model was trained for: the saturating fill
+    (each tier full before the next opens) from min_depths[0], keeping
+    the tuples at or above every per-tier minimum.
+
+    Under depth_sampling=path the config requires min_depths[1:] to be
+    zero, so this is exactly `path_tuples(specs, min_depths)`. Under
+    nested sampling it drops tuples such as 6-1-0 or 6-4-4, which the
+    nested sampler visits but which are never operating points."""
+    md = list(min_depths or [1] + [0] * (len(specs) - 1))
+    start = [md[0]] + [0] * (len(specs) - 1)
+    return [list(t) for t in path_tuples(specs, start)
+            if all(t[i] >= md[i] for i in range(len(specs)))]
+
+
 def select_front_tuples(specs, min_depths, n):
-    """Pick ~n monotone rate tuples spread (geometrically in bits) across the
-    operating range the model was trained for (>= per-level min depths)."""
-    md = min_depths or [1] + [0] * (len(specs) - 1)
-    ts = [t for t in monotone_tuples(specs)
-          if all(t[i] >= md[i] for i in range(len(specs)))]
+    """Pick ~n rate tuples from the trained ladder (`trained_ladder`),
+    spread geometrically in bits across it."""
+    ts = trained_ladder(specs, min_depths)
     ts.sort(key=lambda t: tuple_bits(specs, t))
     if len(ts) <= n:
         return ts

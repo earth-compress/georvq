@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/earth-compress-dark.svg">
+    <img src="docs/assets/earth-compress.svg" alt="Earth Compress" width="420">
+  </picture>
+</p>
+
 # georvq
 
 Pyramidal residual-VQ compression for geospatial datasets.
@@ -9,98 +16,106 @@ embedding fields (e.g. AlphaEarth, Tessera), multispectral imagery
 
 ## The method
 
-- **Pyramid of tiers.** Each tier codes a grid of latent cells at
-  increasing spatial resolution (`grid:dim:codes:depth`, e.g.
-  `1:256:2048:8 / 4:192:8192:8 / 16:64:16384:8` over a 64px window); finer
-  tiers code residual detail on top of coarser ones. A ViT tokenizer with
-  per-tier conv patch stems encodes; an AdaLN attention decoder mixes all
-  tiers back to pixels.
-- **Matryoshka variable rate.** Training samples monotone per-tier depth
-  tuples and conditions the decoder on the tuple, so a single checkpoint
-  decodes at any point on its R-D front — truncating RVQ levels is the
-  rate control.
-- **Residual VQ with codebook health.** k-means/data init, EMA decay
-  ramps, dead-code resets, fp32 VQ state under bf16 training — the
-  machinery that keeps codebooks in use, from K=256 (Tessera) to 16,384
-  (AlphaEarth).
-- **Learned entropy model + honest bytes (exploratory).** An optional per-tier context
-  model makes codes cheaper (rate-aware training via soft-rate, gradient
-  codebooks) and reports achievable bits; `georvq.inference.archive`
-  writes real rANS files with byte-exact verification so claimed ratios
-  are realized ones.
-- **Stats side-channel.** Sources that need per-tile normalization ship
-  their stats alongside the indices, and the rate figures charge them
-  (S2 sends its 26 values as about 10 bytes of PCA-packed stats at low
-  rates and as 53 bytes of float16 at high ones). Sources whose windows
-  carry most of their energy in the mean can instead *transmit* it and
-  code only what is left — cheap, and worth far more per bit than extra
-  pyramid depth where it applies.
-- **Additive refinements.** A tier's post-RVQ residual can be scalar-
-  quantized and added back at decode, buying back the quantizer gap
-  without touching the codebooks. Optional by construction: ignoring one
-  still decodes.
-- **Location conditioning (exploratory).** Predict-and-subtract cascades
-  (frozen location→latent prior + cross-tier predictors) and
-  location-gated codebook subsetting, via SatCLIP embeddings
-  (`georvq[loc]`).
-- **Warm starts and staged training.** Warm-start with shape
-  reconciliation and encoder/codec freeze schedules; σ-conditioned
-  continuous stage-1 pretraining (exploratory).
-- **Decoder-independent bitstream.** Packets are defined by tiers +
-  codebooks + stats codec only; decoders can be upgraded forever without
-  re-encoding (docs/BITSTREAM.md).
+Each window is coded by a pyramid of tiers. A tier codes a grid of
+latent cells, and each tier has a finer grid than the one before it
+(`grid:dim:codes:depth`, e.g. `1:256:2048:8 / 4:192:8192:8 /
+16:64:16384:8` over a 64px window), so the finer tiers code residual
+detail on top of the coarser ones. The encoder is a ViT tokeniser with
+a convolutional patch stem per tier, and an AdaLN attention decoder
+mixes all the tiers back into pixels.
 
-Which of these a shipped release depends on, and which are exploratory,
-is tracked per feature in `docs/SOURCES.md`.
+Every tier is quantised by residual VQ, so a cell's code is a stack of
+levels in which each level corrects the ones before it. Training
+samples monotone per-tier depth tuples and conditions the decoder on the
+tuple (the matryoshka scheme), so a single checkpoint decodes at any
+point on its R-D front. The rate is chosen at decode time by how many
+levels of each tier are read.
 
-Everything is driven by validated pydantic configs; every checkpoint embeds
-its full resolved config (plus git state and config hash) and is rebuilt
-exactly by `georvq.from_checkpoint()`. Compare any two runs with
-`georvq.config.config_diff`.
+Left alone, codebook entries fall out of use during training, and an
+index into a codebook with dead entries carries fewer bits of
+information than it costs. The trainer prevents this with k-means or
+data initialisation, EMA decay ramps, dead-code resets and fp32 VQ
+state under bf16 training, and has kept codebooks in use at sizes from
+K=256 (Tessera) to 16,384 (AlphaEarth).
+
+Sources that need per-tile normalisation have to send their statistics
+as well as the indices, and the rate figures charge for them. For S2,
+the 26 values are charged as about 10 bytes of PCA-packed stats at low
+rates and as 53 bytes of float16 at high ones. Sources whose windows
+carry most of their energy in the mean can instead transmit the mean
+and code only what is left. On Tessera, where the mean is 85.5% of
+per-window energy, the mean channel was about 60 times more
+rate-efficient than extra pyramid bits (`docs/SOURCE_ONBOARDING.md`).
+
+A tier's residual after RVQ can also be scalar-quantised and added back
+at decode, which recovers some of the quantiser gap without touching
+the codebooks. These refinements are optional, and a decoder that
+ignores one still produces a valid decode.
+
+Some parts of the codebase are exploratory and are not used by any
+release. An optional per-tier context model makes codes cheaper through
+rate-aware training (soft-rate, gradient codebooks) and reports the
+achievable bits. Location conditioning, via SatCLIP embeddings, comes as
+predict-and-subtract cascades (a frozen location-to-latent prior with
+cross-tier predictors) and as location-gated codebook subsetting. There
+is also a σ-conditioned continuous stage-1 pretraining. Alongside these,
+training can warm-start from another checkpoint with shape
+reconciliation, and can freeze the encoder or the codec on a schedule.
+
+A packet is defined by the tiers, the codebooks, any conditioning
+priors and the release layer's own decode state, such as a mean
+channel's tables, and never by the decoder. A newer decoder can
+therefore read files written for an older one without re-encoding them
+(`docs/BITSTREAM.md`).
+
+Every run is driven by a pydantic config that is validated before
+training starts, and every checkpoint embeds its full resolved config,
+with the git state and a config hash. `georvq.from_checkpoint()`
+rebuilds the model exactly from that config, so any run can be
+reproduced, and `georvq.config.config_diff` compares two runs.
 
 ## Install
 
 ```bash
-pip install -e .                              # core
-pip install -e ".[loc,archive,eval,viz,dev]"  # everything
+pip install -e .                                    # decoding
+pip install -e ".[train]"                           # + training
+pip install -e ".[train,eval,viz,onnx,era5,dev]"   # everything
 ```
+
+The extras are `train`, `tessera`, `baseline`, `eval`, `viz`, `onnx`,
+`era5`, `notebooks` and `dev`. The oldest tested versions are Python
+3.10, torch 2.10, numpy 2.0, rasterio 1.4 and, in `[onnx]`, onnxruntime
+1.19; `[era5]` needs Python 3.11 for zarr 3.
 
 ## Quickstart: the AlphaEarth release codec
 
-Working with the shipped AE codec (decode archive tiles, run the demos)
-takes five steps; full contract in `docs/AE_RELEASE.md`.
+The most mature part of the codebase currently is the AlphaEarth release. Working with the AE codec to get real data and decode it
+takes five steps. For more detailed information about the release, see `docs/AE_RELEASE.md`.
 
 ```bash
-# 1. install (any env with torch; on the group server one is already set up)
+# 1. install (add ".[onnx]" for ONNX Runtime decode)
 git clone <this repo> && cd georvq
-pip install -e ".[eval,onnx]"
+pip install -e .
 
-# 2. get the weights (NOT in git)
-#    on the group server they are already at /data/georvq-releases/ae-beta-v1
-#    elsewhere: download ae-beta-v1.tar.gz from the Drive link (ask Ali /
-#    see the release thread), then verify before use:
-sha256sum -c <<< "d535fe3c692327acbafcfd8816be9d776d4596fe02ea18e6963759fbbbf969b5  ae-beta-v1.tar.gz"
-
-# 3. extract ANYWHERE and point the env var at it
-tar xzf ae-beta-v1.tar.gz
-export GEORVQ_AE_BUNDLE=$PWD/ae-beta-v1/bundle   # add to your shell rc
-
-# 4. use it
-georvq-ae-tile info   some_tile_assets/                       # inspect a blob
-georvq-ae-tile decode --model "$GEORVQ_AE_BUNDLE" some_tile_assets/ recon.tiff \
-    --quality "p90<=0.02"                                     # or --tuple 8,8,2
-georvq-ae-tile encode --model "$GEORVQ_AE_BUNDLE" --device cuda src.tiff out/
-
-# 5. demos (pre-executed with figures — readable without any data)
-jupyter lab notebooks/demo_ae_codec.ipynb notebooks/demo_downstream_eval.ipynb
+# 2. use it; the weights a file needs are fetched on first read  [pending: hosting]
+python -m georvq.ae.v2 info   tile.georvq.parquet
+python -m georvq.ae.v2 decode tile.georvq.parquet out.npy --quality 8-8-2
+python -m georvq.ae.v2 encode src.tif out_dir/ --bundle <bundle dir> --device cuda
 ```
 
-Notes: every CLI also accepts `--model path/...` directly (the env var
-is only the notebooks' default); decode-only use needs no GPU — pass
-`--backend onnx --model .../ae-beta-v1/onnx` for the torch-free path;
-`bundle/model.pt` is a torch pickle, so always verify the checksum.
+```python
+import georvq.ae
+ds = georvq.ae.open("<url or path>/annual/2021/44N/<stem>.georvq.parquet")
+a = ds.read(window=((0, 1024), (0, 1024)), quality="p99<=0.02")
+```
+
+The file names the release that decodes it, so when you first `open` a file that uses the codec, the
+bundle will be automatically downloaded from Hugging Face. Decoding runs
+on torch, or on ONNX Runtime when asked for (`backend="onnx"`).
 
 ## Train
+
+Training of models with georvq, as with any repo, requires a lot of data set up before it can run. If you're interested in training a georvq model for new sources, check out the section below that has some details about the data format used during training.
 
 ```bash
 # standard 64px 3-tier pyramid on an AlphaEarth chip store
@@ -114,40 +129,42 @@ georvq-train-stage1 -c configs/ae/stage1.yaml --gpu 0
 georvq-train -c configs/ae/hybrid_rate.yaml --gpu 0 train.init_from=checkpoints/stage1/model.pt
 ```
 
-Presets live in `configs/<source>/`: `ae/` (`pyr64` the standard
-recipe, plus the exploratory `stage1`, `hybrid_rate`, `cascade` and
-`satclip_select`), `tessera/` (the lineage ending at the released
-`tessera_vq8_k256_statscond`), `s2/`, `dem/` and `era5/`, with
-`smoke.yaml` (CI) at the top level. `docs/SOURCES.md` names the current
-preset for each source. A preset's `data.store_dir` points at the
-group server; override it for your own store.
+Presets are grouped by source under `configs/<source>/`. `configs/ae/`
+holds `pyr64`, the standard recipe, and the exploratory `stage1`,
+`hybrid_rate`, `cascade` and `satclip_select`. `configs/tessera/` holds
+the lineage ending at the released `tessera_vq8_k256_statscond`, and
+`s2/`, `dem/` and `era5/` hold the presets for those sources.
+`smoke.yaml` (CI) is at the top level. A preset's `data.store_dir`
+points at the group server, so override it for your own store.
 
 ## Data
 
-Sources are converted once into a standard chip store (sharded memmaps +
-parquet index + versioned manifest); training streams it through a
-GPU/CPU-resident pool with background refresh (whole-dataset FIFO sweeps
-for multi-TB stores). Builders: `scripts/build_store_{ae,tessera,s2,dem,era5}.py`;
-S2 and DEM can also be read in place without building a store. Adding a
-source = builder + `Source` adapter + YAML preset — see
-`docs/ADDING_A_SOURCE.md`, and `docs/SOURCE_ONBOARDING.md` for measuring
-the source *before* choosing an architecture for it.
+Each source is converted once into a standard chip store, which holds
+the chips in sharded memmaps with a parquet index and a versioned
+manifest, so that training reads fixed-geometry chips cheaply instead of
+reading the source's own format at every step. Training streams the
+store through a GPU- or CPU-resident pool with background refresh, using
+whole-dataset FIFO sweeps for multi-TB stores. The builders are
+`scripts/build_store_{ae,tessera,s2,dem,era5}.py`, and S2 and DEM can
+also be read in place without building a store. To add a source you
+write a builder, a `Source` adapter and a YAML preset, as described in
+`docs/ADDING_A_SOURCE.md`. `docs/SOURCE_ONBOARDING.md` covers measuring
+the source before choosing an architecture for it.
 
 ## Evaluate
 
-- `scripts/eval_rate_sweep.py` — downstream probe metrics across the whole
-  R-D front (frozen-embedding kNN/linear probes on contamination-checked
-  held-out windows, geographic splits).
-- `scripts/eval_run_ab.py` — original-vs-reconstructed A/B on a benchmark
-  (with identity/noise sanity harnesses).
-- `scripts/baseline_classical.py` — classical codec baselines at actual
-  file bytes.
+- `scripts/eval_rate_sweep.py` measures downstream probe metrics across
+  the whole R-D front, using frozen-embedding kNN and linear probes on
+  contamination-checked held-out windows with geographic splits. It also
+  has identity and noise sanity harnesses (`--sanity identity|noise`).
+- `scripts/baseline_classical.py` gives classical codec baselines at
+  actual file bytes.
 
 ## Ship
 
 Release bundles (`georvq.inference.release`) are self-contained
-directories (weights + embedded config + `bitstream_id`) that decode
-anywhere georvq is installed:
+directories, holding the weights, the embedded config and the
+`bitstream_id`, that decode anywhere georvq is installed:
 
 ```python
 from georvq.inference.release import load_release
@@ -155,24 +172,29 @@ codec = load_release("releases/my_run", device="cuda")
 xhat = codec.decode(codec.encode(x), depths=[8, 4, 0])
 ```
 
-On top of the generic machinery, each shipped source gets its own
-**release layer** with source-appropriate containers, side channels and
-executables. Two are shipped, and they differ in every place the data
-differs.
+Each shipped source also has its own release layer on top of this
+generic code, which sets the container, the side channels and the
+executables for that source. Two are shipped. They differ in how the
+mean is coded, in the container and in whether a refinement is offered,
+and each of those choices was measured on its source.
 
-The AlphaEarth release (`georvq/ae/`, `docs/AE_RELEASE.md`) turns a
-2.25 GB source tile into ~58 MB of georeferenced COG assets with
-progressive rate, quality-controlled decode against encode-time
-measured error stats, and torch-free ONNX decoding:
+The AlphaEarth release (`georvq/ae/v2.py`, `docs/AE_RELEASE.md`) codes
+each source tile with a model that transmits each window's mean (440
+bits per window), and writes one GeoParquet file per tile
+(`docs/GEORVQ_PARQUET.md`). The reader stands in for the source tile's
+rasterio dataset and fetches only the byte ranges that a window and rate
+need. The rate is picked from 23 rungs (0.11-7.5 b/px), or from a bound
+on the error measured at encode time:
 
-```bash
-georvq-ae-tile encode --model <bundle> src.tiff out_dir/
-georvq-ae-tile decode --model <bundle> out_dir/ recon.tiff --quality "p90<=0.02"
+```python
+import georvq.ae
+ds = georvq.ae.open(url)
+a = ds.read(window=((0, 1024), (0, 1024)), quality="8-8-2")
 ```
 
 The Tessera release (`georvq/tessera/`, `docs/TESSERA_RELEASE.md`) codes
-128-band embedding windows across 0.23–10.9 b/px, transmitting the patch
-mean as a side channel and offering an opt-in fine-tier refinement:
+128-band embedding windows across 0.23–10.9 b/px. It transmits the
+patch mean as a side channel and offers an opt-in fine-tier refinement:
 
 ```python
 from georvq.tessera import load
@@ -182,23 +204,67 @@ recon = R.decode(R.encode(x, valid=v), depths=[20, 20, 5], valid=v)
 
 ## Docs
 
-- `docs/OVERVIEW.md` — codebase map, invariants, personas, working knowledge
-- `docs/AE_RELEASE.md` — the shipped AlphaEarth codec's complete contract
-- `docs/TESSERA_RELEASE.md` — the shipped Tessera codec's complete contract
-- `docs/ADDING_A_SOURCE.md` — the plug-point for new datasets
-- `docs/SOURCE_ONBOARDING.md` — measuring a new source into an architecture
-- `docs/BITSTREAM.md` — what defines a bitstream; decoder-upgrade contract
-- `docs/DESIGN.md` — how the method works and why it is built that way
-- `docs/SOURCES.md` — where each data source currently stands
-- `lab/` — the findings ledger: empirical results with their provenance (`lab/query.py` filters them)
+- `docs/OVERVIEW.md` maps the codebase, lists the invariants that
+  protect released codecs and collects practical notes, mainly for
+  agents working on the code.
+- `docs/AE_RELEASE.md` is the full reference for the shipped AlphaEarth
+  codec, for data users and archive operators.
+- `docs/TESSERA_RELEASE.md` is the same for the shipped Tessera codec.
+- `docs/ADDING_A_SOURCE.md` describes the pieces you write to train on a
+  new dataset.
+- `docs/SOURCE_ONBOARDING.md` describes the measurements of a new source
+  that inform its architecture.
+- `docs/GEORVQ_PARQUET.md` specifies the GeoParquet file the AE codec
+  writes, for anyone reading the files without the georvq reader.
+- `docs/BITSTREAM.md` defines what a bitstream depends on, and why
+  decoders can be upgraded without re-encoding.
+- `docs/DESIGN.md` explains how the method works and why it is built
+  that way.
+- `lab/` holds the findings ledger, the empirical results with their
+  provenance (`lab/query.py` filters them).
 
 ## Tests
 
 ```bash
-pytest -m "not slow and not gpu"   # fast suite
-pytest                             # everything (training smokes included)
+pytest -m "not slow"   # fast suite, training smokes included (about 80 s on 8 CPUs)
+pytest                 # adds the resume and real-checkpoint tests
 ```
 
-The golden-checkpoint gate (`tests/test_compat.py`) verifies the released
-weights still decode bit-faithfully; it self-skips where the release
-bundle isn't present (`GEORVQ_AE_BUNDLE`).
+The golden decode tests (`tests/test_ae_v2_bundle.py` for the AlphaEarth
+release, `tests/test_tessera_bundle.py` for the Tessera release) verify
+that released weights still encode and decode bit for bit, and skip
+themselves where the bundle is not present (`GEORVQ_AE_V2_BUNDLE`,
+`GEORVQ_AE_BUNDLE`, `GEORVQ_TESSERA_BUNDLE`). The recorded hashes hold
+on torch 2.10 or later with numpy 2; older versions give different codes.
+
+## Development
+
+georvq is developed by Asterisk Laboratories Co-operative Ltd. (Asterisk
+Labs) as part of the Earth Compress project, a partnership between
+Asterisk Labs and the National Oceanography Centre.
+
+<p>
+  <a href="https://asterisk.coop">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="docs/assets/asterisk-labs-dark.svg">
+      <img src="docs/assets/asterisk-labs.svg" alt="Asterisk Labs" width="220">
+    </picture>
+  </a>
+</p>
+
+## Funding
+
+This work was funded by the Advanced Research and Invention Agency
+(ARIA).
+
+## Licence
+
+The code is licensed under the Apache License 2.0 (`LICENSE`), as are the
+model weights on Hugging Face. A few files are derived from third-party
+datasets and carry those datasets' terms instead: test fixtures and
+notebook outputs from AlphaEarth (CC-BY 4.0) and TESSERA (CC-BY-SA 4.0),
+a PCA basis fitted on Major TOM Core-S2L1C (CC-BY-SA 4.0), and ERA5
+statistics (CC-BY 4.0). `NOTICE` lists each file with its attribution,
+and the licence texts are in `LICENSES/`. Data encoded or decoded with the AE
+codec is derived from the AlphaEarth dataset and carries its CC-BY 4.0
+licence and attribution.

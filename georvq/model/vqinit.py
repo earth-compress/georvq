@@ -8,8 +8,11 @@ Why a tree rather than random data points: the draws are i.i.d. from the
 data, so dense regions get many near-duplicate seeds that immediately
 compete and die, while sparse-but-high-error regions get none. A balanced
 median tree spends log2(K) passes instead, each estimating one direction
-and one median from an enormous number of points, and cannot emit an
-empty leaf.
+and one median from an enormous number of points. Heavily duplicated
+rows are the exception: a node holding only copies of one row splits
+every copy to the same side, so its other child is empty and comes back
+as a zero vector (and for K not a power of two the padding draws random
+rows). The Lloyd iterations in `residual_init_rvq` reseed those cells.
 
 NOT because the fit is sample-starved: fitting from the full latent store
 gives 4965 / 1953 / 977 vectors per codeword across the three tiers, all
@@ -17,7 +20,7 @@ comfortably above the ~D=384 needed to determine a cell mean. Tier 2's
 perplexity falloff at deep RVQ levels (95% of K at level 2 down to 20% at
 level 7) is therefore most likely real -- deep residuals carry less
 structure, so fewer distinct directions earn a codeword -- and not a
-seeding artifact. Starvation IS the story for the in-training init, where
+seeding artifact. Starvation does apply to the in-training init, where
 coupling through batch count leaves the coarse tier at ~16 vectors per
 codeword; that is the case the offline store replaces.
 
@@ -50,6 +53,7 @@ from georvq.model.vq import _chunked_assign
 def tree_init(X, K, iters=8, chunk=1 << 20):
     """Balanced PCA tree -> (K, D) leaf means.
 
+    A node with no rows yields an all-zero leaf; see the module docstring.
     Never gathers a node's rows: one gather at the root would copy the
     whole fit set. All per-node statistics come from chunked
     scatter-reduction, and every node advances its power iteration in the
@@ -109,11 +113,11 @@ def residual_init_rvq(rvq, z, mode="kmeans", iters=6, expected_batch=4096,
     """Residual init of a whole RVQ stack: fit level 1 on the latents,
     level 2 on its residuals, and so on.
 
-    Same contract and buffer bookkeeping as `vq.kmeans_init_rvq` (which it
-    replaces when `mode="tree"`), except that it does NOT silently cap the
-    fit set at 1e6 -- that cap is 61 vectors per centroid at K=16384, and
-    quietly starving the fit is exactly the failure this is meant to
-    avoid. Pass `max_fit` to cap deliberately.
+    Writes codebooks and EMA buffers (counts at steady-state assignment
+    rates, so nothing is instantly dead) and marks levels initialized so
+    the lazy data-init never fires. The fit set is not capped unless
+    `max_fit` is given: a silent 1e6 cap would leave 61 vectors per
+    centroid at K=16384.
     """
     residual = z.reshape(-1, z.shape[-1]).float()
     if max_fit and residual.shape[0] > max_fit:

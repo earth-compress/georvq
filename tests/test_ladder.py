@@ -89,3 +89,15 @@ def test_deep_supervision_reaches_every_exit(ld_cfg):
     assert {"stem", "stage1", "cond", "in0"} <= set(m.decoder.act_max)
     assert "stage2" not in m.decoder.act_max   # no 3rd tier in this cfg
     assert all(v > 0 for v in m.decoder.act_max.values())
+
+
+def test_decoder_ff_ratio_widens_only_the_decoder(ld_cfg):
+    def counts(ff):
+        raw = ld_cfg.model_dump(mode="json")
+        raw["model"]["decoder"]["ff_ratio"] = ff
+        m = build_model(Config.model_validate(raw), torch.device("cpu"))
+        return (sum(p.numel() for p in m.decoder.parameters()),
+                sum(p.numel() for p in m.tokenizer.parameters()))
+    unset, same, wide = counts(None), counts(2.0), counts(3.0)
+    assert unset == same                 # None shares model.ff_ratio (2.0)
+    assert wide[0] > same[0] and wide[1] == same[1]

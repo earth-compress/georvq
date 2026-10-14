@@ -23,6 +23,8 @@ class DEMNormalizer:
     """Per-window masked mean/std over valid pixels: normalize before
     encode, restore after decode. `stats_vector` is [mean, std] (B, 2)."""
 
+    per_sample = True       # denormalize needs the batch's own stats
+
     def normalize(self, x, valid):
         vm = valid.unsqueeze(1).float()
         n = vm.sum((2, 3)).clamp_min(1)

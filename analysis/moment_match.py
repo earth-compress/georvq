@@ -62,7 +62,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--ckpt",
                     default="checkpoints/tessera_vq8_k256/model_best.pt")
-    ap.add_argument("--gpu", type=int, default=1)
+    ap.add_argument("--device", default="cuda",
+                    help="torch device; cuda is the card Slurm allocated")
     ap.add_argument("--tokens", type=int, default=2048)
     ap.add_argument("--tuples", default="20-0-0,20-20-3,20-20-13,20-20-20")
     ap.add_argument("--mean-bits", default="2,4,6",
@@ -71,7 +72,7 @@ def main():
     args.mean_bits = [int(v) for v in args.mean_bits.split(",") if v]
 
     torch.set_grad_enabled(False)
-    dev = torch.device(f"cuda:{args.gpu}")
+    dev = torch.device(args.device)
     m = from_checkpoint(args.ckpt, dev)
     cfg = m.full_config
     store = ChipStore(cfg.data.store_dir)
@@ -86,7 +87,7 @@ def main():
     # per-band spread of the window MEANS, which sets the quantizer step
     ms = []
     for i in range(0, val.shape[0], 8):
-        x, v = m.source.prep(val[i:i + 8], dev)
+        x, v = m.prep(val[i:i + 8], {}, dev)[:2]
         mu, _ = moments(x.float(), v)
         ms.append(mu[v.any(dim=(1, 2))])
     band_sd = torch.cat(ms).std(0).clamp_min(1e-9)
@@ -105,7 +106,7 @@ def main():
             [f"+mean@{b}b" for b in args.mean_bits]
         acc = {k: [0.0, 0.0, 0] for k in names}
         for i in range(0, val.shape[0], 8):
-            x, v = m.source.prep(val[i:i + 8], dev)
+            x, v = m.prep(val[i:i + 8], {}, dev)[:2]
             x = x.float()
             zs = m.encode_levels(x)
             Ls = torch.tensor(tup, device=dev)[None].expand(x.shape[0], -1)

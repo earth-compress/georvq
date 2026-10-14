@@ -215,10 +215,41 @@ class VectorQuantizer(nn.Module):
             reps[~ok] = self._sample_from(z_flat, int((~ok).sum()))
         return reps
 
-    def forward(self, z):
+    @torch.no_grad()
+    def _track_usage(self, indices):
+        """Usage EMA for gradient books, whose codewords the optimizer
+        moves. ema_count is what `_reset_dead` and `ema_usage` read;
+        ema_sum is left alone because nothing derives the book from it."""
+        count = torch.bincount(indices, minlength=self.num_codes).float()
+        self.ema_count.mul_(self.decay).add_(count, alpha=1 - self.decay)
+
+    @torch.no_grad()
+    def _track_sse_step_reset(self, z_flat, z_q, indices):
+        """The part of a training update shared by EMA and gradient books:
+        the split-mode distortion EMA, the step counter and a pending
+        dead-code reset."""
+        if self.reset_mode == "split":
+            # per-code EMA of TOTAL squared error = the distortion
+            # contribution a split would recover
+            se = (z_flat - z_q).pow(2).sum(1).float()
+            self.ema_sse.mul_(self.decay).add_(
+                torch.zeros_like(self.ema_sse).index_add_(
+                    0, indices, se), alpha=1 - self.decay)
+
+        self.step += 1
+        if self.reset_pending:
+            self.reset_pending = False
+            self._reset_dead(z_flat.detach(), indices,
+                             z_q.detach())
+
+    def forward(self, z, update=True):
         """
         Args:
             z: (..., D) continuous vectors
+            update: in training mode, apply this step's codebook update
+                (EMA, step counter, pending reset). False gives the same
+                assignment with no state change, for a second pass over
+                part of a batch the main pass has already updated on.
         Returns:
             z_q: (..., D) quantized vectors (straight-through)
             indices: (...,) codebook indices
@@ -228,7 +259,7 @@ class VectorQuantizer(nn.Module):
         z_flat = z.reshape(-1, self.dim)  # (N, D)
 
         # Lazy data-driven init
-        if self.training and not self.initialized.item():
+        if self.training and update and not self.initialized.item():
             self._data_init(z_flat.detach())
 
         if self.bf16_scores:
@@ -247,38 +278,30 @@ class VectorQuantizer(nn.Module):
             indices = d.argmin(dim=-1)  # (N,)
         z_q = self.codebook(indices)  # (N, D)
 
-        # EMA codebook update (training only; skipped under grad_codebook)
-        if self.training and not self.grad_codebook:
+        # Codebook update (training only). EMA books move the codewords
+        # here; gradient books leave them to the optimizer but still track
+        # usage, distortion, the step counter and dead-code resets.
+        if self.training and update:
             with torch.no_grad():
-                # Match z_flat's dtype (bf16 under autocast, fp32 otherwise) so
-                # the dense one_hot @ z_flat matmul runs at the same precision
-                # as the encoder. EMA buffers themselves stay fp32 — values
-                # get upcast on add_ — so the running state is preserved.
-                one_hot = F.one_hot(indices, self.num_codes).to(z_flat.dtype)  # (N, K)
-                count = one_hot.sum(0)  # (K,)
-                vec_sum = one_hot.t() @ z_flat  # (K, D)
+                if not self.grad_codebook:
+                    # Match z_flat's dtype (bf16 under autocast, fp32 otherwise) so
+                    # the dense one_hot @ z_flat matmul runs at the same precision
+                    # as the encoder. EMA buffers themselves stay fp32 — values
+                    # get upcast on add_ — so the running state is preserved.
+                    one_hot = F.one_hot(indices, self.num_codes).to(z_flat.dtype)  # (N, K)
+                    count = one_hot.sum(0)  # (K,)
+                    vec_sum = one_hot.t() @ z_flat  # (K, D)
 
-                self.ema_count.mul_(self.decay).add_(count, alpha=1 - self.decay)
-                self.ema_sum.mul_(self.decay).add_(vec_sum, alpha=1 - self.decay)
+                    self.ema_count.mul_(self.decay).add_(count, alpha=1 - self.decay)
+                    self.ema_sum.mul_(self.decay).add_(vec_sum, alpha=1 - self.decay)
 
-                # Laplace smoothing
-                n = self.ema_count.sum()
-                count_stable = (self.ema_count + self.eps) / (n + self.num_codes * self.eps) * n
-                self.codebook.weight.data.copy_(self.ema_sum / count_stable.unsqueeze(1))
-
-                if self.reset_mode == "split":
-                    # per-code EMA of TOTAL squared error = the distortion
-                    # contribution a split would recover
-                    se = (z_flat - z_q).pow(2).sum(1).float()
-                    self.ema_sse.mul_(self.decay).add_(
-                        torch.zeros_like(self.ema_sse).index_add_(
-                            0, indices, se), alpha=1 - self.decay)
-
-                self.step += 1
-                if self.reset_pending:
-                    self.reset_pending = False
-                    self._reset_dead(z_flat.detach(), indices,
-                                     z_q.detach())
+                    # Laplace smoothing
+                    n = self.ema_count.sum()
+                    count_stable = (self.ema_count + self.eps) / (n + self.num_codes * self.eps) * n
+                    self.codebook.weight.data.copy_(self.ema_sum / count_stable.unsqueeze(1))
+                else:
+                    self._track_usage(indices)
+                self._track_sse_step_reset(z_flat, z_q, indices)
 
         # Commitment loss: encoder outputs should be close to codebook entries
         commit_loss = F.mse_loss(z_flat, z_q.detach())
@@ -291,7 +314,8 @@ class VectorQuantizer(nn.Module):
 
         return z_q_st.reshape(*flat_shape, self.dim), indices.reshape(flat_shape), commit_loss
 
-    def forward_gated(self, z, scores, subset_k, sel_n=4096, temp=0.5, tau=0.4):
+    def forward_gated(self, z, scores, subset_k, sel_n=4096, temp=0.5, tau=0.4,
+                      update=True):
         """Location-gated VQ (codebook subsetting). Encode using ONLY the
         top-`subset_k` codes that `scores` (per-sample, over the codebook)
         selects — a hard subset for the actual code/EMA/index, plus a soft
@@ -304,7 +328,7 @@ class VectorQuantizer(nn.Module):
         flat = z.shape[:-1]                                          # (B, cells)
         z_flat = z.reshape(-1, self.dim)
         B = flat[0]
-        if self.training and not self.initialized.item():
+        if self.training and update and not self.initialized.item():
             self._data_init(z_flat.detach())
         E = self.codebook.weight
         # hard assignment via the PER-WINDOW subset: take each window's
@@ -322,30 +346,21 @@ class VectorQuantizer(nn.Module):
         indices = allowed.gather(1, local).reshape(-1)              # (N,) global code index
         z_q = self.codebook(indices)
 
-        if self.training and not self.grad_codebook:
+        if self.training and update:
             with torch.no_grad():
-                # index_add avoids the (N,K) one-hot (4+ GiB at K=65536)
-                count = torch.bincount(indices, minlength=self.num_codes).to(z_flat.dtype)
-                vec_sum = torch.zeros_like(self.ema_sum, dtype=z_flat.dtype) \
-                    .index_add_(0, indices, z_flat)
-                self.ema_count.mul_(self.decay).add_(count, alpha=1 - self.decay)
-                self.ema_sum.mul_(self.decay).add_(vec_sum, alpha=1 - self.decay)
-                n = self.ema_count.sum()
-                cs = (self.ema_count + self.eps) / (n + self.num_codes * self.eps) * n
-                self.codebook.weight.data.copy_(self.ema_sum / cs.unsqueeze(1))
-                if self.reset_mode == "split":
-                    # per-code EMA of TOTAL squared error = the distortion
-                    # contribution a split would recover
-                    se = (z_flat - z_q).pow(2).sum(1).float()
-                    self.ema_sse.mul_(self.decay).add_(
-                        torch.zeros_like(self.ema_sse).index_add_(
-                            0, indices, se), alpha=1 - self.decay)
-
-                self.step += 1
-                if self.reset_pending:
-                    self.reset_pending = False
-                    self._reset_dead(z_flat.detach(), indices,
-                                     z_q.detach())
+                if not self.grad_codebook:
+                    # index_add avoids the (N,K) one-hot (4+ GiB at K=65536)
+                    count = torch.bincount(indices, minlength=self.num_codes).to(z_flat.dtype)
+                    vec_sum = torch.zeros_like(self.ema_sum, dtype=z_flat.dtype) \
+                        .index_add_(0, indices, z_flat)
+                    self.ema_count.mul_(self.decay).add_(count, alpha=1 - self.decay)
+                    self.ema_sum.mul_(self.decay).add_(vec_sum, alpha=1 - self.decay)
+                    n = self.ema_count.sum()
+                    cs = (self.ema_count + self.eps) / (n + self.num_codes * self.eps) * n
+                    self.codebook.weight.data.copy_(self.ema_sum / cs.unsqueeze(1))
+                else:
+                    self._track_usage(indices)
+                self._track_sse_step_reset(z_flat, z_q, indices)
 
         # selector gradient: one cell per window (B rows, all locations). The
         # soft subset mask is folded into the softmax LOGITS (log space) so the
@@ -385,26 +400,9 @@ class VectorQuantizer(nn.Module):
                 + self.codebook.weight.pow(2).sum(1, keepdim=True).t())
 
     @torch.no_grad()
-    def usage(self, indices):
-        """Fraction of codebook entries used in this batch."""
-        return indices.unique().numel() / self.num_codes
-
-    @torch.no_grad()
     def ema_usage(self):
         """Fraction of codebook entries above the dead-code threshold."""
         return (self.ema_count > self.dead_threshold).float().mean().item()
-
-    @torch.no_grad()
-    def perplexity(self, indices):
-        """Effective codebook size — exp(entropy of code distribution).
-
-        Healthy quantization has perplexity climbing toward a meaningful
-        fraction of K. Collapse shows up as perplexity << K."""
-        flat = indices.flatten()
-        counts = torch.bincount(flat, minlength=self.num_codes).float()
-        probs = counts / counts.sum().clamp_min(1)
-        ent = -(probs * probs.clamp_min(1e-12).log()).sum()
-        return torch.exp(ent).item()
 
 
 class ResidualVQ(nn.Module):
@@ -538,15 +536,13 @@ class ResidualVQ(nn.Module):
         out = []
         for i in range(n_levels):
             d = self.levels[i].distances(residual)      # (N, K)
-            q, idx, c = self.levels[i](residual)
+            # the main quantize pass has already updated the books on the
+            # full batch this step
+            q, idx, c = self.levels[i](residual, update=False)
             out.append({"d": d, "q": q, "idx": idx, "commit": c, "ctx": cum})
             residual = residual - q.detach()
             cum = cum + q.detach()
         return out
-
-    def usage(self, all_indices):
-        """Average codebook usage across levels."""
-        return sum(lev.usage(idx) for lev, idx in zip(self.levels, all_indices)) / len(all_indices)
 
     def ema_usage(self):
         """Average global codebook usage (EMA-based) across levels."""
@@ -560,41 +556,3 @@ def _chunked_assign(x, C, chunk=32768):
         outs.append(d.argmin(1))
     return torch.cat(outs)
 
-
-@torch.no_grad()
-def kmeans_init_rvq(rvq, z, iters=6, expected_batch=4096):
-    """Residual k-means init after a VQ-free warmup: fit level 1 on latents,
-    level 2 on its residuals, etc. Writes codebooks and EMA buffers (counts
-    at steady-state assignment rates so nothing is instantly 'dead') and
-    marks levels initialized so the lazy data-init never fires."""
-    residual = z.reshape(-1, z.shape[-1]).float()
-    if residual.shape[0] > 1_000_000:
-        residual = residual[torch.randperm(residual.shape[0],
-                                           device=z.device)[:1_000_000]]
-    N = residual.shape[0]
-    dev = residual.device
-    for lev in rvq.levels:
-        K = lev.num_codes
-        C = residual[torch.randperm(N, device=dev)[:K]].clone()
-        ones = torch.ones(N, device=dev)
-        for _ in range(iters):
-            assign = _chunked_assign(residual, C)
-            sums = torch.zeros_like(C)
-            cnt = torch.zeros(K, device=dev)
-            sums.index_add_(0, assign, residual)
-            cnt.index_add_(0, assign, ones)
-            live = cnt > 0
-            C[live] = sums[live] / cnt[live, None]
-            n_dead = int((~live).sum())
-            if n_dead:
-                C[~live] = residual[torch.randint(0, N, (n_dead,), device=dev)] \
-                    + 1e-4 * torch.randn(n_dead, C.shape[1], device=dev)
-        assign = _chunked_assign(residual, C)
-        cnt = torch.zeros(K, device=dev)
-        cnt.index_add_(0, assign, ones)
-        lev.codebook.weight.data.copy_(C)
-        lev.ema_count.copy_((cnt / N * expected_batch)
-                            .clamp_min(2 * lev.dead_threshold))
-        lev.ema_sum.copy_(C * lev.ema_count[:, None])
-        lev.initialized.fill_(True)
-        residual = residual - C[assign]

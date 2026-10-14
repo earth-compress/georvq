@@ -27,8 +27,8 @@ by every presence group, the solo path included, so the coarse-only
 readout stops being a fully separate head. Zero-init keeps the FiLM
 neutral at the start.
 
-Limitations (asserted at build time): no cls_bridge, no local attention
-mask, no sigma/stage-1 mode, and the output is a plain dense band map
+Limitations (asserted at build time): no cls_bridge, no sigma/stage-1
+mode, and the output is a plain dense band map
 (no per-source head, no unit-norm fields).
 """
 from __future__ import annotations
@@ -123,10 +123,10 @@ class TierSumDecoder(nn.Module):
         if self.grad_ckpt and self.training:
             from torch.utils.checkpoint import checkpoint
             for blk in self.blocks:
-                h = checkpoint(blk, h, c, None, use_reentrant=False)
+                h = checkpoint(blk, h, c, use_reentrant=False)
         else:
             for blk in self.blocks:
-                h = blk(h, c, None)
+                h = blk(h, c)
         return h
 
     def _attn_group(self, zqs, rows, k, c):
@@ -153,7 +153,7 @@ class TierSumDecoder(nn.Module):
         sampling guarantees presence is a prefix; a nonzero depth after a
         zero would decode that tier as absent here)."""
         Ls = cond_arg
-        B, dev = Ls.shape[0], Ls.device
+        B = Ls.shape[0]
         c = self._cond(Ls, stats)
         n_present = (Ls > 0).long().sum(1)          # prefix length per row
         out = zqs[0].new_zeros(B, self.ch, self.window, self.window)

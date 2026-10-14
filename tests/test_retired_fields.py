@@ -25,6 +25,27 @@ def test_a_checkpoint_carrying_retired_fields_still_loads():
     Config.model_validate(drop_retired(raw))     # ...but recoverable
 
 
+def test_slim_tier2_fields_still_validate_from_a_checkpoint():
+    """Configs saved before the trap and the sampler seam were removed
+    carry them, sometimes with non-default values."""
+    raw = _raw()
+    raw["train"]["trap"] = {"gnorm_abs": 0.5, "gnorm_ratio": 10.0,
+                            "min_step": 200, "n_dumps": 3, "cooldown": 250,
+                            "hold": True, "hold_port": 4444,
+                            "hold_timeout": 14400.0, "snapshot_every": 500,
+                            "stats_every": 10, "batch_history_bytes": 0,
+                            "flight_maxlen": 20000}
+    raw["data"]["sampler"] = {"name": "window", "params": {"stride": 2}}
+    with pytest.raises(Exception):
+        Config.model_validate(raw)
+    cfg = Config.model_validate(drop_retired(raw))
+    assert cfg.model_dump(mode="json") == Config.model_validate(
+        _raw()).model_dump(mode="json")
+    raw["train"]["trap"] = None
+    raw["data"]["sampler"] = {"name": None, "params": {}}
+    Config.model_validate(drop_retired(raw))
+
+
 def test_yaml_presets_still_hard_fail_on_unknown_keys():
     """Retirement is for history, not for typos: a stray key in a preset
     is a mistake and must still be an error."""
@@ -77,3 +98,43 @@ def test_a_current_config_wins_over_a_stale_old_name():
     raw["train"]["optim"]["grad_clip"] = 0.5      # stale
     raw["model"]["vq"]["clip_norm"] = 2.0         # current
     assert Config.model_validate(migrate(raw)).model.vq.clip_norm == 2.0
+
+
+def test_slim_tier1_fields_still_validate_from_a_checkpoint():
+    """Configs dumped before the tier-1 removals carry these fields at
+    their defaults (every checkpoint on record does)."""
+    raw = _raw()
+    raw["model"]["local_attn"] = None
+    raw["model"]["tokenizer"]["late_join"] = 0
+    raw["model"]["decoder"]["late_join"] = 0
+    raw["model"]["decoder"]["head_dw"] = False
+    raw["train"]["compile"] = False
+    raw["train"]["freeze_head_steps"] = 0
+    raw["train"]["freeze_head_blocks"] = 3
+    raw["data"]["limit_chips"] = None
+    with pytest.raises(Exception):
+        Config.model_validate(raw)
+    cfg = Config.model_validate(drop_retired(raw))
+    assert cfg.model_dump(mode="json") == Config.model_validate(
+        _raw()).model_dump(mode="json")
+
+
+@pytest.mark.parametrize("path,value", [
+    ("model.local_attn", [None, 2]),
+    ("model.tokenizer.late_join", 2),
+    ("model.decoder.late_join", 1),
+    ("model.decoder.head_dw", True),
+    ("train.compile", True),
+    ("train.freeze_head_steps", 500),
+    ("train.freeze_head_blocks", 2),
+    ("data.limit_chips", 1000),
+])
+def test_each_tier1_field_is_retired(path, value):
+    assert path in RETIRED_FIELDS
+    raw = _raw()
+    *head, last = path.split(".")
+    cur = raw
+    for k in head:
+        cur = cur[k]
+    cur[last] = value
+    Config.model_validate(drop_retired(raw))

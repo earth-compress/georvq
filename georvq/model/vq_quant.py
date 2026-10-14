@@ -43,17 +43,18 @@ class QuantizedBookVQ(VectorQuantizer):
         s = W.abs().amax(1, keepdim=True).clamp_min(1e-12) / qmax
         W.copy_((W / s).round().clamp(-qmax, qmax) * s)
 
-    def forward(self, z):
+    def forward(self, z, update=True):
         """Parent semantics with two changes: the book is projected onto
         the b-bit grid around the update, and the EMA update uses
         bincount/index_add instead of a dense one-hot — the (N, K) one-hot
-        is ~16 GiB at K=16384 with 512x1024-cell batches."""
+        is ~16 GiB at K=16384 with 512x1024-cell batches. `update=False`
+        assigns without changing any state, as in the parent."""
         import torch.nn.functional as F
-        if self.training:
+        if self.training and update:
             self.project_book()
         flat_shape = z.shape[:-1]
         z_flat = z.reshape(-1, self.dim)
-        if self.training and not self.initialized.item():
+        if self.training and update and not self.initialized.item():
             self._data_init(z_flat.detach())
         if self.bf16_scores:
             E = self.codebook.weight
@@ -66,39 +67,31 @@ class QuantizedBookVQ(VectorQuantizer):
                  + self.codebook.weight.pow(2).sum(1, keepdim=True).t())
             indices = d.argmin(dim=-1)
         z_q = self.codebook(indices)
-        if self.training and not self.grad_codebook:
+        if self.training and update:
             with torch.no_grad():
-                count = torch.bincount(
-                    indices, minlength=self.num_codes).to(z_flat.dtype)
-                vec_sum = torch.zeros_like(self.ema_sum, dtype=z_flat.dtype) \
-                    .index_add_(0, indices, z_flat)
-                self.ema_count.mul_(self.decay).add_(count,
-                                                     alpha=1 - self.decay)
-                self.ema_sum.mul_(self.decay).add_(vec_sum,
-                                                   alpha=1 - self.decay)
-                n = self.ema_count.sum()
-                cs = (self.ema_count + self.eps) \
-                    / (n + self.num_codes * self.eps) * n
-                self.codebook.weight.data.copy_(self.ema_sum / cs.unsqueeze(1))
-                if self.reset_mode == "split":
-                    # this forward duplicates the parent's EMA block, so
-                    # the distortion tracker has to be maintained here too
-                    # -- otherwise reset_mode silently degrades to random
-                    # on the QAT path while still reporting "split"
-                    se = (z_flat - z_q).pow(2).sum(1).float()
-                    self.ema_sse.mul_(self.decay).add_(
-                        torch.zeros_like(self.ema_sse).index_add_(
-                            0, indices, se), alpha=1 - self.decay)
-                self.step += 1
-                if self.reset_pending:
-                    self.reset_pending = False
-                    self._reset_dead(z_flat.detach(), indices,
-                                     z_q.detach())
+                if not self.grad_codebook:
+                    count = torch.bincount(
+                        indices, minlength=self.num_codes).to(z_flat.dtype)
+                    vec_sum = torch.zeros_like(self.ema_sum, dtype=z_flat.dtype) \
+                        .index_add_(0, indices, z_flat)
+                    self.ema_count.mul_(self.decay).add_(count,
+                                                         alpha=1 - self.decay)
+                    self.ema_sum.mul_(self.decay).add_(vec_sum,
+                                                       alpha=1 - self.decay)
+                    n = self.ema_count.sum()
+                    cs = (self.ema_count + self.eps) \
+                        / (n + self.num_codes * self.eps) * n
+                    self.codebook.weight.data.copy_(self.ema_sum / cs.unsqueeze(1))
+                else:
+                    self._track_usage(indices)
+                # split-mode distortion EMA, step counter and pending reset,
+                # shared with the parent so the two forwards cannot drift
+                self._track_sse_step_reset(z_flat, z_q, indices)
         commit_loss = F.mse_loss(z_flat, z_q.detach())
         if self.grad_codebook:
             commit_loss = commit_loss + F.mse_loss(z_q, z_flat.detach())
         z_q_st = z_flat + (z_q - z_flat).detach()
-        if self.training:
+        if self.training and update:
             self.project_book()
         return (z_q_st.reshape(*flat_shape, self.dim),
                 indices.reshape(flat_shape), commit_loss)

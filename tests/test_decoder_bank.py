@@ -138,3 +138,50 @@ def test_the_schema_rejects_a_malformed_bank(bad, match):
     raw["model"]["decoder_bank"] = bad
     with pytest.raises(Exception, match=match):
         Config.model_validate(raw)
+
+
+def _bank_head_widths(cfg, widths):
+    raw = cfg.model_dump(mode="json")
+    for st, w in zip(raw["model"]["decoder_bank"], widths):
+        st["head_feat"] = w
+    return Config.model_validate(raw)
+
+
+def _head_widths(model):
+    # S2 heads hold one _PatchHead per resolution group
+    out = []
+    for m in model.decoder.members:
+        h = m.head.heads["10m"]
+        out.append(h.feat)
+    return out
+
+
+def test_members_get_their_own_head_width():
+    cfg = _bank_head_widths(_cfg(), [4, 6, 8])
+    assert _head_widths(build_model(cfg)) == [4, 6, 8]
+    unset = _bank_head_widths(_cfg(), [None, 6, None])
+    assert _head_widths(build_model(unset)) == [8, 6, 8]
+
+
+def test_a_checkpoint_built_before_the_fix_loads_as_built(tmp_path):
+    """Checkpoints saved while member head widths were ignored carry the
+    configured widths in their config but heads built with
+    decoder.head_feat. They must still load strictly, as built."""
+    from georvq.factory import from_checkpoint
+    from georvq.repro import save_checkpoint
+    configured = _bank_head_widths(_cfg(), [4, 6, 8])
+    as_built = _bank_head_widths(_cfg(), [8, 8, 8])
+    torch.manual_seed(0)
+    old = build_model(as_built)
+    save_checkpoint(tmp_path / "old.pt", old, configured, step=1)
+    with pytest.warns(UserWarning, match="loading them as built"):
+        m = from_checkpoint(tmp_path / "old.pt")
+    assert _head_widths(m) == [8, 8, 8]
+    assert [st.head_feat for st in m.full_config.model.decoder_bank] \
+        == [8, 8, 8]
+    for k, v in old.state_dict().items():
+        assert torch.equal(m.state_dict()[k], v), k
+    torch.manual_seed(0)
+    new = build_model(configured)
+    save_checkpoint(tmp_path / "new.pt", new, configured, step=1)
+    assert _head_widths(from_checkpoint(tmp_path / "new.pt")) == [4, 6, 8]

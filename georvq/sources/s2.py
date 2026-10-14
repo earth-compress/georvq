@@ -100,6 +100,8 @@ class S2Normalizer:
     restore after decode. `stats_vector` orders [means..., stds...] over
     the 13 bands (the layout the stats codec compresses)."""
 
+    per_sample = True       # denormalize needs the batch's own stats
+
     def normalize(self, x: dict):
         """Per-band-group standardization, returning the stats to transmit.
 
@@ -139,6 +141,24 @@ class S2Source(Source):
             ("S2 needs the fine-token patch size (window / finest grid) "
              f"divisible by 6 so every native grid decodes exactly; got {p}")
         self._norm = S2Normalizer()
+        self._stats_pca_bits = None    # set from a checkpoint's prep state
+
+    def prep_state(self):
+        """The PCA stats channel's charged size, for checkpoint embedding,
+        so a checkpoint's rate does not depend on finding the artifact
+        again or on the artifact staying unchanged."""
+        if getattr(self.cfg, "stats_pca", None) is None:
+            return {}
+        return {"stats_pca_bits": self._pca_bits(self.cfg)}
+
+    def load_prep_state(self, state):
+        if "stats_pca_bits" in state:
+            self._stats_pca_bits = float(state["stats_pca_bits"])
+
+    def _pca_bits(self, cfg):
+        if self._stats_pca_bits is not None:
+            return self._stats_pca_bits
+        return _packed_bits(resolve_artifact(cfg.stats_pca))
 
     def prep(self, raw: dict, device):
         """Raw uint16 group dict -> normalized float dict + 10m validity."""
@@ -174,13 +194,13 @@ class S2Source(Source):
         The PCA cost is the MEASURED mean packed size recorded by
         `scripts/fit_stats_pca_s2.py`, so a run's reported rate is
         reproducible from the artifact rather than from a constant that
-        can drift away from the basis. The raw escapes are exact: a
-        1-byte code plus 26 values.
+        can drift away from the basis. A checkpoint that embedded the
+        size (`prep_state`) is charged that value instead. The raw escapes
+        are exact: a 1-byte code plus 26 values.
         """
         out = []
-        path = getattr(cfg, "stats_pca", None)
-        if path is not None:
-            out.append(("pca", _packed_bits(str(path))))
+        if getattr(cfg, "stats_pca", None) is not None:
+            out.append(("pca", self._pca_bits(cfg)))
         n = 2 * (len(BANDS_10M) + len(BANDS_20M) + len(BANDS_60M))
         out.append(("f16", n * 16 + 8.0))
         # No f32 tier. It was measured and buys nothing: at both 16-16-8
@@ -235,9 +255,10 @@ class S2Source(Source):
             losses[f"mse_{name}"] = mse
             total = total + mse
         losses["mse"] = total / len(GROUPS)
-        # proxy quality metric on the 10m plane (normalized space)
+        # 1 - MSE over valid 10m pixels (normalized space); a proxy, not
+        # a cosine
         err = ((out["10m"] - x["10m"]) ** 2).mean(1)
-        losses["cos"] = 1.0 - err[valid].mean().clamp(max=1.0)
+        losses["one_minus_mse_10m"] = 1.0 - err[valid].mean().clamp(max=1.0)
         return total / len(GROUPS), losses
 
     def report(self, model_cfg):
@@ -270,7 +291,7 @@ class S2Source(Source):
 
         The angle stays as a diagnostic, because band RATIOS are what
         spectral indices read and a model can degrade them while its MSE
-        looks fine. Note it is computed on standardized ANOMALY vectors,
+        looks fine. It is computed on standardized ANOMALY vectors,
         not reflectance spectra, so it is not the SAM a remote-sensing
         reader expects (random anomalies sit at pi/2; random all-positive
         reflectance sits far below); true-reflectance SAM needs
@@ -328,6 +349,24 @@ def _s2_rmse(out, x, valid):
 
 
 _PACKED_BITS: dict[str, float] = {}
+
+
+def resolve_artifact(path):
+    """A config's artifact path as a file that exists. Relative paths are
+    written relative to the repository root (`artifacts/...`), so the root
+    is tried before the working directory."""
+    from pathlib import Path
+    p = Path(path)
+    if p.is_absolute():
+        cands = [p]
+    else:
+        cands = [Path(__file__).resolve().parents[2] / p, Path.cwd() / p]
+    for c in cands:
+        if c.is_file():
+            return str(c)
+    raise FileNotFoundError(
+        f"artifact {path} not found; looked in "
+        f"{', '.join(str(c) for c in cands)}")
 
 
 def _packed_bits(path: str) -> float:

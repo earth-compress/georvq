@@ -7,18 +7,12 @@ the choice of which tier carries a residual refinement. The generic,
 source-agnostic machinery (Codec/Packet, refinements, release bundles,
 bitstream ids) lives in `georvq.inference`.
 
-Two policies differ from the AlphaEarth release, both because the data
-does:
-
-* **The mean is transmitted.** Tessera vectors are not unit-norm, and the
-  per-window mean is 85.5% of a window's energy — cheap to send and worth
-  far more per bit than pyramid depth. AlphaEarth is exactly unit-norm and
-  needs no such channel. `georvq.inference.mean_codec` turns the model's
-  rate accounting into real bits.
-* **The refinement sits on a different tier.** AlphaEarth refines its
-  coarse tier, whose codebook carries that model's error tail. Tessera's
-  slack is elsewhere — see `REFINEMENT` in `release.py` for the tier this
-  release actually refines and the measurement behind it.
+The per-window mean is transmitted: Tessera vectors are not unit-norm,
+and the mean is 85.5% of a window's energy, cheap to send and worth more
+per bit than pyramid depth. `georvq.inference.mean_codec` turns the
+model's rate accounting into real bits. The optional refinement sits on
+the fine tier; see `REFINEMENT` in `release.py` for the measurement
+behind that choice.
 
 Use `georvq.ae` and this package as two worked examples of the same
 contract, not as templates to inherit blindly.

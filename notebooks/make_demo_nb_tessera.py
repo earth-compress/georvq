@@ -234,8 +234,7 @@ dimension in a fixed random rotation buys part of the gap back to the
 un-quantized ceiling, with **no extra trained codebooks** — the whole
 "codebook" is a seed plus a Lloyd table fitted once.
 
-It is **off by default here**, unlike the AlphaEarth release's coarse
-sidecar, and the reason is worth knowing: *which* tier holds recoverable
+It is **off by default here**, and the reason is worth knowing: *which* tier holds recoverable
 slack is a property of the model, not of the architecture. On this model
 the coarse tier returns nothing and the fine tier returns a lot — but the
 fine tier has 256 cells, so it costs 128x more.""")

@@ -1,3 +1,4 @@
+import pytest
 import torch
 
 from georvq.config import Config
@@ -167,3 +168,29 @@ def test_the_path_saturates_each_tier_before_the_next():
         for i in range(1, len(t)):
             if t[i] > 0:                    # a tier only opens once every
                 assert t[i - 1] == specs[i - 1].depth   # coarser one is full
+
+
+def test_side_bits_follows_the_source_signature(tiny_raw_cfg):
+    """A source's side_bits may or may not take depths; a TypeError raised
+    inside one that does is not swallowed."""
+    model = build_model(Config.model_validate(tiny_raw_cfg))
+
+    class Old:
+        def side_bits(self, cfg):
+            return 5.0
+
+    class New:
+        def side_bits(self, cfg, depths=None):
+            return 7.0 if depths is None else float(sum(depths))
+
+    class Broken:
+        def side_bits(self, cfg, depths=None):
+            raise TypeError("bug inside the source")
+
+    model.source = Old()
+    assert model.side_bits((1, 2)) == 5.0
+    model.source = New()
+    assert model.side_bits() == 7.0 and model.side_bits((1, 2)) == 3.0
+    model.source = Broken()
+    with pytest.raises(TypeError, match="bug inside"):
+        model.side_bits()

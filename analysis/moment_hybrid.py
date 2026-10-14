@@ -124,7 +124,8 @@ def report(tag, Xv, Xh, bits, nb, rows):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--cache", required=True)
-    ap.add_argument("--gpu", type=int, default=1)
+    ap.add_argument("--device", default="cuda",
+                    help="torch device; cuda is the card Slurm allocated")
     ap.add_argument("--dim", type=int, default=16)
     ap.add_argument("--bits", type=int, default=32)
     ap.add_argument("--codes", type=int, default=256)
@@ -136,7 +137,7 @@ def main():
     ap.add_argument("--out", default="")
     args = ap.parse_args()
 
-    dev = torch.device(f"cuda:{args.gpu}")
+    dev = torch.device(args.device)
     torch.set_grad_enabled(False)
     M, S, Mv, Sv = load_or_collect("", args.cache, 0, 0, 64, 0.9, 8)
     X = torch.from_numpy(np.concatenate([M, S], 1)).float().to(dev)

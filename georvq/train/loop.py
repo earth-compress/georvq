@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import random
 import time
 
 import matplotlib
@@ -25,10 +26,9 @@ from georvq.factory import build_model
 from georvq.model.codec import (monotone_tuples, path_tuples,
                                 sample_monotone_depths,
                                 sample_path_depths, tuple_bits)
-from georvq.model.vq import kmeans_init_rvq
 from georvq.model.vqinit import residual_init_rvq
-from georvq.repro import (run_metadata, save_checkpoint, seed_all,
-                          write_resolved_config)
+from georvq.repro import (load_checkpoint, run_metadata, save_checkpoint,
+                          seed_all, write_resolved_config)
 from georvq.train.figures import (codebook_figure, cosdist_figure,
                                   error_hist_harvest, error_hist_render,
                                   rd_err_harvest, rd_err_render, rd_figure,
@@ -36,9 +36,10 @@ from georvq.train.figures import (codebook_figure, cosdist_figure,
 from georvq.sources.report import resolve_report
 from georvq.train.validate import canonical_tuples, load_rd_ref, tname, validate
 from georvq.train import dist as D
-from georvq.train.warmstart import (decoder_tail_names, freeze_books,
+from georvq.train.signals import stop_on_signals
+from georvq.train.warmstart import (check_warm_start, freeze_books,
                                     load_partial, set_encoder_frozen,
-                                    set_params_frozen, trainable_params)
+                                    trainable_params)
 
 
 def _reset_offset(reset_interval, val_interval):
@@ -71,6 +72,120 @@ def mark_resets(model, step, first_reset):
                 lev.reset_pending = True
 
 
+def make_lr_fn(cfg: Config):
+    """The LR multiplier schedule shared by both trainers: `lr0_steps` at
+    zero, a linear warmup, then cosine to zero over `train.steps` or
+    constant (`optim.schedule`)."""
+    o = cfg.train.optim
+    warmup, lr0 = o.warmup, o.lr0_steps
+    const_lr = o.schedule == "constant"
+    steps = cfg.train.steps
+
+    def lr_fn(s):
+        if s < lr0:                   # AdamW warms its moments at lr=0 first
+            return 0.0
+        s -= lr0
+        # max(warmup, 1): warmup=0 is the natural way to write
+        # "no warmup" and must not divide by zero
+        ramp = min(1.0, (s + 1) / max(warmup, 1))
+        if const_lr:                  # stoppable at any step
+            return ramp
+        total = max(steps - lr0, 1)
+        # a Python float: the lr lands in the optimizer and scheduler
+        # state, which must load under torch.load(weights_only=True)
+        return float(ramp * 0.5 * (1 + np.cos(np.pi * min(1.0, s / total))))
+    return lr_fn
+
+
+def rng_state():
+    """Every RNG the trainer draws from, for an exact resume, as tensors
+    and plain Python values so the checkpoint loads under
+    torch.load(weights_only=True)."""
+    kind, keys, pos, has_gauss, gauss = np.random.get_state()
+    version, internal, gauss_next = random.getstate()
+    return {"torch": torch.get_rng_state(),
+            "cuda": (list(torch.cuda.get_rng_state_all())
+                     if torch.cuda.is_available() else None),
+            "numpy": [str(kind), torch.from_numpy(keys.astype(np.int64)),
+                      int(pos), int(has_gauss), float(gauss)],
+            "python": [int(version), [int(v) for v in internal],
+                       gauss_next]}
+
+
+def set_rng_state(st):
+    torch.set_rng_state(st["torch"])
+    if st.get("cuda") is not None and torch.cuda.is_available() \
+            and len(st["cuda"]) == torch.cuda.device_count():
+        torch.cuda.set_rng_state_all(st["cuda"])
+    kind, keys, pos, has_gauss, gauss = st["numpy"]
+    np.random.set_state((kind, keys.numpy().astype(np.uint32), pos,
+                         has_gauss, gauss))
+    version, internal, gauss_next = st["python"]
+    random.setstate((version, tuple(internal), gauss_next))
+
+
+def level_state(model):
+    """Per-level VQ state that lives outside the state dict: the reset
+    schedule and decay (matured, frozen or ramped by the trainer), the
+    skip-masked dead threshold and the split-mode error EMA."""
+    out = []
+    for rvq in model.rvqs:
+        tier = []
+        for lev in rvq.levels:
+            d = {"reset_pending": bool(lev.reset_pending),
+                 "decay": float(lev.decay),
+                 "reset_interval": int(lev.reset_interval),
+                 "dead_threshold": float(lev.dead_threshold)}
+            if hasattr(lev, "ema_sse"):
+                d["ema_sse"] = lev.ema_sse.detach().cpu().clone()
+            tier.append(d)
+        out.append(tier)
+    part = getattr(model, "_part_ema", None)
+    return {"levels": out,
+            "part_ema": ([[list(k), float(v)] for k, v in part.items()]
+                         if part else [])}
+
+
+def set_level_state(model, st):
+    for rvq, tier in zip(model.rvqs, st["levels"], strict=True):
+        for lev, d in zip(rvq.levels, tier, strict=True):
+            lev.reset_pending = d["reset_pending"]
+            lev.decay = d["decay"]
+            lev.reset_interval = d["reset_interval"]
+            lev.dead_threshold = d["dead_threshold"]
+            if "ema_sse" in d and hasattr(lev, "ema_sse"):
+                lev.ema_sse.copy_(d["ema_sse"].to(lev.ema_sse.device))
+    if hasattr(model, "_part_ema"):
+        model._part_ema = {tuple(k): v for k, v in st["part_ema"]}
+
+
+def load_resume(cfg: Config, model, device):
+    """Load `train.resume` into `model` (strict) and return the checkpoint
+    dict, so the optimizer, scheduler and train state can be restored once
+    they exist. Refuses a checkpoint that cannot continue the run."""
+    path = cfg.train.resume
+    ck = load_checkpoint(path, map_location=device)
+    missing = [k for k in ("opt", "sched", "train_state") if k not in ck]
+    if missing:
+        raise ValueError(
+            f"train.resume={path} has no {missing}: only a model.pt written "
+            f"by this trainer (save_optim on, or a stop-signal save) can be "
+            f"resumed. Use train.init_from to warm-start from it instead.")
+    if ck["step"] >= cfg.train.steps:
+        raise ValueError(
+            f"train.resume={path} is at step {ck['step']}, and train.steps "
+            f"is {cfg.train.steps}: nothing left to train")
+    from georvq.config import config_diff
+    mine = cfg.model_dump(mode="json")
+    mine["train"]["resume"] = ck["config"]["train"].get("resume")
+    for k, a, b in config_diff(ck["config"], mine):
+        print(f"resume: config differs from the checkpoint at {k}: "
+              f"{a!r} -> {b!r}", flush=True)
+    model.load_state_dict(ck["model"])
+    print(f"resuming {path} at step {ck['step'] + 1}", flush=True)
+    return ck
+
+
 def resolve_device(gpu):
     if torch.cuda.is_available() and gpu is not None and gpu >= 0:
         return torch.device(f"cuda:{gpu}")
@@ -100,13 +215,6 @@ def setup_data(cfg: Config, source, device):
     elif D.is_main():
         print(f"data: {len(store.index)} chips -> {len(train_rows)} train / "
               f"{len(val_rows)} val", flush=True)
-    if cfg.data.limit_chips:
-        order = np.random.default_rng(cfg.data.split_seed).permutation(
-            len(train_rows))
-        train_rows = train_rows.iloc[
-            order[:cfg.data.limit_chips]].reset_index(drop=True)
-        print(f"data: limit_chips -> training on {len(train_rows)} chips",
-              flush=True)
     val_s = fixed_val_tokens(store, val_rows, token=cfg.model.window)
     if D.is_main():
         print(f"data: {val_s.shape[0]} fixed val tokens", flush=True)
@@ -122,11 +230,22 @@ def setup_data(cfg: Config, source, device):
                     seed=cfg.train.seed + 1000 * D.rank(),
                     slot_rows=p.slot_rows,
                     pool_device=("cpu" if p.device == "cpu" else device),
-                    cycle=p.cycle, period=period)
+                    cycle=p.cycle, period=period, token=cfg.model.window)
     return store, train_rows, val_rows, val_s.to(device), pool
 
 
 def train(cfg: Config, gpu=0):
+    """Train a pyramid codec. SIGUSR1 or SIGTERM during the run saves a
+    resumable `model.pt` at the end of the current step and exits 0."""
+    with stop_on_signals() as stop:
+        return _train(cfg, gpu, stop)
+
+
+def _train(cfg: Config, gpu, stop):
+    if cfg.train.resume and cfg.train.init_from:
+        raise ValueError("train.resume and train.init_from are exclusive: "
+                         "resume continues this run, init_from starts a "
+                         "new one from another run's weights")
     seed_all(cfg.train.seed)          # identical model init on every rank
     ddp_device, ddp_rank, ddp_world = D.setup(cfg)
     device = ddp_device or resolve_device(gpu)
@@ -169,20 +288,27 @@ def train(cfg: Config, gpu=0):
               f"extra={[m.key for m in report.extra]} "
               f"baselines={[b.key for b in report.baselines]} "
               f"figures={list(report.figures)}", flush=True)
+    # Weights load before the store opens, so a warm start the guard
+    # refuses fails in seconds rather than after the pool prefill.
+    resume_ck = None
+    if cfg.train.resume:
+        resume_ck = load_resume(cfg, model, device)
+    elif cfg.train.init_from:
+        _, books_loaded = load_partial(model, cfg.train.init_from, device)
+        check_warm_start(cfg, books_loaded)
+        if books_loaded and cfg.model.vq.warmup_steps:
+            print(f"train.refit_books: the warm-started codebooks are "
+                  f"refitted by k-means at step "
+                  f"{cfg.model.vq.warmup_steps + 1}", flush=True)
     store, train_rows, val_rows, val_s, pool = setup_data(cfg, source, device)
     val_rows.to_parquet(os.path.join(run_dir, "val_chips.parquet"))
-    # geometry and model-space transform resolve by name; the defaults
-    # delegate to pool.sample_batch and Source.prep, so a config that
-    # names neither runs the historical path exactly
-    from georvq.data.sampler import build_sampler
+    # the model-space transform resolves by name; the default delegates
+    # to Source.prep, so a config that names none runs the historical path
+    from georvq.data.sampler import WindowSampler
     from georvq.sources.prep import build_prep
-    sampler = build_sampler(cfg.data.sampler.name, pool, cfg.model,
-                            source=source)
-    prep = build_prep(cfg.data.prep.name, source, cfg.model)
-    missing = [k for k in prep.requires if k not in sampler.provides]
-    assert not missing, (
-        f"prep {cfg.data.prep.name!r} needs meta {missing} that sampler "
-        f"{type(sampler).__name__} does not provide")
+    sampler = WindowSampler(pool, cfg.model)
+    prep = build_prep(cfg.data.prep.name, source, cfg.model,
+                      params=cfg.data.prep.params)
 
     # location side-info (conditioner / selector)
     needs_loc = model.conditioner is not None or model.selector is not None
@@ -194,8 +320,6 @@ def train(cfg: Config, gpu=0):
 
     n_params = sum(p.numel() for p in model.parameters())
     print(f"model: {n_params/1e6:.2f}M params", flush=True)
-    if cfg.train.init_from:
-        load_partial(model, cfg.train.init_from, device)
     enc_frozen = cfg.train.freeze_encoder_steps > 0
     if enc_frozen:
         names = set_encoder_frozen(model, True)
@@ -214,23 +338,7 @@ def train(cfg: Config, gpu=0):
               f"vq.ema_decay={v.ema_decay} and vq.reset_mode="
               f"{v.reset_mode!r}. Set vq.mature_warmstart=false to keep "
               f"them live.", flush=True)
-    if cfg.train.init_from and v.warmup_steps:
-        # A VQ-free warmup is for training from scratch: it trains the
-        # autoencoder unquantized, then k-means-initialises the books at
-        # warmup_steps + 1. Warm-started books need no init, and that
-        # k-means DISCARDS them -- so inheriting warmup_steps from a
-        # from-scratch preset silently converts a warm-start run into a
-        # from-scratch one, halfway in, with a healthy-looking loss.
-        # Observed: a grown-Tessera run inherited warmup_steps=20000 and
-        # would have thrown away the released codebooks at step 20001.
-        raise ValueError(
-            f"train.init_from is set and model.vq.warmup_steps is "
-            f"{v.warmup_steps}. The VQ-free warmup would k-means "
-            f"re-initialise the warm-started codebooks at step "
-            f"{v.warmup_steps + 1}, discarding them. Set "
-            f"model.vq.warmup_steps: 0 for a warm start, or drop "
-            f"train.init_from to train from scratch.")
-    if cfg.train.init_from and not v.mature_warmstart:
+    if cfg.train.init_from and not v.mature_warmstart and resume_ck is None:
         # undo load_partial's maturing: keep the books live at the
         # configured decay with resets (and therefore reset_mode) active
         for rvq in model.rvqs:
@@ -240,7 +348,7 @@ def train(cfg: Config, gpu=0):
         print(f"warm-started books kept LIVE: decay {v.ema_decay}, "
               f"resets every 2500 steps, reset_mode={v.reset_mode}",
               flush=True)
-    if not v.warmup_steps and not cfg.train.init_from:
+    if not v.warmup_steps and not cfg.train.init_from and resume_ck is None:
         # per-tier data init with >=2K vectors per codebook, drawn and
         # encoded in batch-sized chunks (a single draw of 2*max(K) windows
         # would materialize a giant gather-index tensor on the pool device)
@@ -286,14 +394,6 @@ def train(cfg: Config, gpu=0):
         n_book = freeze_books(model)
         print(f"vq.freeze_books: {n_book/1e6:.1f}M codebook weights frozen "
               f"(no EMA, no resets, no grad)", flush=True)
-    head_names = set()
-    if cfg.train.freeze_head_steps > 0:
-        head_names = decoder_tail_names(model, cfg.train.freeze_head_blocks)
-        set_params_frozen(model, head_names, True)
-        print(f"froze {len(head_names)} decoder-tail tensors "
-              f"(last {cfg.train.freeze_head_blocks} blocks + head) for "
-              f"{cfg.train.freeze_head_steps} steps", flush=True)
-
     if ddp_world > 1:
         # Absorb prefill skew explicitly before the first real collective:
         # ranks reach this point many minutes apart because each fills its
@@ -317,14 +417,14 @@ def train(cfg: Config, gpu=0):
     # a fresh rate model gets its own (higher) LR so it can learn while a
     # warm-started codec fine-tunes at the small base LR. The optimizer owns
     # every param that trains at ANY point in the run — temporarily frozen
-    # params (encoder, decoder tail) must be present from the start or
+    # params (the encoder) must be present from the start or
     # unfreezing them later would never take effect.
     def _trains_eventually(n, p):
         if v.freeze_books and n.startswith("rvqs."):
             return False              # frozen for the whole run
         if cfg.train.freeze_codec:
             return n.startswith("selector.")
-        return p.requires_grad or n in head_names or \
+        return p.requires_grad or \
             (enc_frozen and n.startswith(("tokenizer.", "stem.")))
     rate_p = [p for n, p in trainable_params(model, _trains_eventually)
               if n.startswith("rate.")]
@@ -337,28 +437,16 @@ def train(cfg: Config, gpu=0):
               f"rate-model params @ lr={cfg.model.rate.lr}", flush=True)
     opt = torch.optim.AdamW(groups, lr=cfg.train.optim.lr,
                             weight_decay=cfg.train.optim.wd)
-    warmup, lr0 = cfg.train.optim.warmup, cfg.train.optim.lr0_steps
-
-    const_lr = cfg.train.optim.schedule == "constant"
-
-    def lr_fn(s):
-        if s < lr0:                   # AdamW warms its moments at lr=0 first
-            return 0.0
-        s -= lr0
-        # max(warmup, 1): warmup=0 is the natural way to write
-        # "no warmup" and used to divide by zero here, killing
-        # the run at its first optimiser step -- after the pool
-        # had already spent minutes prefilling.
-        ramp = min(1.0, (s + 1) / max(warmup, 1))
-        if const_lr:                  # stoppable at any step
-            return ramp
-        total = max(cfg.train.steps - lr0, 1)
-        return ramp * 0.5 * (1 + np.cos(np.pi * min(1.0, s / total)))
+    lr_fn = make_lr_fn(cfg)
     sched = torch.optim.lr_scheduler.LambdaLR(opt, lr_fn)
 
-    if cfg.train.init_from:
-        ck = torch.load(cfg.train.init_from, map_location=device,
-                        weights_only=False)
+    if resume_ck is not None:
+        opt.load_state_dict(resume_ck["opt"])
+        sched.load_state_dict(resume_ck["sched"])
+        print(f"restored optimizer and scheduler state (lr "
+              f"{sched.get_last_lr()[0]:.3g})", flush=True)
+    elif cfg.train.init_from:
+        ck = load_checkpoint(cfg.train.init_from, map_location=device)
         if "opt" in ck:
             try:
                 # moments only -- the lr SCHEDULE stays what this run's
@@ -380,17 +468,6 @@ def train(cfg: Config, gpu=0):
                   f"trigger); consider optim.lr0_steps to warm the "
                   f"moments at lr=0.", flush=True)
         del ck
-
-    trap = None
-    if cfg.train.trap is not None and D.is_main():
-        from georvq.train.trap import Trap
-        assert cfg.model.vq is not None and cfg.model.vq.clip_norm, \
-            "trap needs model.vq.clip_norm for the gnorm"
-        trap = Trap(cfg.train.trap, model, run_dir)
-        print(f"trap armed: abs>{cfg.train.trap.gnorm_abs} and "
-              f"ratio>{cfg.train.trap.gnorm_ratio}x EMA, "
-              f"{cfg.train.trap.n_dumps} dumps, hold="
-              f"{cfg.train.trap.hold}", flush=True)
 
     use_wandb = cfg.log.wandb and D.is_main()
     step0 = cfg.log.step_offset
@@ -430,18 +507,52 @@ def train(cfg: Config, gpu=0):
     nonfinite_steps = 0
     best_is_quantized = False   # warmup selects on the ceiling; see below
     best_ceil_guard = -math.inf if report.quality.higher_better else math.inf
+    last_full_q = None
     vs, cbt = {}, {}
-    for step in range(1, cfg.train.steps + 1):
+    start = 1
+    if resume_ck is not None:
+        ts = resume_ck["train_state"]
+        best_q = ts["best_q"]
+        best_is_quantized = ts["best_is_quantized"]
+        best_ceil_guard = ts["best_ceil_guard"]
+        nonfinite_steps = ts["nonfinite_steps"]
+        last_full_q = ts.get("last_full_q")
+        set_level_state(model, ts["vq"])
+        start = resume_ck["step"] + 1
+        rng0 = ts["rng"]
+        del resume_ck
+        set_rng_state(rng0)   # last, so the stream continues the run's
+
+    def train_state():
+        return {"best_q": float(best_q),
+                "best_is_quantized": bool(best_is_quantized),
+                "best_ceil_guard": float(best_ceil_guard),
+                "nonfinite_steps": int(nonfinite_steps),
+                "last_full_q": (None if last_full_q is None
+                                else float(last_full_q)),
+                "vq": level_state(model), "rng": rng_state()}
+
+    def save_model_pt(step, with_optim):
+        save_checkpoint(os.path.join(run_dir, "model.pt"), model, cfg,
+                        step, {"quality_key": qm.key,
+                               f"{qm.key}_full": (None if last_full_q is None
+                                                  else float(last_full_q)),
+                               f"{qm.key}_best": float(best_q)},
+                        opt=opt if with_optim else None,
+                        sched=sched if with_optim else None,
+                        prep_state=prep.state(),
+                        train_state=train_state())
+
+    stopped = None
+    last_save = None
+    last_val_ok = start - 1
+    for step in range(start, cfg.train.steps + 1):
         if enc_frozen and step > cfg.train.freeze_encoder_steps:
             set_encoder_frozen(model, False)
             enc_frozen = False
             print(f"step {step}: unfroze encoder (co-adaptation begins)",
                   flush=True)
 
-        if head_names and step > cfg.train.freeze_head_steps:
-            set_params_frozen(model, head_names, False)
-            print(f"step {step}: unfroze decoder tail", flush=True)
-            head_names = set()
         if v.reset_freeze_frac and \
                 step == int(cfg.train.steps * v.reset_freeze_frac):
             for rvq in model.rvqs:
@@ -473,10 +584,10 @@ def train(cfg: Config, gpu=0):
                 got = [0] * len(specs)
                 while any(g < w for g, w in zip(got, want)):
                     s_, m_ = sampler.draw(batch, align=align)
-                    xs, vs, _ = prep(s_, m_, device)
+                    xs, valid_s, _ = prep(s_, m_, device)
                     for i, z in enumerate(
-                            model.encode_levels(xs, model._stats_of(xs, vs),
-                                                vs)):
+                            model.encode_levels(
+                                xs, model._stats_of(xs, valid_s), valid_s)):
                         if got[i] >= want[i]:
                             continue
                         zf = z.reshape(-1, z.shape[-1])
@@ -540,7 +651,6 @@ def train(cfg: Config, gpu=0):
                 out = model.decode(zs, Lw, st, valid)
             out = out.float()
             commit = torch.zeros((), device=device)
-            Ls_used = Lw
         else:
             if cfg.model.depth_sampling == "path":
                 Ls = sample_path_depths(x.shape[0], specs, device, mins=mins,
@@ -575,7 +685,6 @@ def train(cfg: Config, gpu=0):
             with amp:
                 out = model.decode(zqs, Ls, st, valid)
             out = out.float()
-            Ls_used = Ls
         recon_loss, m = source.recon_stats(out, x, valid)
         # ladder decoder: every exit a row's tuple licenses is supervised
         # (1:1:1); `out` carries the deepest, the shallower ones are here
@@ -622,59 +731,28 @@ def train(cfg: Config, gpu=0):
         if v.clip_norm:
             gnorm = float(torch.nn.utils.clip_grad_norm_(
                 base_p + rate_p, v.clip_norm))
-            if trap is not None:
-                # observe (and possibly dump) BEFORE the non-finite skip
-                # zeroes the grads and before opt.step() moves the
-                # weights: a dump holds the exact pre-transition state.
-                # Scalars only on stats-cadence or loud steps: each
-                # float() is a host sync (clip has already synced once,
-                # but ~12 conversions per step still add up)
-                tscal = {}
-                if (gnorm > 0.5 * trap.cfg.gnorm_abs
-                        or not math.isfinite(gnorm)
-                        or step % max(trap.cfg.stats_every, 1) == 0):
-                    tscal = {"loss": float(loss.detach()),
-                             "recon": float(recon_loss.detach()),
-                             "commit": float(commit.detach()),
-                             "select": float(select.detach()),
-                             **{f"aux{i}": float(a)
-                                for i, a in enumerate(aux_vals)},
-                             **{f"act_{k}": float(av) for k, av in
-                                getattr(model.decoder, "act_max",
-                                        {}).items()}}
-                if trap.observe(step, gnorm, opt, tscal):
-                    trap.dump(step, model, opt, sched,
-                              batch={"x": x, "valid": valid, "st": st,
-                                     "Ls": Ls_used, "loc": loc, "pt": pt},
-                              scalars={"gnorm": gnorm, **tscal})
-                    if trap.cfg.hold and trap.dumps == 1:
-                        # hold only at the first trip (the onset); later
-                        # trips in the same storm dump and move on
-                        trap.hold({"trap": trap})
-            if not math.isfinite(gnorm):
-                # a non-finite gradient would write NaN/inf into Adam's
-                # moments and poison every later step, so drop it entirely
-                opt.zero_grad(set_to_none=True)
-                nonfinite_steps += 1
-                if nonfinite_steps <= 10 and D.is_main():
-                    print(f"step {step}: non-finite grad norm, step SKIPPED "
-                          f"({nonfinite_steps} so far)", flush=True)
-                sched.step()
-                continue
-        opt.step(); sched.step()
-        if trap is not None:
-            trap.after_step(step, model, opt,
-                            {"x": x, "valid": valid, "st": st,
-                             "Ls": Ls_used, "loc": loc, "pt": pt})
+        skipped = gnorm is not None and not math.isfinite(gnorm)
+        if skipped:
+            # a non-finite gradient would write NaN/inf into Adam's
+            # moments and poison every later step, so drop the update;
+            # logging, validation and saves for this step still run
+            opt.zero_grad(set_to_none=True)
+            nonfinite_steps += 1
+            if nonfinite_steps <= 10 and D.is_main():
+                print(f"step {step}: non-finite grad norm, update SKIPPED "
+                      f"({nonfinite_steps} so far)", flush=True)
+        else:
+            opt.step()
+        sched.step()
 
         rst = {}
         for i, rvq in enumerate(model.rvqs):
             for j, lev in enumerate(rvq.levels):
-                st = getattr(lev, "last_reset", None)
-                if st is None:
+                rs = getattr(lev, "last_reset", None)
+                if rs is None:
                     continue
                 lev.last_reset = None
-                for k, val in st.items():
+                for k, val in rs.items():
                     if k != "step":
                         rst[f"reset/pyr{i}_L{j+1}_{k}"] = val
         if rst:
@@ -714,7 +792,8 @@ def train(cfg: Config, gpu=0):
                    "train/lr": sched.get_last_lr()[0],
                    "perf/tokens_per_s": tok_s,
                    "perf/data_wait_ms": data_ms,
-                   "perf/pool_chips_loaded": pool.chips_loaded}
+                   "perf/pool_chips_loaded": pool.chips_loaded,
+                   "perf/pool_read_failures": pool.read_failures}
             # Which decoder served how much of the batch. With a bank the
             # realised step cost depends on how the depth sampler split
             # the rows, so this is what explains a throughput change, and
@@ -878,17 +957,17 @@ def train(cfg: Config, gpu=0):
                     if report.has_figure("recon") and fig_step:
                         payloads["recon"] = recon_harvest(
                             model, source, val_s, mins=mins, tuples=rt,
-                            val_loc=val_loc)
+                            val_loc=val_loc, prep=prep)
                     if (report.has_figure("rd_err") and fig_step
-                            and source.normalizer(cfg.model) is not None):
+                            and prep.invertible):
                         payloads["rd_err"] = rd_err_harvest(
                             model, source, val_s, val_ts,
                             px=cfg.model.window ** 2, side_bits=sb,
-                            val_loc=val_loc)
+                            val_loc=val_loc, prep=prep)
                     if report.has_figure("error_hist") and fig_step:
                         payloads["hist"] = error_hist_harvest(
                             model, source, val_s, tuples=rt, mins=mins,
-                            val_loc=val_loc)
+                            val_loc=val_loc, prep=prep)
                     # host RSS per val: two 60k runs died on silent ~1
                     # GB/val growth (glibc arena bloat under the report
                     # worker's large transient allocs); this makes any
@@ -973,16 +1052,28 @@ def train(cfg: Config, gpu=0):
                         {"quality_key": qm.key,
                          f"{qm.key}_ceiling": ceil_q,
                          "best_ceiling": best_ceil_guard})
+                    if last_save is None:
+                        where = "no model.pt has been written yet"
+                    else:
+                        where = (f"model.pt (step {last_save}, with "
+                                 f"optimizer state) was written "
+                                 + ("before" if last_save <= last_val_ok
+                                    else "AFTER")
+                                 + f" the last healthy validation (step "
+                                 f"{last_val_ok}), so check it before a "
+                                 f"train.resume")
                     print(f"step {step}: COLLAPSE GUARD TRIPPED -- "
                           f"{qm.key}_ceiling {ceil_q:.4f} vs running best "
                           f"{best_ceil_guard:.4f} (guard_drop="
                           f"{cfg.train.guard_drop}). Forensic state in "
-                          f"model_collapsed.pt; resume from model_best.pt "
-                          f"or the last periodic save.", flush=True)
+                          f"model_collapsed.pt. model_best.pt holds "
+                          f"weights only (a fresh AdamW on it storms); "
+                          f"{where}.", flush=True)
                     raise SystemExit(3)
                 best_ceil_guard = (max(best_ceil_guard, ceil_q)
                                    if qm.higher_better
                                    else min(best_ceil_guard, ceil_q))
+                last_val_ok = step
 
             # Track the ceiling during warmup: cos_full would be the
             # model scored against unfitted books, so model_best.pt would
@@ -994,6 +1085,7 @@ def train(cfg: Config, gpu=0):
                 best_is_quantized = True
             full_q = (cbt[tname(canon["full"])] if vq_live
                       else vs[f"{qm.key}_ceiling"])
+            last_full_q = full_q
             metrics = {"quality_key": qm.key,
                        f"{qm.key}_full": full_q,
                        f"{qm.key}_ceiling": vs[f"{qm.key}_ceiling"]}
@@ -1006,14 +1098,21 @@ def train(cfg: Config, gpu=0):
                                 prep_state=prep.state())
         if (step % cfg.train.save_interval == 0
                 or step == cfg.train.steps) and D.is_main():
-            save_checkpoint(os.path.join(run_dir, "model.pt"), model, cfg,
-                            step, {"quality_key": qm.key,
-                                   f"{qm.key}_full": best_q},
-                            opt=opt if cfg.train.save_optim else None,
-                            sched=sched if cfg.train.save_optim else None,
-                            prep_state=prep.state())
+            save_model_pt(step, cfg.train.save_optim)
+            last_save = step
+        if _stop_requested(stop, ddp_world, device):
+            if D.is_main():
+                # always with optimizer state: this save exists to be
+                # resumed from
+                save_model_pt(step, True)
+                print(f"step {step}: stopped by "
+                      f"{stop.signame or 'another rank'}; resume with "
+                      f"train.resume={os.path.join(run_dir, 'model.pt')}",
+                      flush=True)
+            stopped = step
+            break
 
-    if D.is_main():
+    if D.is_main() and stopped is None:
         # one writer: every rank reaching this line would race on the
         # same path, and the ranks do not all hold the same `vs`
         with open(os.path.join(run_dir, "final_val.json"), "w") as f:
@@ -1031,5 +1130,18 @@ def train(cfg: Config, gpu=0):
               flush=True)
     pool.shutdown()
     D.cleanup()
+    if stopped is not None:
+        raise SystemExit(0)
     print(f"done -> {run_dir}", flush=True)
     return run_dir
+
+
+def _stop_requested(stop, world, device):
+    """True on every rank once any rank has received a stop signal, so
+    all ranks leave the loop at the same step."""
+    if world <= 1:
+        return bool(stop)
+    import torch.distributed as dist
+    flag = torch.tensor([1.0 if stop else 0.0], device=device)
+    dist.all_reduce(flag, op=dist.ReduceOp.MAX)
+    return bool(flag.item())

@@ -3,13 +3,12 @@ from with nothing but `pip install georvq` (+extras).
 
 Layout:
     model.pt        georvq checkpoint (weights + embedded config)
-    cdfs.npz        calibrated rANS tables (optional, archive decoding)
-    stats_pca.npz   stats-codec basis (optional, normalized sources)
     bundle.json     bitstream_id, decoder_version, notes
     README.md
 
-`bitstream_id` hashes everything that DEFINES the bitstream (tier specs +
-codebook tensors + stats basis + CDF tables) — decoder weights are
+`bitstream_id` hashes everything that DEFINES the bitstream (tier specs,
+codebook tensors, conditioning priors and any release-layer state passed
+as `extra`) — decoder weights are
 excluded, so improved decoders can ship against the same id and decode
 existing archives (see docs/BITSTREAM.md).
 """
@@ -23,11 +22,10 @@ import numpy as np
 import torch
 
 from georvq.inference.api import Codec
-from georvq.inference.stats_codec import StatsPacker
 from georvq.repro import save_checkpoint
 
 
-def bitstream_id(model, stats_pca=None, cdfs_path=None, extra=()) -> str:
+def bitstream_id(model, extra=()) -> str:
     """Hash of everything that DEFINES the bitstream.
 
     Decoder weights are deliberately excluded, so a better decoder ships
@@ -47,10 +45,6 @@ def bitstream_id(model, stats_pca=None, cdfs_path=None, extra=()) -> str:
     if model.conditioner is not None:      # priors shape the coded residuals
         for p in model.conditioner.parameters():
             h.update(p.detach().cpu().numpy().tobytes())
-    if stats_pca is not None:
-        h.update(np.asarray(stats_pca["components"]).tobytes())
-    if cdfs_path and os.path.exists(cdfs_path):
-        h.update(open(cdfs_path, "rb").read())
     for blob in extra:
         h.update(blob if isinstance(blob, bytes) else np.asarray(blob).tobytes())
     return h.hexdigest()[:16]
@@ -77,15 +71,14 @@ def decoder_id(model, extra_state=None, recipe=None) -> str:
     return h.hexdigest()[:16]
 
 
-def save_release(out_dir, model, cfg, step=0, cdfs_path=None,
-                 stats_pca=None, notes="", extra_id=(), meta=None,
-                 fp16=False):
-    """Write a self-contained bundle: weights, optional side tables, and
-    the ids that define what they decode.
+def save_release(out_dir, model, cfg, step=0, notes="", extra_id=(),
+                 meta=None, fp16=False):
+    """Write a self-contained bundle: weights and the ids that define what
+    they decode.
 
     The `bitstream_id` returned here hashes everything that DEFINES the
-    bitstream -- tier specs, codebooks, conditioning priors, the stats
-    basis and the CDF tables -- but deliberately NOT the decoder
+    bitstream -- tier specs, codebooks, conditioning priors and `extra_id`
+    -- but deliberately NOT the decoder
     weights, so a better decoder can ship against the same id and decode
     existing archives without re-encoding. Source-specific release state
     (containers, refinements, mean channels) belongs in that source's
@@ -96,25 +89,17 @@ def save_release(out_dir, model, cfg, step=0, cdfs_path=None,
     os.makedirs(out_dir, exist_ok=True)
     ckpt = os.path.join(out_dir, "model.pt")
     save_checkpoint(ckpt, model, cfg, step)
-    if cdfs_path:
-        import shutil
-        shutil.copy(cdfs_path, os.path.join(out_dir, "cdfs.npz"))
-    if stats_pca is not None:
-        np.savez(os.path.join(out_dir, "stats_pca.npz"), **stats_pca)
 
     if fp16:
         # Halve BEFORE hashing. An id that does not describe the bytes
-        # being shipped is not an id: `georvq.ae.cog.openr` and the tile
-        # backends RECOMPUTE it from the weights they loaded and refuse a
-        # mismatch, so a stored id that disagrees with the shipped
+        # being shipped is not an id: loaders RECOMPUTE it from the
+        # weights they loaded and refuse a mismatch, so a stored id that disagrees with the shipped
         # weights would be rejected by the very check it exists to serve.
         halve_weights(ckpt)
         from georvq.factory import from_checkpoint
         model = from_checkpoint(ckpt, "cpu")
 
-    bid = bitstream_id(model, stats_pca,
-                       os.path.join(out_dir, "cdfs.npz") if cdfs_path else None,
-                       extra=extra_id)
+    bid = bitstream_id(model, extra=extra_id)
     payload = {"bitstream_id": bid,
                "decoder_id": decoder_id(model),
                "decoder_version": 1,
@@ -146,7 +131,8 @@ def halve_weights(ckpt_path):
     centred cosine by -8.0e-07, some 260x smaller than the difference
     between two consecutive release checkpoints.
     """
-    ck = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+    from georvq.repro import load_checkpoint
+    ck = load_checkpoint(ckpt_path)
     ck["model"] = {k: (v.half() if torch.is_tensor(v) and v.is_floating_point()
                        and v.dtype == torch.float32 else v)
                    for k, v in ck["model"].items()}
@@ -158,11 +144,7 @@ def load_release(release_dir, device="cpu") -> Codec:
     """A ready Codec from a bundle directory (fresh-process safe)."""
     from georvq.factory import from_checkpoint
     model = from_checkpoint(os.path.join(release_dir, "model.pt"), device)
-    packer = None
-    spath = os.path.join(release_dir, "stats_pca.npz")
-    if os.path.exists(spath):
-        packer = StatsPacker(spath)
-    codec = Codec(model, stats_packer=packer)
+    codec = Codec(model)
     bpath = os.path.join(release_dir, "bundle.json")
     if os.path.exists(bpath):
         with open(bpath) as f:

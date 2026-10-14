@@ -60,10 +60,6 @@ def parse_tier(v):
 class TokenizerConfig(StrictModel):
     dim: int = 256
     depth: int = 9
-    # finest tier joins the trunk only for the last k layers (0 = every
-    # layer). High-frequency content is local: a few joint layers suffice
-    # and the coarse-only prefix runs at a fraction of the sequence length
-    late_join: int = 0
     # One conv pyramid instead of an independent patch embed per tier and
     # a CLS parameter for the coarsest. The coarse token then arrives with
     # a convolutional read of the image rather than as a constant the
@@ -96,7 +92,7 @@ class DecoderStageConfig(StrictModel):
     dim: int = 384
     depth: int = 12
     heads: int = 8
-    head_feat: int = 64
+    head_feat: Optional[int] = None   # None = decoder.head_feat
     cls_bridge: bool = True
     ff_ratio: Optional[float] = None
 
@@ -118,7 +114,6 @@ class DecoderConfig(StrictModel):
     heads: int = 8
     head_feat: int = 64
     cls_bridge: bool = True
-    late_join: int = 0             # same contract as tokenizer.late_join
     # Decoder-only FFN width multiplier. None = share `model.ff_ratio`
     # with the tokenizer, which is the historical behaviour. Set it to
     # widen the DECODER's MLPs without touching the encoder -- required
@@ -126,8 +121,6 @@ class DecoderConfig(StrictModel):
     # training from cached latents), because a wider encoder FFN is a
     # different encoder and its cached latents would no longer apply.
     ff_ratio: Optional[float] = None
-    head_dw: bool = False          # depthwise-separable head convs (8x fewer
-                                   # MACs; smooths intra-window tile seams)
     map_px: Optional[list[int]] = None   # tiersum: per-tier map size, px
     solo_hidden: int = 512               # tiersum coarse-only MLP width
     solo_layers: int = 3
@@ -160,16 +153,12 @@ class VQConfig(StrictModel):
     # depth (the `cos_ceiling` path). Without it a stage-2 decoder
     # specializes to quantized inputs and its continuous path decays --
     # measured on w32hd, the ceiling fell 0.9899 -> 0.9830 over 25k
-    # decoder-only steps. Keeping a slice of clean batches holds the
-    # encoder/decoder pair honest on the un-quantized mapping, keeps
+    # decoder-only steps. Keeping a slice of clean batches keeps the
+    # encoder/decoder pair trained on the un-quantized mapping, keeps
     # cos_ceiling a meaningful diagnostic rather than a drifting one, and
     # leaves the codec usable continuously. Costs a little capacity that
     # would otherwise go to the quantized path.
     passthrough_frac: float = 0.0
-    # How a dead code is revived. "random" reseeds from a random encoder
-    # output (the historical behaviour); "split" sends it into the live
-    # cell with the largest distortion contribution, at that cell's
-    # worst-fitting point (LBG splitting).
     # Global grad-norm clip; None or 0 disables. ON by default because its
     # absence is a live failure mode, not a tuning choice: with no clip a
     # single bad batch blew up a run at step 1900 (loss 0.035 -> 0.148,
@@ -182,11 +171,16 @@ class VQConfig(StrictModel):
     # hot LR is what blows up. Small batches make it likelier, so it
     # matters most exactly where we want to run.
     clip_norm: Optional[float] = 1.0
+    # How a dead code is revived. "random" reseeds from a random encoder
+    # output (the historical behaviour); "split" sends it into the live
+    # cell with the largest distortion contribution, at that cell's
+    # worst-fitting point (LBG splitting).
     reset_mode: Literal["random", "split"] = "random"
     # Codebook seeding. "kmeans" draws K random data rows (historical);
-    # "tree" builds a balanced PCA tree of median splits, which cannot
-    # emit an empty leaf and does not waste seeds on near-duplicates in
-    # dense regions. Lloyd iterations follow either way.
+    # "tree" builds a balanced PCA tree of median splits, which does not
+    # waste seeds on near-duplicates in dense regions (heavily duplicated
+    # rows can still leave a leaf empty, emitted as a zero vector). Lloyd
+    # iterations follow either way and reseed empty cells.
     init_mode: Literal["kmeans", "tree"] = "kmeans"
     # Per-tier init budget, in vectors PER CODEWORD. The legacy path sizes
     # the init by batch count, which couples the tiers: at
@@ -249,12 +243,14 @@ class StatsCondConfig(StrictModel):
     def _check(self):
         """Refuse the combinations that would silently do nothing or
         silently distort (std division without centering)."""
-        assert self.subtract_mean or self.cond_encoder or self.cond_decoder, \
-            "stats_cond does nothing with every option off"
-        assert not (self.use_std and not self.subtract_mean), \
-            "stats_cond.use_std requires subtract_mean"
-        assert self.std_floor > 0
-        assert self.bits_per_band > 0
+        if not (self.subtract_mean or self.cond_encoder or self.cond_decoder):
+            raise ValueError("stats_cond does nothing with every option off")
+        if self.use_std and not self.subtract_mean:
+            raise ValueError("stats_cond.use_std requires subtract_mean")
+        if self.std_floor <= 0:
+            raise ValueError("stats_cond.std_floor must be > 0")
+        if self.bits_per_band <= 0:
+            raise ValueError("stats_cond.bits_per_band must be > 0")
         return self
 
 
@@ -324,7 +320,8 @@ class SelectConfig(StrictModel):
     @field_validator("subset_frac")
     @classmethod
     def _frac(cls, v):
-        assert 0 < v <= 1, "subset_frac must be in (0, 1]"
+        if not (0 < v <= 1):
+            raise ValueError("subset_frac must be in (0, 1]")
         return v
 
 
@@ -348,16 +345,6 @@ class ModelConfig(StrictModel):
     # rises to 0.197).
     depth_sampling: Literal["nested", "path"] = "nested"
     ff_ratio: float = 2.0
-    # L2-normalize per-cell latents (x sqrt(dim)) in encode_levels — REQUIRED
-    # when warm-starting from a stage-1 checkpoint (its decoder only ever saw
-    # normalized latents); default off preserves all legacy checkpoints
-    norm_latents: bool = False
-    tokenizer: TokenizerConfig = Field(default_factory=TokenizerConfig)
-    decoder: DecoderConfig = Field(default_factory=DecoderConfig)
-    # Resolution-matched decoders, one per tier prefix. None keeps the
-    # single decoder every existing preset and checkpoint uses.
-    decoder_bank: Optional[list[DecoderStageConfig]] = None
-    vq: Optional[VQConfig] = Field(default_factory=VQConfig)
     # Emit L2-normalized * sqrt(dim) latents from encode_levels, i.e. the
     # geometry encode_stage1 (and therefore stage-1 training) uses. Set
     # this on any stage-2 run warm-started from a stage-1 checkpoint;
@@ -366,6 +353,12 @@ class ModelConfig(StrictModel):
     # and the bitstream contract are unaffected. (Named `norm_latents`;
     # `normalize_latents` in older checkpoints is migrated on load.)
     norm_latents: bool = False
+    tokenizer: TokenizerConfig = Field(default_factory=TokenizerConfig)
+    decoder: DecoderConfig = Field(default_factory=DecoderConfig)
+    # Resolution-matched decoders, one per tier prefix. None keeps the
+    # single decoder every existing preset and checkpoint uses.
+    decoder_bank: Optional[list[DecoderStageConfig]] = None
+    vq: Optional[VQConfig] = Field(default_factory=VQConfig)
     # PCA basis for a source NORMALIZER's stats side channel, fitted by
     # scripts/fit_stats_pca_s2.py. Distinct from `stats_cond`, which
     # transmits a mean the model is also conditioned on; a normalizer's
@@ -377,9 +370,6 @@ class ModelConfig(StrictModel):
     stats_cond: Optional[StatsCondConfig] = None
     conditioning: Optional[Conditioning] = None
     rate: Optional[RateConfig] = None
-    # hierarchical local attention: per-tier radius in own-tier cells
-    # (null = global tier). e.g. [null, null, 2, 4]. None = full attention.
-    local_attn: Optional[list[Optional[int]]] = None
 
     @field_validator("tiers", mode="before")
     @classmethod
@@ -400,65 +390,94 @@ class ModelConfig(StrictModel):
         flag. The rate-model warning is not pedantry: with EMA codebooks
         dR/dC is identically zero, so a rate model trains against a codebook
         it cannot move."""
-        assert self.tiers, "at least one tier required"
+        if not self.tiers:
+            raise ValueError("at least one tier required")
         grids = [t.grid for t in self.tiers]
-        assert grids == sorted(grids) and len(set(grids)) == len(grids), \
-            f"tier grids must be strictly ascending: {grids}"
-        assert grids[0] == 1, "coarsest tier must have grid=1"
+        if grids != sorted(grids) or len(set(grids)) != len(grids):
+            raise ValueError(f"tier grids must be strictly ascending: {grids}")
+        if grids[0] != 1:
+            raise ValueError("coarsest tier must have grid=1")
         for t in self.tiers:
-            assert self.window % t.grid == 0, \
-                f"window {self.window} not divisible by grid {t.grid}"
+            if self.window % t.grid:
+                raise ValueError(
+                    f"window {self.window} not divisible by grid {t.grid}")
         if self.min_depths is None:
             self.min_depths = [1] + [0] * (len(self.tiers) - 1)
-        assert len(self.min_depths) == len(self.tiers), \
-            "min_depths must have one entry per tier"
-        assert self.min_depths[0] >= 1, "coarsest tier needs min depth >= 1"
+        if len(self.min_depths) != len(self.tiers):
+            raise ValueError("min_depths must have one entry per tier")
+        if self.min_depths[0] < 1:
+            raise ValueError("coarsest tier needs min depth >= 1")
         for m, t in zip(self.min_depths, self.tiers):
-            assert 0 <= m <= t.depth, f"min depth {m} > tier depth {t.depth}"
-        assert 0.0 <= self.full_frac <= 1.0
+            if not 0 <= m <= t.depth:
+                raise ValueError(f"min depth {m} outside [0, {t.depth}]")
+        if self.depth_sampling == "path" and any(self.min_depths[1:]):
+            # path_tuples starts at the min_depths tuple, so a nonzero
+            # finer minimum puts points such as (6, 1, 0) on the path,
+            # which are not on the saturating fill ladder
+            raise ValueError(
+                "depth_sampling=path needs min_depths[1:] all zero; got "
+                f"{self.min_depths}")
+        if not 0.0 <= self.full_frac <= 1.0:
+            raise ValueError(f"full_frac {self.full_frac} outside [0, 1]")
         if self.decoder_bank is not None:
             b = sorted(self.decoder_bank, key=lambda s: s.tiers)
-            assert [s.tiers for s in b] == list(range(1, len(self.tiers) + 1)), \
-                ("decoder_bank needs one entry per tier prefix, 1..n: got "
-                 f"{[s.tiers for s in b]} for {len(self.tiers)} tiers")
-            assert b[-1].out_px == self.window, \
-                (f"the last decoder_bank entry decodes every tier, so its "
-                 f"out_px must be the window {self.window}, not {b[-1].out_px}")
+            if [s.tiers for s in b] != list(range(1, len(self.tiers) + 1)):
+                raise ValueError(
+                    "decoder_bank needs one entry per tier prefix, 1..n: got "
+                    f"{[s.tiers for s in b]} for {len(self.tiers)} tiers")
+            if b[-1].out_px != self.window:
+                raise ValueError(
+                    "the last decoder_bank entry decodes every tier, so its "
+                    f"out_px must be the window {self.window}, not "
+                    f"{b[-1].out_px}")
             for s in b:
                 g = self.tiers[s.tiers - 1].grid
-                assert s.out_px % g == 0, \
-                    (f"decoder_bank[{s.tiers}]: out_px {s.out_px} not "
-                     f"divisible by that prefix's finest grid {g}")
-                assert self.window % s.out_px == 0, \
-                    (f"decoder_bank[{s.tiers}]: window {self.window} not "
-                     f"divisible by out_px {s.out_px}; the resample back to "
-                     "full resolution has to be an integer factor")
+                if s.out_px % g:
+                    raise ValueError(
+                        f"decoder_bank[{s.tiers}]: out_px {s.out_px} not "
+                        f"divisible by that prefix's finest grid {g}")
+                if self.window % s.out_px:
+                    raise ValueError(
+                        f"decoder_bank[{s.tiers}]: window {self.window} not "
+                        f"divisible by out_px {s.out_px}; the resample back "
+                        "to full resolution has to be an integer factor")
             if self.stats_cond is not None and self.stats_cond.cond_decoder:
                 # the patch-mean embedding is added to each member's AdaLN
                 # conditioning, and one StatsEmbed serves them all, so the
                 # members have to agree on width
                 bad = [s.tiers for s in b if s.dim != self.decoder.dim]
-                assert not bad, (
-                    "stats_cond.cond_decoder is on, so every decoder_bank "
-                    f"member must use decoder.dim {self.decoder.dim}; "
-                    f"entries {bad} differ")
+                if bad:
+                    raise ValueError(
+                        "stats_cond.cond_decoder is on, so every decoder_bank "
+                        f"member must use decoder.dim {self.decoder.dim}; "
+                        f"entries {bad} differ")
             self.decoder_bank = b
         # The latents must be the TIGHTEST bottleneck in the model: a
         # trunk narrower than a tier's latent caps that latent's usable
         # rank and silently confounds any latent-width experiment (the
         # era5_t64_ladder256 null result was exactly this).
         widest = max(t.dim for t in self.tiers)
-        assert self.tokenizer.dim >= widest, \
-            f"tokenizer.dim {self.tokenizer.dim} < widest tier latent " \
-            f"{widest}: the encoder trunk would bottleneck the latents"
-        assert self.decoder.dim >= widest, \
-            f"decoder.dim {self.decoder.dim} < widest tier latent " \
-            f"{widest}: the decoder trunk would bottleneck the latents"
-        assert (self.vq is None) != (self.sigma is None), \
-            "set exactly one of model.vq (quantized) / model.sigma (stage-1 continuous)"
+        if self.tokenizer.dim < widest:
+            raise ValueError(
+                f"tokenizer.dim {self.tokenizer.dim} < widest tier latent "
+                f"{widest}: the encoder trunk would bottleneck the latents")
+        if self.decoder.dim < widest:
+            raise ValueError(
+                f"decoder.dim {self.decoder.dim} < widest tier latent "
+                f"{widest}: the decoder trunk would bottleneck the latents")
+        if (self.vq is None) == (self.sigma is None):
+            raise ValueError(
+                "set exactly one of model.vq (quantized) / model.sigma "
+                "(stage-1 continuous)")
         if self.sigma is not None:
-            assert self.conditioning is None and self.rate is None, \
-                "stage-1 continuous mode takes no conditioning/rate model"
+            if self.conditioning is not None or self.rate is not None:
+                raise ValueError(
+                    "stage-1 continuous mode takes no conditioning/rate model")
+            if self.stats_cond is not None:
+                # forward_stage1 neither passes the stats nor adds the
+                # mean back after the decoder
+                raise ValueError(
+                    "stage-1 continuous mode does not support stats_cond")
         if self.rate is not None and self.vq is not None \
                 and not self.vq.grad_codebook:
             warnings.warn("rate model with EMA codebooks: dR/dC is dead — "
@@ -482,17 +501,9 @@ class PoolConfig(StrictModel):
 
     @model_validator(mode="after")
     def _check(self):
-        if self.cycle:
-            assert self.slot_rows, "pool.cycle requires pool.slot_rows"
+        if self.cycle and not self.slot_rows:
+            raise ValueError("pool.cycle requires pool.slot_rows")
         return self
-
-
-class SamplerConfig(StrictModel):
-    """Sample geometry (georvq/data/sampler.py). name=None resolves to
-    the source's default sampler (WindowSampler for every source
-    today), which reproduces the historical behaviour exactly."""
-    name: Optional[str] = None
-    params: dict = Field(default_factory=dict)
 
 
 class PrepConfig(StrictModel):
@@ -512,17 +523,14 @@ class DataConfig(StrictModel):
     reader: Literal["auto", "chipstore", "live_s2"] = "auto"
     val_frac: float = 0.04
     split_seed: int = 0
-    limit_chips: Optional[int] = None   # data-scaling probes: train on a
-    #   deterministic subsample of N chips (nested: N ⊂ 2N for the same
-    #   split_seed); the val split always stays full
     pool: PoolConfig = Field(default_factory=PoolConfig)
-    sampler: SamplerConfig = Field(default_factory=SamplerConfig)
     prep: PrepConfig = Field(default_factory=PrepConfig)
 
     @field_validator("val_frac")
     @classmethod
     def _frac(cls, v):
-        assert 0.0 <= v <= 1.0
+        if not 0.0 <= v <= 1.0:
+            raise ValueError(f"val_frac {v} outside [0, 1]")
         return v
 
 
@@ -555,40 +563,9 @@ class BatchRamp(StrictModel):
 
     @model_validator(mode="after")
     def _check(self):
-        assert self.until > 0 and self.divisor > 1
+        if self.until <= 0 or self.divisor <= 1:
+            raise ValueError("batch_ramp needs until > 0 and divisor > 1")
         return self
-
-
-class TrapConfig(StrictModel):
-    """Instability trap (georvq/train/trap.py): per-step flight recorder
-    plus a tripwire on the pre-clip gradient norm. On a trip the loop
-    saves pre-step weights, gradients, optimizer state, the batch and
-    RNG states, so the offending step can be replayed exactly. `hold`
-    additionally parks the process on a localhost pdb socket for live
-    inspection. Requires train.optim -- the update-ratio telemetry reads
-    Adam moments -- and train.clip_norm, which provides the norm."""
-    gnorm_abs: float = 0.5         # trip only above this absolute norm
-    gnorm_ratio: float = 10.0      # ... and above ratio * running EMA
-    min_step: int = 200            # let init transients through
-    n_dumps: int = 3
-    cooldown: int = 250            # min steps between dumps: a storm
-    #                                trips every step; spacing the dumps
-    #                                samples its whole arc
-    hold: bool = False
-    hold_port: int = 4444
-    hold_timeout: float = 14400.0
-    snapshot_every: int = 500      # rolling pre-history model+opt copy
-    # per-group grad norms + Adam update ratios cost ~1500 small kernels
-    # and a host sync per call; every step was measured at ~27% of
-    # ladder-w320 throughput. The tripwire itself reads only the free
-    # whole-model gnorm, so throttled group stats lose nothing but
-    # flight-record resolution between trips.
-    stats_every: int = 10
-    # per-step CPU copies of the batch (~310 MB/step at batch 1024) buy
-    # pre-trip context only; the trip step's own batch is dumped live.
-    # 0 disables.
-    batch_history_bytes: int = 0
-    flight_maxlen: int = 20000
 
 
 class TrainConfig(StrictModel):
@@ -602,7 +579,6 @@ class TrainConfig(StrictModel):
     # training dead weights for hours; benign spikes recover between
     # validations and never trip it. None disables.
     guard_drop: Optional[float] = 0.05
-    trap: Optional[TrapConfig] = None
     # Carry optimizer+scheduler state in the periodic model.pt (about 3x
     # the file) so a resume continues the Adam trajectory instead of
     # rebuilding fresh moments, which storms; see save_checkpoint.
@@ -610,15 +586,20 @@ class TrainConfig(StrictModel):
     amp: bool = True
     grad_ckpt: bool = False
     tf32: bool = True
-    compile: bool = False          # torch.compile the trunk layer forwards
     init_from: Optional[Path] = None
+    # A warm start with vq.warmup_steps > 0 refits the codebooks by
+    # k-means at warmup_steps + 1. When the init_from checkpoint supplied
+    # shape-matching books, that refit discards them, and the trainer
+    # refuses to start unless this is set to say the refit is intended
+    # (a cascade whose books must now quantize residuals, for example).
+    refit_books: bool = False
+    # Continue a run from its own checkpoint (a model.pt written by this
+    # trainer): weights, optimizer, scheduler, step, best score, RNG
+    # state and per-level reset/decay state are restored, and the
+    # schedule carries on from the saved step. Exclusive with init_from.
+    resume: Optional[Path] = None
     freeze_encoder_steps: int = 0
     freeze_codec: bool = False
-    # Hold the decoder's output end still while its internal representation
-    # re-adapts to quantized latents: freeze the last `freeze_head_blocks`
-    # decoder blocks plus norm_out/head for this many steps.
-    freeze_head_steps: int = 0
-    freeze_head_blocks: int = 3
     optim: OptimConfig = Field(default_factory=OptimConfig)
     seed: int = 0
     val_interval: int = 1000
@@ -686,6 +667,15 @@ RETIRED_FIELDS = (
     "model.vq.refit_dead_frac", "model.vq.refit_recycle_frac",
     "model.vq.drift_interval", "model.vq.drift_windows",   # served its purpose
     "model.tokenizer.suffix_dim", "model.decoder.suffix_dim",
+    "train.trap",                                          # debugging tool
+    "data.sampler",                                        # one geometry
+    # no preset or finding used these; removed 2026-10-14
+    "model.local_attn",
+    "model.tokenizer.late_join", "model.decoder.late_join",
+    "model.decoder.head_dw",
+    "train.compile",
+    "train.freeze_head_steps", "train.freeze_head_blocks",
+    "data.limit_chips",
 )
 
 
@@ -775,7 +765,7 @@ def drop_retired(raw: dict) -> dict:
 class Config(StrictModel):
     """The whole of a run, validated.
 
-    This object is the reproducibility spine: it is embedded in every
+    This object is what makes a run reproducible: it is embedded in every
     checkpoint, hashed into `config_hash`, and is the only place a
     setting that affects a run may live. `extra="forbid"` throughout, so
     a typo in a YAML key is an error rather than a silently ignored
@@ -800,17 +790,19 @@ class Config(StrictModel):
             # different sections, so nothing else notices when they overrun
             # it. Over 1.0 the path fraction goes negative and the sampler
             # silently returns full depth for everything.
-            assert self.model.full_frac + v.passthrough_frac <= 1.0, (
-                f"model.full_frac ({self.model.full_frac}) + "
-                f"model.vq.passthrough_frac ({v.passthrough_frac}) > 1: they "
-                "are shares of the same batch and leave no rows for the "
-                "sampled depth tuples")
+            if self.model.full_frac + v.passthrough_frac > 1.0:
+                raise ValueError(
+                    f"model.full_frac ({self.model.full_frac}) + "
+                    f"model.vq.passthrough_frac ({v.passthrough_frac}) > 1: "
+                    "they are shares of the same batch and leave no rows for "
+                    "the sampled depth tuples")
         if self.train.freeze_codec:
-            assert self.train.init_from is not None, \
-                "train.freeze_codec requires train.init_from"
-            assert self.model.conditioning is not None \
-                and self.model.conditioning.kind == "select", \
-                "train.freeze_codec is only meaningful with conditioning=select"
+            if self.train.init_from is None:
+                raise ValueError("train.freeze_codec requires train.init_from")
+            c = self.model.conditioning
+            if c is None or c.kind != "select":
+                raise ValueError("train.freeze_codec is only meaningful with "
+                                 "conditioning=select")
         return self
 
 
@@ -908,8 +900,8 @@ def config_diff(a, b) -> list[tuple[str, object, object]]:
             return x.model_dump(mode="json")
         if isinstance(x, dict):
             return x
-        import torch
-        ck = torch.load(x, map_location="cpu", weights_only=False)
+        from georvq.repro import load_checkpoint
+        ck = load_checkpoint(x)
         return ck["config"]
     fa, fb = _flatten(as_dict(a)), _flatten(as_dict(b))
     keys = sorted(set(fa) | set(fb))
