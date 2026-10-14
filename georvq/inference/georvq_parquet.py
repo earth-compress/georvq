@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import http.client
 import io
 import json
 import os
@@ -40,7 +41,9 @@ import re
 import struct
 import threading
 import time
+import urllib.error
 import urllib.request
+import warnings
 import zlib
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
@@ -60,6 +63,9 @@ SUFFIX = ".georvq.parquet"
 FIRST_READ = 256 * 1024
 GAP = 16 * 1024
 CONCURRENCY = 16
+TIMEOUT = 60.0
+RETRIES = 3
+BACKOFF = 0.5
 CACHE_BYTES = 512 * 1024 * 1024
 MASK_CODEC = "packbits-zlib"
 HEADER_KEY = "georvq"
@@ -70,6 +76,8 @@ _STAT_COLUMNS = ["kind", "product_id", "chunk_row", "chunk_col"] + [
     f"bbox.{k}" for k in _BBOX]
 _WRITER_KEYS = ("format", "version", "status", "layout")
 _RESERVED = ("base", "mask", "quality")
+_TIER_NAME = re.compile(r"[A-Za-z0-9_]+")
+_CONTENT_RANGE = re.compile(r"^bytes (\d+)-(\d+)/(\d+)$")
 
 
 def tier_names(n_tiers: int) -> list:
@@ -163,6 +171,9 @@ class Layout:
         self.base = Column("base", base)
         self.tiers, self.level_columns = [], []
         for i, (name, levels, fields) in enumerate(tiers):
+            if not isinstance(name, str) or not _TIER_NAME.fullmatch(name):
+                raise ValueError(f"tier name {name!r} is not made of "
+                                 f"[A-Za-z0-9_]")
             if name in _RESERVED or name in [t.name for t in self.tiers]:
                 raise ValueError(f"tier name {name!r} is reserved or repeated")
             if fields is None:
@@ -282,10 +293,20 @@ def encode_mask(valid) -> bytes:
 
 
 def decode_mask(data: bytes, shape) -> np.ndarray:
+    """Inverse of `encode_mask` for a chunk of `shape` pixels. The value
+    must decompress to exactly the packed bits of `shape`, so a crafted
+    value cannot inflate past them."""
     if not data:
         return np.ones(shape, bool)
-    bits = np.frombuffer(zlib.decompress(data), dtype=np.uint8)
     n = int(shape[0]) * int(shape[1])
+    nbytes = (n + 7) // 8
+    d = zlib.decompressobj()
+    raw = d.decompress(data, nbytes)
+    if d.unconsumed_tail and d.decompress(d.unconsumed_tail, 1):
+        raise ValueError(f"mask value inflates past {nbytes} bytes")
+    if len(raw) != nbytes or not d.eof or d.unused_data:
+        raise ValueError(f"mask value is not one zlib stream of {nbytes} bytes")
+    bits = np.frombuffer(raw, dtype=np.uint8)
     return np.unpackbits(bits, count=n).reshape(shape).astype(bool)
 
 
@@ -522,17 +543,26 @@ class RVQParquetWriter:
         names = schema.names
         largest = max([len(r[c]) for r in rows for c in self.layout.column_order
                        if c in r] + [0])
-        with pq.ParquetWriter(
-                self.path, schema, compression="NONE", use_dictionary=False,
-                write_statistics=_STAT_COLUMNS,
-                data_page_size=max(1 << 20, 2 * largest),
-                store_schema=False, write_page_index=False) as w:
-            for row in rows:
-                w.write_table(pa.Table.from_pydict(
-                    {n: [row.get(n)] for n in names}, schema=schema))
-            # store_schema=False drops schema metadata, so the key-value
-            # metadata is added to the footer directly.
-            w.add_key_value_metadata(meta)
+        # written beside the target and moved over it when complete, so a
+        # failed or killed write never leaves a partial file at self.path
+        tmp = f"{self.path}.{os.getpid()}.{threading.get_ident()}.tmp"
+        try:
+            with pq.ParquetWriter(
+                    tmp, schema, compression="NONE", use_dictionary=False,
+                    write_statistics=_STAT_COLUMNS,
+                    data_page_size=max(1 << 20, 2 * largest),
+                    store_schema=False, write_page_index=False) as w:
+                for row in rows:
+                    w.write_table(pa.Table.from_pydict(
+                        {n: [row.get(n)] for n in names}, schema=schema))
+                # store_schema=False drops schema metadata, so the key-value
+                # metadata is added to the footer directly.
+                w.add_key_value_metadata(meta)
+            os.replace(tmp, self.path)
+        except BaseException:
+            with contextlib.suppress(FileNotFoundError):
+                os.remove(tmp)
+            raise
         self._rec = {}
         self._valid = None
         self._closed = True
@@ -589,13 +619,22 @@ def span(trace, kind, label, nbytes=0, sync=None):
 # cache
 # --------------------------------------------------------------------------
 
+def _path_part(s) -> str:
+    """`s` with every character outside [\\w.-] replaced by `_`, and never
+    an empty, `.` or `..` path component."""
+    safe = re.sub(r"[^\w.-]", "_", str(s))
+    return "_" + safe if safe.strip(".") == "" else safe
+
+
 class RecordCache:
     """Values of column chunks, keyed by (file key, column, chunk_row,
     chunk_col) with file key = (bitstream id, file identity hash).
 
     An in-memory LRU bounded by `max_bytes`, backed optionally by files
     under `cache_dir`/<bitstream id>/<file identity hash>/. Readers can
-    share one cache."""
+    share one cache. `disk=False` on a call keeps that key in memory only.
+    The cache does not check values; a reader checks what it gets back
+    and treats a value of the wrong length as a miss."""
 
     def __init__(self, max_bytes=CACHE_BYTES, cache_dir=None):
         self.max_bytes = int(max_bytes)
@@ -607,21 +646,22 @@ class RecordCache:
 
     def _path(self, key):
         (bid, fkey), col, r, c = key
-        safe = re.sub(r"[^\w.-]", "_", str(bid)) or "_"
-        return os.path.join(self.dir, safe, fkey, f"{col}-{r}-{c}.bin")
+        return os.path.join(self.dir, _path_part(bid), _path_part(fkey),
+                            _path_part(f"{col}-{int(r)}-{int(c)}.bin"))
 
-    def has(self, key) -> bool:
+    def has(self, key, disk=True) -> bool:
         with self._lock:
             if key in self._d:
                 return True
-        return self.dir is not None and os.path.exists(self._path(key))
+        return (disk and self.dir is not None
+                and os.path.exists(self._path(key)))
 
-    def get(self, key):
+    def get(self, key, disk=True):
         with self._lock:
             if key in self._d:
                 self._d.move_to_end(key)
                 return self._d[key]
-        if self.dir is None:
+        if self.dir is None or not disk:
             return None
         try:
             with open(self._path(key), "rb") as f:
@@ -631,9 +671,9 @@ class RecordCache:
         self._remember(key, v)
         return v
 
-    def put(self, key, value: bytes) -> None:
+    def put(self, key, value: bytes, disk=True) -> None:
         self._remember(key, value)
-        if self.dir is not None:
+        if self.dir is not None and disk:
             p = self._path(key)
             os.makedirs(os.path.dirname(p), exist_ok=True)
             tmp = f"{p}.{os.getpid()}.{threading.get_ident()}.tmp"
@@ -712,6 +752,19 @@ class _Sparse(io.RawIOBase):
         return len(d)
 
 
+class _Truncated(ConnectionError):
+    """A response body shorter than its Content-Range; retried."""
+
+
+def _transient(e) -> bool:
+    """Whether a failed request is worth repeating: 5xx, 429, a timeout
+    or a broken connection. Other 4xx answers are final."""
+    if isinstance(e, urllib.error.HTTPError):
+        return e.code >= 500 or e.code == 429
+    return isinstance(e, (urllib.error.URLError, ConnectionError, TimeoutError,
+                          http.client.HTTPException))
+
+
 class RVQParquetReader:
     """Reads a georvq GeoParquet file from a local path or an http(s)
     URL (HTTP Range requests).
@@ -723,30 +776,59 @@ class RVQParquetReader:
     `concurrency` at a time over HTTP and in turn from a local file.
     `cache` defaults to a RecordCache of `cache_bytes`, on disk under
     `cache_dir` when one is given. `stats` counts requests, bytes,
-    values served from the cache and their bytes. `trace`, a Trace,
-    records each byte request and the parsing work when given."""
+    retried requests, values served from the cache and their bytes.
+    `trace`, a Trace, records each byte request and the parsing work
+    when given.
+
+    Over HTTP each request times out after `timeout` seconds (None for
+    no limit). A request that fails with a 5xx or 429 answer, a timeout
+    or a broken connection is repeated up to `retries` times, waiting
+    `backoff` seconds and doubling the wait each time; any other 4xx
+    answer fails at once. The server must honour Range: a response whose
+    Content-Range differs from the request is refused. A server that
+    sends neither ETag nor Last-Modified gives no way to tell a changed
+    file from the one cached, so its values are cached in memory only.
+
+    One reader can be shared by threads."""
 
     def __init__(self, path_or_url, first_read=FIRST_READ, gap=GAP,
                  concurrency=CONCURRENCY, cache=None, cache_bytes=CACHE_BYTES,
-                 cache_dir=None, trace=None):
+                 cache_dir=None, trace=None, timeout=TIMEOUT, retries=RETRIES,
+                 backoff=BACKOFF):
         self.source = os.fspath(path_or_url)
         self.trace = trace
         self.gap = int(gap)
         self.concurrency = max(1, int(concurrency))
+        self.timeout = None if timeout is None else float(timeout)
+        self.retries = max(0, int(retries))
+        self.backoff = float(backoff)
         self._url = self.source.startswith(("http://", "https://"))
-        self._fd = None if self._url else os.open(self.source, os.O_RDONLY)
         self._lock = threading.Lock()
-        self.stats = {"requests": 0, "bytes": 0, "cache_hits": 0,
-                      "cache_bytes": 0}
+        self._parse_lock = threading.Lock()
+        self.stats = {"requests": 0, "bytes": 0, "retries": 0,
+                      "cache_hits": 0, "cache_bytes": 0}
         self.version_tag = None
-        tail, size = self._suffix(int(first_read))
+        self.size = None
+        self._fd = None if self._url else os.open(self.source, os.O_RDONLY)
+        try:
+            self._open(int(first_read), cache, cache_bytes, cache_dir)
+        except BaseException:
+            self.close()
+            raise
+
+    def _open(self, first_read, cache, cache_bytes, cache_dir):
+        trace = self.trace
+        tail, size = self._suffix(first_read)
+        self.size = size
         if len(tail) < 12 or tail[-4:] != b"PAR1":
             raise ValueError(f"{self.source}: not a Parquet file")
         need = struct.unpack("<I", tail[-8:-4])[0] + 8
+        if need > size:
+            raise ValueError(f"{self.source}: footer of {need} bytes in a "
+                             f"file of {size}")
         if need > len(tail):
             more = self._read((size - need, need - len(tail)))
             tail = more + tail
-        self.size = size
         self._buf = _Sparse(size, size - len(tail), tail)
         # The footer is parsed from the fetched bytes alone: pyarrow's own
         # open reads a fixed-size suffix that may extend past them.
@@ -794,15 +876,21 @@ class RVQParquetReader:
             self.identity, default=str).encode()).hexdigest()[:20])
         self.cache = cache if cache is not None else RecordCache(cache_bytes,
                                                                  cache_dir)
+        self._disk = not (self._url and self.version_tag is None)
+        if not self._disk and self.cache.dir is not None:
+            warnings.warn(f"{self.source}: the server sends no ETag or "
+                          f"Last-Modified, so values are cached in memory "
+                          f"only, not under {self.cache.dir}", stacklevel=3)
 
     # ---- io ----
 
     @property
     def identity(self) -> list:
         """What distinguishes this file's bytes from another version: the
-        URL with its ETag or Last-Modified, or the path, size and mtime."""
+        URL with its ETag or Last-Modified and its size, or the path, size
+        and mtime."""
         if self._url:
-            return [self.source, self.version_tag]
+            return [self.source, self.version_tag, self.size]
         st = os.fstat(self._fd)
         return [os.path.realpath(self.source), st.st_size, st.st_mtime_ns]
 
@@ -815,22 +903,69 @@ class RVQParquetReader:
     def _tag(resp):
         return resp.headers.get("ETag") or resp.headers.get("Last-Modified")
 
+    def _content_range(self, resp) -> tuple:
+        """(first, last, size) from a 206 response's Content-Range."""
+        cr = resp.headers.get("Content-Range") or ""
+        m = _CONTENT_RANGE.match(cr.strip())
+        if m is None:
+            raise OSError(f"{self.source}: Content-Range {cr!r} is not "
+                          f"'bytes first-last/size'")
+        return int(m.group(1)), int(m.group(2)), int(m.group(3))
+
+    def _http(self, rng, handle):
+        """GET with `Range: rng`, passing the response to `handle`, with
+        the timeout and the retries of transient failures."""
+        req = urllib.request.Request(self.source, headers={"Range": rng})
+        for attempt in range(self.retries + 1):
+            try:
+                with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                    return handle(resp)
+            except Exception as e:
+                if attempt == self.retries or not _transient(e):
+                    raise
+                delay = self.backoff * 2 ** attempt
+                if isinstance(e, urllib.error.HTTPError):
+                    after = (e.headers.get("Retry-After") or "").strip()
+                    if after.isdigit():
+                        delay = max(delay, min(float(after), 30.0))
+                    e.close()
+                with self._lock:
+                    self.stats["retries"] += 1
+            time.sleep(delay)
+
     def _suffix(self, n):
         t0 = time.perf_counter()
         if self._url:
-            req = urllib.request.Request(self.source,
-                                         headers={"Range": f"bytes=-{n}"})
-            with urllib.request.urlopen(req) as resp:
-                data = resp.read()
-                self.version_tag = self._tag(resp)
+            def handle(resp):
+                tag = self._tag(resp)
                 if resp.status == 206:
-                    size = int(resp.headers["Content-Range"].rsplit("/", 1)[1])
-                elif resp.status == 200:
-                    size = len(data)
-                    data = data[-n:]
-                else:
-                    raise OSError(f"{self.source}: suffix request answered "
-                                  f"{resp.status}")
+                    a, b, size = self._content_range(resp)
+                    if b != size - 1 or b - a + 1 != min(n, size):
+                        raise OSError(
+                            f"{self.source}: a request for the last {n} bytes "
+                            f"was answered with bytes {a}-{b}/{size}")
+                    data = resp.read()
+                    if len(data) != b - a + 1:
+                        raise _Truncated(f"{self.source}: {len(data)} of "
+                                         f"{b - a + 1} bytes received")
+                    return data, size, tag
+                if resp.status == 200:
+                    # a whole body no longer than the suffix is the file;
+                    # a longer one means the server ignores Range
+                    length = resp.headers.get("Content-Length")
+                    if length is None or int(length) > n:
+                        raise OSError(
+                            f"{self.source}: the server ignored the Range "
+                            f"header (200 instead of 206); reading by URL "
+                            f"needs HTTP Range support")
+                    data = resp.read()
+                    if len(data) != int(length):
+                        raise _Truncated(f"{self.source}: {len(data)} of "
+                                         f"{length} bytes received")
+                    return data, len(data), tag
+                raise OSError(f"{self.source}: suffix request answered "
+                              f"{resp.status}")
+            data, size, self.version_tag = self._http(f"bytes=-{n}", handle)
         else:
             size = os.fstat(self._fd).st_size
             data = self._pread(max(0, size - n), min(n, size))
@@ -855,17 +990,32 @@ class RVQParquetReader:
             return b""
         t0 = time.perf_counter()
         if self._url:
-            req = urllib.request.Request(
-                self.source, headers={"Range": f"bytes={offset}-{offset + length - 1}"})
-            with urllib.request.urlopen(req) as resp:
+            last = offset + length - 1
+
+            def handle(resp):
                 if resp.status != 206:
+                    hint = (" (the server ignored the Range header)"
+                            if resp.status == 200 else "")
                     raise OSError(f"{self.source}: range request answered "
-                                  f"{resp.status}, expected 206")
+                                  f"{resp.status}, expected 206{hint}")
+                a, b, size = self._content_range(resp)
+                if (a, b) != (offset, last):
+                    raise OSError(f"{self.source}: bytes {offset}-{last} were "
+                                  f"requested and bytes {a}-{b} answered")
                 tag = self._tag(resp)
-                if self.version_tag is not None and tag != self.version_tag:
-                    raise OSError(f"{self.source}: changed since it was opened "
-                                  f"({self.version_tag} -> {tag})")
+                if size != self.size or (
+                        tag is not None and self.version_tag is not None
+                        and tag != self.version_tag):
+                    raise OSError(
+                        f"{self.source}: changed since it was opened "
+                        f"({self.version_tag}, {self.size} bytes -> {tag}, "
+                        f"{size} bytes)")
                 data = resp.read()
+                if len(data) != length:
+                    raise _Truncated(f"{self.source}: {len(data)} of {length} "
+                                     f"bytes received at {offset}")
+                return data
+            data = self._http(f"bytes={offset}-{last}", handle)
         else:
             data = self._pread(offset, length)
         if len(data) != length:
@@ -996,7 +1146,7 @@ class RVQParquetReader:
         needed column chunks not in the cache or the fetched tail."""
         cols = self.columns_for(depths, base, mask, quality)
         return self._ranges([n for n in self.needs(wy0, wy1, wx0, wx1, cols)
-                             if not self.cache.has(self._key(n))])
+                             if not self.cache.has(self._key(n), self._disk)])
 
     def _ranges(self, needs):
         ranges = []
@@ -1008,41 +1158,75 @@ class RVQParquetReader:
 
     # ---- values ----
 
+    def _value_error(self, need, v):
+        """Why `v` cannot be the value of `need`, or None when it can: a
+        code value holds chunk_windows**2 records, and a mask value
+        decodes to its chunk's pixels."""
+        col, i, j = need
+        if col == "mask":
+            p = self.layout.groups[self.layout.mask_kind].chunk_px
+            shape = (min(p, self.height - i * p), min(p, self.width - j * p))
+            try:
+                decode_mask(v, shape)
+            except (ValueError, zlib.error) as e:
+                return str(e)
+            return None
+        n = self.layout.groups[self.layout.kind_of[col]].chunk_windows
+        want = n * n * self.layout.columns[col].record_bytes
+        if len(v) != want:
+            return f"{len(v)} bytes, the layout needs {want}"
+        return None
+
     def values(self, needs) -> dict:
         """{(column, chunk_row, chunk_col): value bytes} for `needs`, from
-        the cache where held and otherwise in merged requests."""
-        out, missing = {}, []
+        the cache where held and otherwise in merged requests. A cached
+        value that does not fit the layout is fetched again."""
+        out, missing, hits, hit_bytes = {}, [], 0, 0
         for n in needs:
-            v = self.cache.get(self._key(n))
+            v = self.cache.get(self._key(n), self._disk)
+            if v is not None and self._value_error(n, v) is not None:
+                v = None
             if v is None:
                 missing.append(n)
             else:
                 out[n] = v
-                self.stats["cache_hits"] += 1
-                self.stats["cache_bytes"] += len(v)
+                hits += 1
+                hit_bytes += len(v)
+        with self._lock:
+            self.stats["cache_hits"] += hits
+            self.stats["cache_bytes"] += hit_bytes
         if not missing:
             return out
         with span(self.trace, "cpu", "plan ranges"):
             ranges = self._ranges(missing)
-        for r, data in zip(ranges, self._fetch(ranges)):
-            self._buf.add(r[0], data)
-        try:
-            by_rg = OrderedDict()
-            for n in missing:
-                rg = self.row_group(self.layout.kind_of[n[0]], n[1], n[2])
-                by_rg.setdefault(rg, []).append(n)
-            with span(self.trace, "cpu", "parse pages"):
-                for rg, ns in by_rg.items():
-                    tb = self._pf.read_row_group(
-                        rg, columns=[n[0] for n in ns], use_threads=False)
-                    for n in ns:
-                        v = tb.column(n[0])[0].as_py()
-                        if v is None:
-                            raise ValueError(f"{self.source}: {n} is null")
-                        out[n] = v
-                        self.cache.put(self._key(n), v)
-        finally:
-            self._buf.clear()
+        fetched = self._fetch(ranges)
+        by_rg = OrderedDict()
+        for n in missing:
+            rg = self.row_group(self.layout.kind_of[n[0]], n[1], n[2])
+            by_rg.setdefault(rg, []).append(n)
+        # The fetched pieces live in the shared _Sparse only while this
+        # call parses them, so threads take turns from add to clear.
+        with self._parse_lock:
+            for r, data in zip(ranges, fetched):
+                self._buf.add(r[0], data)
+            try:
+                with span(self.trace, "cpu", "parse pages"):
+                    for rg, ns in by_rg.items():
+                        tb = self._pf.read_row_group(
+                            rg, columns=[n[0] for n in ns], use_threads=False)
+                        for n in ns:
+                            v = tb.column(n[0])[0].as_py()
+                            if v is None:
+                                raise ValueError(f"{self.source}: {n} is null")
+                            if n[0] != "mask":
+                                err = self._value_error(n, v)
+                                if err is not None:
+                                    raise ValueError(f"{self.source}: {n} "
+                                                     f"holds {err}")
+                            out[n] = v
+                            self.cache.put(self._key(n), v, self._disk)
+            finally:
+                self._buf.clear()
         return out
 
     def read(self, wy0, wy1, wx0, wx1, depths=None, base=True, mask=True,
