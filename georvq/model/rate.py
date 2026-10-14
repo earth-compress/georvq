@@ -167,7 +167,7 @@ class PyramidRateModel(nn.Module):
             B = z.shape[0]
             residual, cum, tier_bits = z, torch.zeros_like(z), []
             for l, lev in enumerate(rvq.levels):
-                q, idx, _ = lev(residual)                # hard assign (eval: no EMA)
+                q, idx, _ = lev(residual, update=False)  # hard assign, no state change
                 level = torch.full((B,), l, device=z.device, dtype=torch.long)
                 logits = rm(cum, level, coarse)          # ctx = recon^{<l}
                 log_q = torch.log_softmax(logits, dim=-1)
