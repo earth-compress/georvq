@@ -27,8 +27,8 @@ from georvq.model.codec import (monotone_tuples, path_tuples,
                                 sample_monotone_depths,
                                 sample_path_depths, tuple_bits)
 from georvq.model.vqinit import residual_init_rvq
-from georvq.repro import (run_metadata, save_checkpoint, seed_all,
-                          write_resolved_config)
+from georvq.repro import (load_checkpoint, run_metadata, save_checkpoint,
+                          seed_all, write_resolved_config)
 from georvq.train.figures import (codebook_figure, cosdist_figure,
                                   error_hist_harvest, error_hist_render,
                                   rd_err_harvest, rd_err_render, rd_figure,
@@ -165,7 +165,7 @@ def load_resume(cfg: Config, model, device):
     dict, so the optimizer, scheduler and train state can be restored once
     they exist. Refuses a checkpoint that cannot continue the run."""
     path = cfg.train.resume
-    ck = torch.load(path, map_location=device, weights_only=False)
+    ck = load_checkpoint(path, map_location=device)
     missing = [k for k in ("opt", "sched", "train_state") if k not in ck]
     if missing:
         raise ValueError(
@@ -468,8 +468,7 @@ def _train(cfg: Config, gpu, stop):
         print(f"restored optimizer and scheduler state (lr "
               f"{sched.get_last_lr()[0]:.3g})", flush=True)
     elif cfg.train.init_from:
-        ck = torch.load(cfg.train.init_from, map_location=device,
-                        weights_only=False)
+        ck = load_checkpoint(cfg.train.init_from, map_location=device)
         if "opt" in ck:
             try:
                 # moments only -- the lr SCHEDULE stays what this run's

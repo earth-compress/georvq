@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import torch
 
+from georvq.repro import load_checkpoint
+
 ENCODER_PREFIXES = ("tokenizer.", "stem.")
 
 
@@ -29,7 +31,7 @@ def load_partial(model, path, device):
     are 0-dim and would shape-match any checkpoint, and a copied
     `initialized=True` would stop the lazy data init from firing, leaving
     the book at its random init."""
-    ck = torch.load(path, map_location=device, weights_only=False)
+    ck = load_checkpoint(path, map_location=device)
     sd = ck["model"]
     if "config" not in ck:                      # legacy checkpoint naming
         from georvq.compat import remap_state_dict
