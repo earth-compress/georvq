@@ -178,9 +178,14 @@ def _train(cfg: Config, gpu, stop):
     # the GPU computes batch N — hides ~100ms/step of serial stall
     from concurrent.futures import ThreadPoolExecutor
     _fetcher = ThreadPoolExecutor(1)
+    # The prefetch thread draws from its own generator: sharing the global
+    # one with the main thread's sigma and noise draws made the order of
+    # draws, and so the run, depend on thread timing.
+    fetch_gen = torch.Generator(device=pool.pool_device)
+    fetch_gen.manual_seed(cfg.train.seed)
 
     def _fetch():
-        return sampler.draw(batch, align=align)
+        return sampler.draw(batch, align=align, generator=fetch_gen)
     nxt = _fetcher.submit(_fetch)
     t0 = time.time()
     acc = {"loss": 0.0, qm.key: 0.0}; na = 0
