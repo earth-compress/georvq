@@ -343,7 +343,7 @@ code("""
 gh, gw = ds.height // ds.window_px, ds.width // ds.window_px
 n_r = len(ds.rungs)
 qc = ds.quality_codes(0, gh, 0, gw)                       # north-up window grid
-mask = ds.read_masks()
+mask = ds.dataset_mask() > 0
 mask_n = mask[::-1] if ds.transform.e > 0 else mask
 count = mask_n.reshape(gh, ds.window_px, gw, ds.window_px).sum((1, 3))
 tile_mean = (quality_value(qc[..., :n_r]) * count[..., None]).sum((0, 1)) / count.sum()
@@ -698,7 +698,7 @@ code("""
 cpath = data_url(COAST_TILE)
 cds = georvq.ae.open(cpath, codec=ds.codec)
 csrc = rasterio.open(source_url(COAST_TILE))
-cmask = cds.read_masks()                                     # source row order
+cmask = cds.dataset_mask() > 0                               # source row order
 frac = cmask.reshape(8, 1024, 8, 1024).mean((1, 3))
 ci, cj = np.unravel_index(np.abs(frac - 0.5).argmin(), frac.shape)
 CWIN = Window(cj * 1024, ci * 1024, 1024, 1024)

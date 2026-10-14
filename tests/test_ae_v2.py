@@ -170,7 +170,8 @@ def test_orientation_and_nodata_follow_the_source(setup):
             v2.open_dataset(setup["file"], codec=setup["codec"]) as ds:
         src = s.read()
         got = ds.read()
-        assert np.array_equal(ds.read_masks(), src[0] != v2.NODATA)
+        assert np.array_equal(ds.dataset_mask(), s.dataset_mask())
+        assert np.array_equal(ds.read_masks(), s.read_masks())
     inv = src[0] == v2.NODATA
     assert (got[:, inv] == v2.NODATA).all()
     assert (got[:, ~inv] != v2.NODATA).all()
@@ -307,6 +308,129 @@ def test_reconstruct_keeps_the_source_profile(setup):
         assert r.descriptions == s.descriptions
         assert r.tags()["AREA_OR_POINT"] == "Area"
         assert np.array_equal(r.read(), want)
+
+
+@pytest.fixture(scope="module")
+def recon(setup):
+    """The file decoded at 3-2-1 into a GeoTIFF: rasterio on it is the
+    reference for what the dataset's read methods return."""
+    out = setup["tmp"] / "recon321.tif"
+    with v2.open_dataset(setup["file"], codec=setup["codec"]) as ds:
+        v2.reconstruct(ds, out, quality="3-2-1", rows=64)
+    return out
+
+
+def test_geometry_matches_rasterio_on_the_source(setup):
+    with rasterio.open(setup["src"]) as s, v2.open_dataset(setup["file"]) as ds:
+        for k in ("bounds", "res", "shape", "indexes", "transform", "crs"):
+            assert getattr(ds, k) == getattr(s, k), k
+        assert ds.meta == s.meta
+        assert ds.driver == "GeoRVQParquet" and ds.overviews(1) == []
+        for rc in [(0, 0), (H - 1, 0), (17, WD - 1), (33.4, 101.7)]:
+            for off in ("center", "ul", "lr"):
+                assert ds.xy(*rc, offset=off) == s.xy(*rc, offset=off)
+            assert ds.index(*s.xy(*rc)) == s.index(*s.xy(*rc))
+        b = s.bounds
+        bb = (b.left + 31, b.bottom - 57, b.left + 402, b.bottom - 815)
+        assert ds.window(*bb) == s.window(*bb)
+        w = Window(13, 21, 40, 30)
+        assert ds.window_transform(w) == s.window_transform(w)
+        assert ds.window_bounds(w) == s.window_bounds(w)
+        assert not ds.closed
+    assert ds.closed
+
+
+def test_band_indexes_are_checked_as_rasterio_checks_them(setup, recon):
+    with rasterio.open(recon) as r, \
+            v2.open_dataset(setup["file"], codec=setup["codec"]) as ds:
+        for bad in (0, -1, 65, [1, 0], [3, 65]):
+            with pytest.raises(IndexError) as want:
+                r.read(bad, window=Window(0, 0, 2, 2))
+            with pytest.raises(IndexError) as got:
+                ds.read(bad, window=Window(0, 0, 2, 2), quality="3-2-1")
+            assert str(got.value) == str(want.value)
+            with pytest.raises(IndexError):
+                ds.read_masks(bad)
+        assert ds.read(3, window=Window(0, 0, 4, 5), quality="3-2-1").shape == (5, 4)
+        assert ds.read([3], window=Window(0, 0, 4, 5),
+                       quality="3-2-1").shape == (1, 5, 4)
+
+
+READ_CASES = [
+    {},
+    {"window": Window(19, 37, 50, 70)},
+    {"window": ((150, 200), (100, 168))},
+    {"window": Window(150, 180, 40, 40)},                   # cropped
+    {"window": Window(-7, -5, 30, 20)},                     # cropped
+    {"window": Window(-7, -5, 30, 20), "boundless": True},
+    {"window": Window(150, 180, 40, 40), "boundless": True, "fill_value": 7},
+    {"window": Window(300, 300, 10, 10), "boundless": True},
+    {"window": Window(10.4, 20.6, 33.5, 17.4)},
+    {"window": Window(3.5, 5.5, 8.5, 8.5), "boundless": True},
+    {"out_shape": (37, 29)},
+    {"out_shape": (H * 2 + 3, WD + 5)},
+    {"window": Window(-20, 150, 90, 80), "boundless": True, "out_shape": (13, 31)},
+    {"window": Window(-20, 150, 90, 80), "boundless": True, "out_shape": (170, 190)},
+    {"window": Window(-0.5, 190.5, 30.5, 20.5), "boundless": True},
+    {"window": Window(120.7, -3.2, 70.1, 50.3), "boundless": True,
+     "out_shape": (11, 23)},
+    {"window": Window(-50, -50, 300, 300), "boundless": True, "out_shape": (41, 37)},
+    {"window": Window(40, 0, 90, 60), "fill_value": 5},
+    {"window": Window(40, 0, 90, 60), "masked": True},
+    {"window": Window(40, 0, 90, 60), "masked": True, "fill_value": 5},
+    {"window": Window(-20, 150, 90, 80), "boundless": True, "masked": True},
+    {"window": Window(40, 0, 90, 60), "out_dtype": "uint8"},
+    {"window": Window(40, 0, 90, 60), "out_dtype": "float32", "masked": True},
+]
+
+
+@pytest.mark.parametrize("kw", READ_CASES)
+@pytest.mark.parametrize("indexes", [None, 5, [7, 2]])
+def test_read_matches_rasterio_on_the_decoded_tile(setup, recon, kw, indexes):
+    with rasterio.open(recon) as r, \
+            v2.open_dataset(setup["file"], codec=setup["codec"]) as ds:
+        want = r.read(indexes, **kw)
+        got = ds.read(indexes, quality="3-2-1", **kw)
+        assert got.shape == want.shape and got.dtype == want.dtype
+        assert np.array_equal(np.ma.getdata(got), np.ma.getdata(want))
+        assert isinstance(got, np.ma.MaskedArray) == isinstance(want, np.ma.MaskedArray)
+        if isinstance(want, np.ma.MaskedArray):
+            assert np.array_equal(np.ma.getmaskarray(got), np.ma.getmaskarray(want))
+            assert got.fill_value == want.fill_value
+        mkw = {k: v for k, v in kw.items() if k in ("window", "boundless",
+                                                    "out_shape")}
+        m_got, m_want = ds.read_masks(indexes, **mkw), r.read_masks(indexes, **mkw)
+        assert m_got.dtype == np.uint8 and np.array_equal(m_got, m_want)
+        assert np.array_equal(ds.dataset_mask(**mkw), r.dataset_mask(**mkw))
+
+
+def test_boundless_masked_read_with_a_fill_value_masks_nodata(setup, recon):
+    # rasterio masks only the outside here; the dataset also masks nodata
+    kw = {"window": Window(-20, 150, 90, 80), "boundless": True,
+          "masked": True, "fill_value": 7}
+    with rasterio.open(recon) as r, \
+            v2.open_dataset(setup["file"], codec=setup["codec"]) as ds:
+        got, want = ds.read(quality="3-2-1", **kw), r.read(**kw)
+        assert np.array_equal(got.data, want.data) and got.fill_value == 7
+        outside = ~np.ma.getmaskarray(r.read(window=kw["window"],
+                                             boundless=True, masked=True))
+        assert np.array_equal(~got.mask, outside)
+
+
+def test_read_out_and_resampling(setup, recon):
+    from rasterio.enums import Resampling
+    with rasterio.open(recon) as r, \
+            v2.open_dataset(setup["file"], codec=setup["codec"]) as ds:
+        out = np.zeros((2, 9, 11), np.int8)
+        got = ds.read([1, 2], out=out, window=Window(5, 5, 30, 20), quality="3-2-1")
+        assert got is out
+        assert np.array_equal(out, r.read([1, 2], window=Window(5, 5, 30, 20),
+                                          out_shape=(9, 11)))
+        with pytest.raises(NotImplementedError):
+            ds.read(1, out_shape=(10, 10), resampling=Resampling.bilinear)
+        a = ds.read(1, window=Window(5, 5, 8, 8), resampling=Resampling.bilinear,
+                    quality="3-2-1")
+        assert np.array_equal(a, r.read(1, window=Window(5, 5, 8, 8)))
 
 
 def test_ae_instance_layout_matches_the_spec():

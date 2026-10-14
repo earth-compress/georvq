@@ -48,12 +48,16 @@ import argparse
 import contextlib
 import functools
 import json
+import math
 import os
 import re
 import sys
 import time
+import warnings
 
 import numpy as np
+from rasterio.transform import TransformMethodsMixin
+from rasterio.windows import WindowMethodsMixin
 
 from georvq.ae.v2_resolve import (RELEASE_NAME, RELEASE_URI, BundleError,
                                   default_device, release_record,
@@ -73,6 +77,16 @@ QUALITY_STATS = ("mean", "p99")
 Q_SCALE, Q_OFFSET, Q_FLOOR = 32.0, 6.0, 1e-6
 
 _GDAL_ENV = {"GDAL_NUM_THREADS": "ALL_CPUS"}
+
+
+@contextlib.contextmanager
+def _quiet_build():
+    """Silence the UserWarning torch's TransformerEncoder gives for the
+    tokenizer's norm_first layers, on every model build."""
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message="enable_nested_tensor",
+                                category=UserWarning)
+        yield
 
 
 def _no_grad(fn):
@@ -613,6 +627,11 @@ def encode_tile(src_path, out_path, codec: AEV2Codec, stats=True,
     import rasterio
     from rasterio.windows import Window
     W = codec.window
+    path = os.fspath(src_path)
+    if source is None and os.path.isabs(path) and not path.startswith("/vsi"):
+        warnings.warn(f"the header's product.source records the local path "
+                      f"{path}; pass source= (--source) with the path or URL "
+                      "readers of the file should use", stacklevel=2)
     if strip_px % W:
         raise ValueError(f"strip_px {strip_px} is not a multiple of {W}")
     t0 = time.time()
@@ -674,14 +693,28 @@ def encode_tile(src_path, out_path, codec: AEV2Codec, stats=True,
 # reading
 # --------------------------------------------------------------------------
 
-class AEV2Dataset:
-    """Read-only, rasterio-like view of an AE v2 file.
+class AEV2Dataset(WindowMethodsMixin, TransformMethodsMixin):
+    """Read-only view of an AE v2 file that reads like the rasterio
+    DatasetReader of the SOURCE tile.
 
-    Georeferencing, shape and `read` follow the SOURCE tile, including a
-    bottom-up row order, so code written against the source dataset can
-    read this instead. `read` needs a codec; the metadata does not.
-    Without a codec, `resolver(header)` is called for one the first time
-    `codec` is used."""
+    Georeferencing, shape and the read methods follow the source tile,
+    including its bottom-up row order, so code written against the
+    source dataset can read this instead: `read`, `read_masks`,
+    `dataset_mask`, `bounds`, `res`, `index`, `xy`, `window` and the
+    other window helpers give the answers rasterio gives for the source
+    tile, with decoded pixels in place of the source's. `read` takes a
+    `quality` beyond rasterio's arguments. `driver` is "GeoRVQParquet";
+    `profile` and `meta` carry the source's driver, so either can be
+    passed to `rasterio.open(..., "w")` to write a GeoTIFF. The file has
+    no overviews, so a decimated read samples the full-resolution
+    decode, where rasterio would read the source's overviews.
+
+    `read` needs a codec; the metadata and masks do not. Without a
+    codec, `resolver(header)` is called for one the first time `codec`
+    is used."""
+
+    driver = "GeoRVQParquet"
+    mode = "r"
 
     def __init__(self, path_or_url, codec=None, resolver=None, **reader_kw):
         self.reader = RVQParquetReader(path_or_url, **reader_kw)
@@ -710,6 +743,7 @@ class AEV2Dataset:
         self.names = tier_names(len(self.full))
         self._meta = None
         self._crs = None
+        self._closed = False
 
     @property
     def codec(self):
@@ -772,8 +806,51 @@ class AEV2Dataset:
                 yield (i, j), Window(c, r, min(bw, self.width - c),
                                      min(bh, self.height - r))
 
+    @property
+    def shape(self):
+        return self.height, self.width
+
+    @property
+    def indexes(self):
+        return tuple(range(1, self.count + 1))
+
+    @property
+    def bounds(self):
+        """As rasterio's DatasetBase.bounds; for a bottom-up raster
+        `bottom` is above `top`, as rasterio reports it."""
+        from rasterio.coords import BoundingBox
+        a, b, c, d, e, f = tuple(self.transform)[:6]
+        if b == d == 0:
+            return BoundingBox(c, f + e * self.height, c + a * self.width, f)
+        xs, ys = zip(*(self.transform * p for p in
+                       ((0, 0), (0, self.height), (self.width, self.height),
+                        (self.width, 0))))
+        return BoundingBox(min(xs), min(ys), max(xs), max(ys))
+
+    @property
+    def res(self):
+        a, b, _, d, e, _ = tuple(self.transform)[:6]
+        return math.sqrt(a * a + d * d), math.sqrt(b * b + e * e)
+
+    @property
+    def meta(self):
+        return {"driver": self.profile.get("driver", "GTiff"),
+                "dtype": self.dtypes[0], "nodata": self.nodata,
+                "width": self.width, "height": self.height,
+                "count": self.count, "crs": self.crs,
+                "transform": self.transform}
+
+    def overviews(self, bidx=1):
+        """The file holds no overviews."""
+        return []
+
+    @property
+    def closed(self):
+        return self._closed
+
     def close(self):
         self.reader.close()
+        self._closed = True
 
     def __enter__(self):
         return self
@@ -784,15 +861,26 @@ class AEV2Dataset:
     # ---- quality ----
 
     def _depth_map(self, quality, wy0, wy1, wx0, wx1) -> np.ndarray:
-        """(rows, cols) rung index per window, or -1 for full depth when
-        the full tuple is not a rung."""
+        """(rows, cols) rung index per window. A rung or None (full depth)
+        that is not a rung of the file raises ValueError; a bound resolves
+        to the last rung, which is full depth, where no rung meets it."""
         shape = (wy1 - wy0, wx1 - wx0)
         if quality is None:
             t = self.full
         else:
             m = _BOUND.match(quality) if isinstance(quality, str) else None
             if m is None:
-                t = parse_rung(quality, self.full)
+                try:
+                    t = parse_rung(quality, self.full)
+                except (TypeError, ValueError) as err:
+                    if "does not fit" in str(err):
+                        raise
+                    raise ValueError(
+                        f"quality {quality!r}: expected a rung such as "
+                        "'8-8-2', '8,8,2' or (8, 8, 2), a bound such as "
+                        f"'p99<=0.02' on one of the stats "
+                        f"{list(self.header.get('quality', {}).get('stats', QUALITY_STATS))}"
+                        ", or None for full depth") from None
             else:
                 return self._resolve_bound(m.group(1), float(m.group(2)),
                                            wy0, wy1, wx0, wx1)
@@ -831,7 +919,8 @@ class AEV2Dataset:
     # ---- read ----
 
     def _north_px(self, window):
-        """Source-pixel window -> north-up pixel bounds (y0, y1, x0, x1)."""
+        """Source-pixel window -> north-up pixel bounds (y0, y1, x0, x1),
+        offsets and lengths rounded."""
         if window is None:
             r0, r1, c0, c1 = 0, self.height, 0, self.width
         elif hasattr(window, "row_off"):
@@ -846,18 +935,120 @@ class AEV2Dataset:
             r0, r1 = self.height - r1, self.height - r0
         return r0, r1, c0, c1
 
-    def read(self, indexes=None, window=None, quality=None, batch=256):
-        """int8 (bands, rows, cols), or (rows, cols) for an int `indexes`
-        (1-based, as rasterio). `quality`: a rung ("8-8-2" or a tuple),
-        a bound on a quality stat ("p99<=0.02", resolved per window to
-        the cheapest rung meeting it, full depth where none does), or
-        None for full depth."""
-        if self.codec is None:
-            raise ValueError("reading pixels needs a codec: open the file "
-                             "with open_dataset, which finds the file's "
-                             "bundle, or pass codec=")
+    def _check_open(self):
+        if self._closed:
+            from rasterio.errors import RasterioIOError
+            raise RasterioIOError(f"Dataset is closed: {self.name}")
+
+    def _bands(self, indexes):
+        """(1-based band list, whether the result is 2-D), validated as
+        rasterio validates them."""
+        if indexes is None:
+            return list(self.indexes), False
+        two_d = isinstance(indexes, (int, np.integer))
+        bands = [indexes] if two_d else list(indexes)
+        if not bands:
+            raise ValueError("No indexes to read")
+        for b in bands:
+            if b not in self.indexes:
+                raise IndexError(f"band index {b} out of range (not in "
+                                 f"{self.indexes})")
+        return [int(b) for b in bands], two_d
+
+    def _window(self, window, boundless):
+        """`window` as a rasterio Window, cropped to the raster unless
+        `boundless`, as rasterio's read does."""
+        from rasterio.windows import Window
+        if window is None:
+            return Window(0, 0, self.width, self.height)
+        if not isinstance(window, Window):
+            window = Window.from_slices(*window, height=self.height,
+                                        width=self.width, boundless=boundless)
+        if not boundless:
+            window = window.crop(self.height, self.width)
+        return window
+
+    @staticmethod
+    def _out_hw(window, n_bands, out, out_shape, resampling):
+        """Output (rows, cols): `out`'s, `out_shape`'s, or the window's
+        lengths rounded as rasterio rounds them."""
+        from rasterio.enums import Resampling
+        from rasterio.errors import DatasetIOShapeError
+        if out is not None and out_shape is not None:
+            raise ValueError("out and out_shape are exclusive")
+        shape = out.shape if out is not None else out_shape
+        if shape is None:
+            hw = (math.floor(window.height + 0.5), math.floor(window.width + 0.5))
+        else:
+            shape = tuple(int(v) for v in shape)
+            if len(shape) == 3 and shape[0] != n_bands:
+                raise DatasetIOShapeError("Dataset indexes and destination "
+                                          "buffer are mismatched")
+            hw = shape[-2:]
+        exact = (hw == (window.height, window.width)
+                 and float(window.row_off).is_integer()
+                 and float(window.col_off).is_integer())
+        if resampling not in (None, Resampling.nearest) and not exact:
+            raise NotImplementedError(
+                f"resampling {Resampling(resampling).name}: only nearest is "
+                "implemented")
+        return hw
+
+    def _gather(self, window, oh, ow, fetch, k, fill):
+        """(k, oh, ow) samples of `window` at nearest-neighbour positions,
+        as GDAL picks them, and the (oh, ow) mask of those inside the
+        raster. `fetch(y0, y1, x0, x1)` returns (k, y1 - y0, x1 - x0) for
+        a north-up pixel block; it is called on runs of window rows of at
+        most STRIP_PX rows that hold a sample. Samples outside the raster
+        are `fill`."""
+        def sample(off, length, n, size):
+            # An output pixel whose footprint overlaps the raster takes the
+            # nearest raster pixel, clamped at the edge, as GDAL's VRT
+            # does for a boundless read.
+            step, j = length / max(n, 1), np.arange(n)
+            at = np.floor(off + (j + 0.5) * step + 1e-10).astype(np.int64)
+            ins = (off + (j + 1) * step > 1e-10) & (off + j * step < size - 1e-10)
+            return np.clip(at, 0, size - 1), ins
+        ry, iy = sample(window.row_off, window.height, oh, self.height)
+        cx, ix = sample(window.col_off, window.width, ow, self.width)
+        inside = iy[:, None] & ix[None, :]
+        out = None
+        if iy.any() and ix.any():
+            W = self.window_px
+            ny = self.height - 1 - ry if self.bottom_up else ry
+            jo = np.nonzero(ix)[0]
+            c0, c1 = int(cx[jo].min()), int(cx[jo].max()) + 1
+            cols = cx[jo] - c0
+            dense = ((np.diff(cols) == 1).all() and (np.diff(jo) == 1).all()
+                     and (np.diff(np.nonzero(iy)[0]) == 1).all()
+                     and (np.abs(np.diff(ny[iy])) == 1).all())
+            need = np.unique(ny[iy] // W)
+            runs = np.split(need, np.nonzero(np.diff(need) > 1)[0] + 1)
+            step = max(1, STRIP_PX // W)
+            for run in runs:
+                for i in range(0, len(run), step):
+                    y0 = int(run[i]) * W
+                    y1 = min(self.height, (int(run[min(i + step, len(run)) - 1]) + 1) * W)
+                    blk = fetch(y0, y1, c0, c1)
+                    if out is None:
+                        out = np.full((k, oh, ow), fill, blk.dtype)
+                    io = np.nonzero(iy & (ny >= y0) & (ny < y1))[0]
+                    rows = ny[io] - y0
+                    if dense:
+                        # unresampled read: a run of the block's rows, in
+                        # order or reversed, copied without a gather
+                        seg = blk[:, rows.min():rows.max() + 1]
+                        if len(rows) > 1 and rows[1] < rows[0]:
+                            seg = seg[:, ::-1]
+                        out[:, io[0]:io[-1] + 1, jo[0]:jo[-1] + 1] = seg
+                    else:
+                        out[:, io[:, None], jo[None, :]] = (
+                            blk[:, rows][:, :, cols])
+        return out, inside
+
+    def _decode_north(self, ny0, ny1, nx0, nx1, quality, batch):
+        """int8 (count, rows, cols) of north-up pixels [ny0:ny1, nx0:nx1]."""
         W = self.window_px
-        ny0, ny1, nx0, nx1 = self._north_px(window)
         wy0, wy1 = ny0 // W, -(-ny1 // W)
         wx0, wx1 = nx0 // W, -(-nx1 // W)
         gh, gw = wy1 - wy0, wx1 - wx0
@@ -892,20 +1083,110 @@ class AEV2Dataset:
                         for d, yy, xx in zip(dec, y, x):
                             out[:, yy * W:(yy + 1) * W,
                                 xx * W:(xx + 1) * W] = d
-        out = out[:, ny0 - wy0 * W:ny1 - wy0 * W, nx0 - wx0 * W:nx1 - wx0 * W]
-        if self.bottom_up:
-            out = out[:, ::-1]
-        if indexes is None:
-            return np.ascontiguousarray(out)
-        if isinstance(indexes, (int, np.integer)):
-            return np.ascontiguousarray(out[int(indexes) - 1])
-        return np.ascontiguousarray(out[[int(i) - 1 for i in indexes]])
+        return out[:, ny0 - wy0 * W:ny1 - wy0 * W, nx0 - wx0 * W:nx1 - wx0 * W]
 
-    def read_masks(self, window=None) -> np.ndarray:
-        """Validity in the source's row order, (rows, cols) bool."""
-        ny0, ny1, nx0, nx1 = self._north_px(window)
-        m = self.reader.read_mask(ny0, ny1, nx0, nx1)
-        return m[::-1] if self.bottom_up else m
+    def read(self, indexes=None, out=None, window=None, masked=False,
+             out_shape=None, boundless=False, resampling=None,
+             fill_value=None, out_dtype=None, *, quality=None, batch=256):
+        """Decoded pixels, with rasterio's DatasetReader.read arguments
+        and results: (bands, rows, cols), or (rows, cols) for an int
+        `indexes` (1-based, validated against 1..count with IndexError).
+
+        A window that extends off the raster is cropped to it unless
+        `boundless`, where pixels outside the raster are `fill_value`
+        (default nodata). Without `boundless`, a `fill_value` replaces
+        nodata pixels, as in rasterio. Fractional windows and `out_shape`
+        / `out` sample at nearest-neighbour positions as GDAL does; other
+        `resampling` methods raise NotImplementedError. `masked` returns
+        a numpy masked array masking nodata pixels and pixels outside the
+        raster (where rasterio, for a boundless read with a fill_value,
+        masks only the outside). `out_dtype` converts as GDAL does,
+        clamping integers to the type's range.
+
+        `quality`: a rung ("8-8-2" or a tuple), a bound on a quality stat
+        ("p99<=0.02", resolved per window to the cheapest rung meeting
+        it, full depth where none does), or None for full depth."""
+        self._check_open()
+        bands, two_d = self._bands(indexes)
+        if self.codec is None:
+            raise ValueError("reading pixels needs a codec: open the file "
+                             "with open_dataset, which finds the file's "
+                             "bundle, or pass codec=")
+        win = self._window(window, boundless)
+        oh, ow = self._out_hw(win, len(bands), out, out_shape, resampling)
+        sel = [b - 1 for b in bands]
+        all_bands = sel == list(range(self.count))
+
+        def fetch(y0, y1, x0, x1):
+            a = self._decode_north(y0, y1, x0, x1, quality, batch)
+            return a if all_bands else a[sel]
+
+        vals, inside = self._gather(win, oh, ow, fetch, len(bands), NODATA)
+        if vals is None:
+            vals = np.full((len(bands), oh, ow), NODATA, np.int8)
+        nod = vals == NODATA
+        dtype = np.dtype(out.dtype if out is not None else out_dtype or np.int8)
+        if dtype.kind in "iu" and dtype != vals.dtype:
+            info = np.iinfo(dtype)
+            res = np.clip(vals, max(info.min, -128), min(info.max, 127)).astype(dtype)
+        else:
+            res = vals.astype(dtype, copy=False)
+        if fill_value is not None:
+            if boundless:
+                res[:, ~inside] = fill_value
+            elif not masked:
+                res[nod] = fill_value
+        if masked:
+            res = np.ma.array(res, mask=nod, fill_value=(
+                fill_value if fill_value is not None else self.nodata))
+        if two_d:
+            res = res[0]
+        if out is not None:
+            out[...] = np.ma.getdata(res).reshape(out.shape)
+            return (np.ma.array(out, mask=np.ma.getmaskarray(res).reshape(
+                out.shape), fill_value=res.fill_value) if masked else out)
+        return res if masked else np.ascontiguousarray(res)
+
+    def read_masks(self, indexes=None, out=None, out_shape=None, window=None,
+                   boundless=False, resampling=None):
+        """uint8 masks, 255 valid and 0 nodata or outside the raster, as
+        rasterio's read_masks: (bands, rows, cols), or (rows, cols) for an
+        int `indexes`. Every band shares the file's pixel validity. Needs
+        no codec."""
+        self._check_open()
+        bands, two_d = self._bands(indexes)
+        win = self._window(window, boundless)
+        oh, ow = self._out_hw(win, len(bands), out, out_shape, resampling)
+        m = self._mask(win, oh, ow)
+        res = np.broadcast_to(m, (len(bands), oh, ow))
+        if two_d:
+            res = res[0]
+        if out is not None:
+            out[...] = res.reshape(out.shape)
+            return out
+        return np.ascontiguousarray(res)
+
+    def dataset_mask(self, out=None, out_shape=None, window=None,
+                     boundless=False, resampling=None):
+        """uint8 (rows, cols), 255 where any band is valid, as rasterio's
+        dataset_mask. Needs no codec."""
+        self._check_open()
+        win = self._window(window, boundless)
+        oh, ow = self._out_hw(win, 1, out, out_shape, resampling)
+        res = self._mask(win, oh, ow)
+        if out is not None:
+            out[...] = res
+            return out
+        return res
+
+    def _mask(self, win, oh, ow):
+        """uint8 (oh, ow) validity samples of `win`, 255 valid."""
+        def fetch(y0, y1, x0, x1):
+            return self.reader.read_mask(y0, y1, x0, x1)[None]
+        m, _ = self._gather(win, oh, ow, fetch, 1, False)
+        if m is None:
+            return np.zeros((oh, ow), np.uint8)
+        return m[0].astype(np.uint8) * np.uint8(255)
 
 
 def open_dataset(path_or_url, model=None, channel=None, bundle=None,
@@ -943,8 +1224,9 @@ def open_dataset(path_or_url, model=None, channel=None, bundle=None,
             raise ValueError("model= and channel= load the torch backend")
         if model is None or channel is None:
             raise ValueError("a model needs its mean channel")
-        codec = load_codec(model, channel, device=device or
-                           default_device("torch"), bf16=bf16)
+        with _quiet_build():
+            codec = load_codec(model, channel, device=device or
+                               default_device("torch"), bf16=bf16)
         explicit = True
     elif codec is None and bundle is None and onnx_dir is not None:
         if backend not in (None, "onnx"):
@@ -954,9 +1236,11 @@ def open_dataset(path_or_url, model=None, channel=None, bundle=None,
         explicit = True
 
     def resolver(header):
-        return resolve_codec(header, bundle=bundle, backend=backend,
-                             device=device, bf16=bf16, threads=threads,
-                             cache_dir=cache_dir, trust_remote=trust_remote)
+        with _quiet_build():
+            return resolve_codec(header, bundle=bundle, backend=backend,
+                                 device=device, bf16=bf16, threads=threads,
+                                 cache_dir=cache_dir,
+                                 trust_remote=trust_remote)
 
     ds = AEV2Dataset(path_or_url, codec, None if explicit else resolver,
                      **reader_kw)
@@ -1025,6 +1309,8 @@ def _fetch_header(target, uri, revision) -> dict:
     if os.path.exists(target) or target.startswith(("http://", "https://")):
         with RVQParquetReader(target) as rd:
             return rd.header
+    if target.endswith(".parquet") or os.sep in target:
+        raise FileNotFoundError(f"{target}: no such file")
     return {"codec": {"bitstream_id": target,
                       "release": {"uri": uri, "revision": revision}}}
 
@@ -1144,22 +1430,27 @@ def main(argv=None):
         return 0
 
     if args.cmd == "fetch":
-        header = _fetch_header(args.target, args.uri, args.revision)
         try:
+            header = _fetch_header(args.target, args.uri, args.revision)
             print(locate_bundle(header, args.cache_dir, args.trust_remote))
-        except BundleError as err:
+        except (BundleError, FileNotFoundError) as err:
             print(err, file=sys.stderr)
             return 1
         return 0
 
     t0 = time.time()
     if args.cmd in ("decode", "reconstruct"):
-        with open_dataset(args.src, model=args.model, channel=args.channel,
-                          bundle=args.bundle, onnx_dir=args.onnx_dir,
-                          device=args.device, backend=args.backend,
-                          bf16=not args.fp32, threads=args.threads,
-                          cache_dir=args.cache_dir,
-                          trust_remote=args.trust_remote) as ds:
+        try:
+            ds = open_dataset(args.src, model=args.model, channel=args.channel,
+                              bundle=args.bundle, onnx_dir=args.onnx_dir,
+                              device=args.device, backend=args.backend,
+                              bf16=not args.fp32, threads=args.threads,
+                              cache_dir=args.cache_dir,
+                              trust_remote=args.trust_remote)
+        except BundleError as err:
+            print(err, file=sys.stderr)
+            return 1
+        with ds:
             try:
                 ds.codec
             except BundleError as err:
@@ -1183,10 +1474,16 @@ def main(argv=None):
     bf16 = False if export else not args.fp32
     if args.bundle is not None:
         from georvq.ae.v2_bundle import load_bundle
-        codec = load_bundle(args.bundle, device=device, bf16=bf16)
+        try:
+            with _quiet_build():
+                codec = load_bundle(args.bundle, device=device, bf16=bf16)
+        except BundleError as err:
+            print(err, file=sys.stderr)
+            return 1
     elif args.model is not None and args.channel is not None:
-        codec = AEV2Codec.load(args.model, args.channel, device=device,
-                               bf16=bf16)
+        with _quiet_build():
+            codec = AEV2Codec.load(args.model, args.channel, device=device,
+                                   bf16=bf16)
     else:
         ap.error("--model and --channel, or --bundle, are needed")
     if export:
