@@ -214,6 +214,8 @@ recon = R.decode(R.encode(x, valid=v), depths=[20, 20, 5], valid=v)
   new dataset.
 - `docs/SOURCE_ONBOARDING.md` describes the measurements of a new source
   that inform its architecture.
+- `docs/GEORVQ_PARQUET.md` specifies the GeoParquet file the AE codec
+  writes, for anyone reading the files without the georvq reader.
 - `docs/BITSTREAM.md` defines what a bitstream depends on, and why
   decoders can be upgraded without re-encoding.
 - `docs/DESIGN.md` explains how the method works and why it is built

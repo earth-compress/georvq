@@ -79,7 +79,7 @@ artifact is always what was validated and the smaller build has to be
 requested explicitly.
 
 The weights are stored in fp16 but computed in fp32, and decode quality
-is unaffected. Rounding all 116M parameters to fp16 moved full-depth
+is unaffected. Rounding all 123M parameters to fp16 moved full-depth
 cosine by -8.8e-07 and centred cosine by -8.0e-07 over 1,024 held-out
 windows, about 260x smaller than the difference between two consecutive
 release checkpoints. `load_state_dict` copies fp16 tensors into the fp32
@@ -227,8 +227,8 @@ measurably decaying at level 20. The tier to refine therefore has to be
 measured for each model.
 
 That asymmetry is also why the default differs. A refinement costs
-`cells x dim x bits`, so on a 1/4/16 pyramid the same idea is +1.5% of
-rate on the coarse tier and +150% on the fine one. The first AE
+`cells x dim x bits`, so on a 1/4/16 pyramid a 1-bit refinement adds about 1.2%
+of rate on the coarse tier and about 150% on the fine one. The first AE
 release left its coarse refinement on always (the current AE release
 has none), whereas here it is off unless asked for, and it is a
 maximum-fidelity option rather than a default, because it more than
