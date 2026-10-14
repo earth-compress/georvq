@@ -182,7 +182,8 @@ def build_bundle(ckpt, mean_npz, out_dir, notes="", onnx=False) -> dict:
     """Bundle a training checkpoint and its mean channel tables; `onnx`
     as for write_bundle."""
     from georvq.factory import from_checkpoint
-    ck = torch.load(ckpt, map_location="cpu", weights_only=False)
+    from georvq.repro import load_checkpoint
+    ck = load_checkpoint(ckpt)
     if ck.get("prep"):
         raise NotImplementedError("checkpoints with fitted prep constants "
                                   "are not bundled")

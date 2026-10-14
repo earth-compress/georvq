@@ -48,7 +48,8 @@ class Packet:
 
 def load_codec(ckpt_path, device="cpu"):
     """Model from a checkpoint (either format), wrapped in a Codec."""
-    ck = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+    from georvq.repro import load_checkpoint
+    ck = load_checkpoint(ckpt_path)
     if "config" in ck:
         from georvq.factory import from_checkpoint
         model = from_checkpoint(ckpt_path, device)
