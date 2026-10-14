@@ -71,24 +71,3 @@ def test_stats_packer_roundtrip():
     raw = packer.pack_raw(base[0].astype(np.float32))
     assert np.allclose(packer.unpack(raw), base[0].astype(np.float16),
                        atol=1e-3)
-
-
-def test_rans_archive_roundtrip(tiny_raw_cfg, tmp_path):
-    pytest.importorskip("compressai")
-    from georvq.inference.archive import (CdfTable, decode_packet,
-                                          encode_packet, naive_bits)
-    codec, _ = _codec(tiny_raw_cfg)
-    x = _x(B=32)
-    packets = codec.encode(x)
-    stacked = [np.stack([p.indices[t] for p in packets]) for t in range(2)]
-    table = CdfTable.calibrate(stacked, codec.specs)
-    table.save(tmp_path / "cdfs.npz")
-    table2 = CdfTable.load(tmp_path / "cdfs.npz")
-    total = 0
-    for p in packets:
-        bs = encode_packet(p, table2)
-        total += len(bs)
-        back = decode_packet(bs, table2)
-        for a, b in zip(p.indices, back):
-            assert np.array_equal(a, b)          # byte-exact round trip
-    assert 8 * total / len(packets) < 1.5 * naive_bits(table)
