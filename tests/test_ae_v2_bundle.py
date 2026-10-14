@@ -1,8 +1,10 @@
 """AE v2 release bundle: int8 codebook storage, the bundle round trip on
 a tiny synthetic model, and a golden decode gate on the released bundle.
 
-The golden gate needs the bundle (GEORVQ_AE_V2_BUNDLE) and skips when it
-is absent. Its inputs are the eight AE validation windows of
+The golden gate needs the released bundle and skips when it is absent.
+It looks in GEORVQ_AE_V2_BUNDLE, GEORVQ_AE_BUNDLE, then the bundle
+cache entry for the golden bitstream id (`georvq.ae.v2_resolve.
+bundle_path`, ~/.cache/georvq/bundles/<bitstream_id> by default). Its inputs are the eight AE validation windows of
 golden/divfull_val_tokens.npz. golden/ae_v2_golden.npz holds the codes
 the bundle's encoder produced for them on CPU, and sha256 hashes of the
 float32 field and the int8 tile decoded from those codes at three rungs.
@@ -36,16 +38,36 @@ from georvq.model.vq_quant import QuantizedBookVQ
 from georvq.repro import save_checkpoint
 
 HERE = os.path.dirname(__file__)
-BUNDLE = os.environ.get("GEORVQ_AE_V2_BUNDLE",
-                        "/home/ali/projects/georvq/scratch/ae-v2/bundle_v2")
+INPUTS = os.path.join(HERE, "golden/divfull_val_tokens.npz")
+GOLDEN = os.path.join(HERE, "golden/ae_v2_golden.npz")
+# maintainer's copy, tried after GEORVQ_AE_V2_BUNDLE, GEORVQ_AE_BUNDLE
+# and the bundle cache entry for the golden bitstream id
+LOCAL_BUNDLE = "/home/ali/projects/georvq/scratch/ae-v2/bundle_v2"
+
+
+def _find_bundle():
+    """GEORVQ_AE_V2_BUNDLE as given; the other places only when their
+    bundle.json names the golden bitstream id."""
+    from georvq.ae.v2_resolve import ENV_BUNDLE, bundle_path
+    if os.environ.get("GEORVQ_AE_V2_BUNDLE"):
+        return os.environ["GEORVQ_AE_V2_BUNDLE"]
+    with np.load(GOLDEN) as g:
+        bid = str(g["bitstream_id"])
+    for d in (os.environ.get(ENV_BUNDLE), bundle_path(bid), LOCAL_BUNDLE):
+        meta = os.path.join(d or "", "bundle.json")
+        if d and os.path.exists(meta) and \
+                json.load(open(meta)).get("bitstream_id") == bid:
+            return d
+    return None
+
+
+BUNDLE = _find_bundle()
 CKPT = os.environ.get(
     "GEORVQ_AE_V2_CKPT",
     "/home/ali/projects/georvq/scratch/ae-v2/ownk_sc4_step80000.pt")
 MEAN_NPZ = os.environ.get(
     "GEORVQ_AE_V2_MEAN",
     "/home/ali/projects/georvq/scratch/ae-v2/meanrvq/mean_channel_v2.npz")
-INPUTS = os.path.join(HERE, "golden/divfull_val_tokens.npz")
-GOLDEN = os.path.join(HERE, "golden/ae_v2_golden.npz")
 TILE = os.path.join(HERE, "golden/ae_v2_tile.georvq.parquet")
 GOLDEN_RUNGS = ((2, 0, 0), (8, 8, 2), (8, 8, 8))
 TILE_GRID = (2, 4)           # the eight windows as a 2 x 4 window tile
@@ -185,6 +207,21 @@ def test_tampered_bundle_is_refused(tiny, tmp_path):
 # golden decode of the released bundle
 # --------------------------------------------------------------------------
 
+def test_golden_bundle_is_found_in_the_cache(tmp_path, monkeypatch):
+    with np.load(GOLDEN) as g:
+        bid = str(g["bitstream_id"])
+    monkeypatch.delenv("GEORVQ_AE_V2_BUNDLE", raising=False)
+    monkeypatch.setenv("GEORVQ_CACHE", str(tmp_path))
+    other = tmp_path / "other"
+    other.mkdir()
+    json.dump({"bitstream_id": "0" * 16}, open(other / "bundle.json", "w"))
+    monkeypatch.setenv("GEORVQ_AE_BUNDLE", str(other))
+    entry = tmp_path / "bundles" / bid
+    entry.mkdir(parents=True)
+    json.dump({"bitstream_id": bid}, open(entry / "bundle.json", "w"))
+    assert _find_bundle() == str(entry)
+
+
 def _windows():
     return np.load(INPUTS)["tokens"]
 
@@ -206,8 +243,10 @@ def _cos(field, x, valid):
 
 
 def _bundle_codec():
-    if not os.path.exists(os.path.join(BUNDLE, "bundle.json")):
-        pytest.skip("AE v2 bundle not present (set GEORVQ_AE_V2_BUNDLE)")
+    if BUNDLE is None or not os.path.exists(os.path.join(BUNDLE,
+                                                         "bundle.json")):
+        pytest.skip("AE v2 bundle not present (set GEORVQ_AE_V2_BUNDLE or "
+                    "GEORVQ_AE_BUNDLE, or place it in the bundle cache)")
     return load_bundle(BUNDLE, "cpu")
 
 

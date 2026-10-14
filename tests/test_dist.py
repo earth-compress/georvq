@@ -7,6 +7,7 @@ ranks that draw identical data (which makes the second GPU pure waste
 while every metric still looks plausible).
 """
 import os
+import socket
 
 import pytest
 import torch
@@ -16,23 +17,39 @@ import torch.multiprocessing as mp
 from georvq.train import dist as D
 
 
+def _free_port():
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
 def _run(fn, world=2):
     ctx = mp.get_context("spawn")
     q = ctx.Queue()
-    procs = [ctx.Process(target=_entry, args=(fn, r, world, q))
+    port = _free_port()
+    procs = [ctx.Process(target=_entry, args=(fn, r, world, q, port))
              for r in range(world)]
-    for p in procs:
-        p.start()
-    out = [q.get(timeout=120) for _ in range(world)]
-    for p in procs:
-        p.join(timeout=120)
+    try:
+        for p in procs:
+            p.start()
+        out = [q.get(timeout=120) for _ in range(world)]
+        for p in procs:
+            p.join(timeout=120)
+    finally:
+        for p in procs:
+            if p.is_alive():
+                p.terminate()
+                p.join(timeout=10)
+            if p.is_alive():
+                p.kill()
+                p.join()
     for r, res in out:
         assert res != "ERROR", f"rank {r} failed"
     return dict(out)
 
 
-def _entry(fn, rank, world, q):
-    os.environ.update(MASTER_ADDR="127.0.0.1", MASTER_PORT="29517",
+def _entry(fn, rank, world, q, port):
+    os.environ.update(MASTER_ADDR="127.0.0.1", MASTER_PORT=str(port),
                       RANK=str(rank), WORLD_SIZE=str(world),
                       LOCAL_RANK=str(rank))
     try:
