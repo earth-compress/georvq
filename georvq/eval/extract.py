@@ -18,13 +18,6 @@ de-duplicated -- many targets share one crop.
 from __future__ import annotations
 
 import os
-
-os.environ.setdefault("AWS_NO_SIGN_REQUEST", "YES")
-os.environ.setdefault("GDAL_DISABLE_READDIR_ON_OPEN", "EMPTY_DIR")
-os.environ.setdefault("GDAL_NUM_THREADS", "16")
-os.environ.setdefault("GDAL_HTTP_MAX_RETRY", "4")
-os.environ.setdefault("GDAL_HTTP_RETRY_DELAY", "2")
-
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -40,6 +33,20 @@ BLOCK = 1024
 BLOCKS = TILE // BLOCK
 PX_M = 10.0
 FULL_M = TILE * PX_M
+
+# Unsigned public-bucket reads of the AEF COGs. Applied by the S3 readers
+# rather than at import, and only where the caller has not set a value.
+_S3_ENV = {"AWS_NO_SIGN_REQUEST": "YES",
+           "GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR",
+           "GDAL_NUM_THREADS": "16",
+           "GDAL_HTTP_MAX_RETRY": "4",
+           "GDAL_HTTP_RETRY_DELAY": "2"}
+
+
+def _s3_env():
+    for k, v in _S3_ENV.items():
+        os.environ.setdefault(k, v)
+
 
 TILE_COLS = ["fid", "path", "year", "utm_zone", "crs",
              "utm_west", "utm_south", "utm_east", "utm_north",
@@ -57,15 +64,18 @@ def l2norm_np(x: np.ndarray, axis=-1, eps=1e-12) -> np.ndarray:
     return x / np.maximum(n, eps)
 
 
-def training_tile_paths(chips_index="/data/AE-samples/chips_1024/index.parquet",
-                        tiles_selection="/data/AE-samples/tiles_full/selection.csv"):
-    """Every AEF source tile the compressor could have trained or eyeballed on."""
-    paths = set()
-    if os.path.exists(chips_index):
-        paths |= set(pd.read_parquet(chips_index, columns=["path"]).path)
-    if os.path.exists(tiles_selection):
-        paths |= set(pd.read_csv(tiles_selection).path)
-    return paths
+def training_tile_paths(chips_index, tiles_selection):
+    """Every AEF source tile the compressor could have trained or eyeballed on:
+    the `path`s in the training store's chip index and in the full-tile
+    selection. Both files must exist, because an empty exclusion set would
+    let training tiles into the eval set."""
+    for p in (chips_index, tiles_selection):
+        if not os.path.exists(p):
+            raise FileNotFoundError(
+                f"exclusion file {p} not found; the held-out eval set cannot "
+                f"be built without the training tiles to exclude")
+    return (set(pd.read_parquet(chips_index, columns=["path"]).path)
+            | set(pd.read_csv(tiles_selection).path))
 
 
 def held_out_tile_pool(index_path, exclude_paths, coverage_bbox=None,
@@ -91,6 +101,7 @@ def fetch_block(row, rng, max_nodata=0.0, tries=4):
     """Read one north-up 1024^2 all-band block from a random block of `row`'s
     tile. Returns (arr (64,1024,1024) int8, meta) or None. `max_nodata`=0.0
     means require a fully-valid block (windows are validated again on carve)."""
+    _s3_env()
     vsis3 = row.path.replace("s3://", "/vsis3/")
     try:
         with rasterio.open(vsis3) as ds:
@@ -209,7 +220,7 @@ def build_windows(pool, n_targets, crop_sz=128, stride=10, max_per_window=16,
                     f.cancel()
                 break
     if not all_crops:
-        raise SystemExit("no valid windows collected -- widen the pool/years")
+        raise RuntimeError("no valid windows collected -- widen the pool/years")
     windows = np.stack(all_crops).astype(np.int8)
     targets = pd.concat(all_tdf, ignore_index=True)
     return windows, targets
@@ -260,6 +271,7 @@ def _fetch_point_crops(row, members, lons, lats, labels, crop_sz, max_blocks=2):
     points (COGs are 1024^2-tiled, so a lone crop read fetches a whole block --
     so we read the block ONCE and keep ALL its points), and slice every point's
     `crop_sz` context crop. Returns (crops, target rows)."""
+    _s3_env()
     vsis3 = row.path.replace("s3://", "/vsis3/")
     out_crops, out_rows = [], []
     cpb = BLOCK // crop_sz                              # crops per block side
@@ -380,7 +392,7 @@ def extract_points(points, aef_index_path, exclude_paths, coverage_bbox,
                     f.cancel()
                 break
     if not crops:
-        raise SystemExit("no valid point crops -- check coverage / year")
+        raise RuntimeError("no valid point crops -- check coverage / year")
     windows = np.stack(crops).astype(np.int8)
     targets = pd.DataFrame(rows)
     return windows, targets

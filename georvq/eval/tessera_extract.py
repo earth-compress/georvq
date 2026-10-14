@@ -33,9 +33,11 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import numpy as np
 import pandas as pd
 
+from georvq.sources.tessera import TesseraSource
+
 BANDS = 128
 RAW_BANDS = 130                       # + 2 scale bytes (fp16 little-endian)
-SCALE_MAX = 1.0                       # match TesseraSource.SCALE_MAX
+SCALE_MAX = TesseraSource.SCALE_MAX
 
 
 def tile_key(lon: float, lat: float) -> tuple[int, int]:
@@ -45,10 +47,15 @@ def tile_key(lon: float, lat: float) -> tuple[int, int]:
             int(np.floor(lat * 10)) * 10 + 5)
 
 
-def training_tile_keys(store_index="/data/tessera-samples/chips_512/index.parquet"):
-    """Tile keys (any year) that contributed training chips."""
+def training_tile_keys(store_index):
+    """Tile keys (any year) that contributed training chips, from the
+    training store's chip index. The index must exist, because an empty
+    exclusion set would let training tiles into the eval set."""
     if not os.path.exists(store_index):
-        return set()
+        raise FileNotFoundError(
+            f"training store index {store_index} not found; the held-out "
+            f"eval set cannot be built without the training tiles to "
+            f"exclude")
     df = pd.read_parquet(store_index, columns=["tile_lon", "tile_lat"])
     return set(zip((df.tile_lon * 100).round().astype(int),
                    (df.tile_lat * 100).round().astype(int)))
@@ -168,10 +175,11 @@ def fetch_tile_crops(gt, tile_lon, tile_lat, year, sub: pd.DataFrame,
     return crops, rows
 
 
-def extract_points_tessera(targets: pd.DataFrame, cache_dir, crop_sz=128,
-                           max_tiles=600, workers=12, min_valid_frac=0.5,
-                           store_index="/data/tessera-samples/chips_512/index.parquet"):
-    """Extract Tessera context crops at every AE target point. Returns
+def extract_points_tessera(targets: pd.DataFrame, cache_dir, store_index,
+                           crop_sz=128, max_tiles=600, workers=12,
+                           min_valid_frac=0.5):
+    """Extract Tessera context crops at every AE target point, excluding the
+    tiles in the training store's chip index `store_index`. Returns
     (windows (M,130,crop,crop) int8, targets DataFrame, stats dict)."""
     from geotessera import GeoTessera
 
@@ -181,9 +189,9 @@ def extract_points_tessera(targets: pd.DataFrame, cache_dir, crop_sz=128,
                 self.gt = GeoTessera(embeddings_dir=cache_dir)
             return self.gt
 
+    exclude = training_tile_keys(store_index)
     gt_local = GTLocal()
     avail = registry_years(gt_local.get())
-    exclude = training_tile_keys(store_index)
     label_cols = [c for c in targets.columns
                   if c == "label" or c.startswith("label_")]
     plans, dropped = plan_tiles(targets, avail, exclude, max_tiles)
@@ -210,7 +218,7 @@ def extract_points_tessera(targets: pd.DataFrame, cache_dir, crop_sz=128,
                 print(f"  tiles {done}/{len(futs)} | crops {base} | "
                       f"targets {len(rows)}", flush=True)
     if not crops:
-        raise SystemExit("no valid tessera crops -- check coverage/registry")
+        raise RuntimeError("no valid tessera crops -- check coverage/registry")
     windows = np.stack(crops)
     tdf = pd.DataFrame(rows)
     stats = {"planned_tiles": len(plans), "planned_targets": n_planned,

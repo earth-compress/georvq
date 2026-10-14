@@ -3,11 +3,14 @@
 Each benchmark turns a table of held-out target pixels (lon/lat + provenance,
 from extract.build_windows) into the same table plus an integer/float `label`
 column, dropping pixels with no valid label. Coverage bboxes let the data-prep
-pipeline restrict tile sampling to where labels exist -- so LUCAS/LCMAP already
-sample the right regions even though their label join is still a stub.
+pipeline restrict tile sampling to where labels exist.
 
-Implemented now: ASTER GED surface-emissivity regression (a global raster, so it
-runs end-to-end on data we already reach -- the lowest-setup AEF benchmark).
+Three benchmarks are implemented. ASTER GED surface-emissivity regression is a
+global raster (`mode = "raster"`): targets are sampled from held-out tiles and
+the label is looked up at each one. LUCAS 2018 (Europe) and LCMAP 2018 (CONUS)
+land-cover classification are survey points (`mode = "points"`): the label
+points are the targets, and `load_points` supplies them to
+extract.extract_points.
 """
 from __future__ import annotations
 
@@ -152,7 +155,7 @@ class AsterGED(Benchmark):
         Tiles are fetched per 1-degree NW corner and cached, so repeated
         runs cost nothing. Targets whose tile is unavailable (ocean, no
         data) or whose pixel is invalid are DROPPED rather than filled --
-        an imputed label would quietly become a class the probes learn to
+        an imputed label would become a class the probes learn to
         predict from context instead of from the embedding.
         """
         import requests
@@ -213,14 +216,14 @@ class LucasLandCover(Benchmark):
           "U22": "Industry", "U32": "Industry", "U33": "Industry"}
 
     def load_points(self, cache_dir):
-        """LCMAP reference points for the configured survey year, reprojected
-        to lon/lat.
+        """LUCAS 2018 survey points from the harmonised table, as lon/lat
+        with a level-1 land-cover `label` and a land-use `label_lu`.
 
-        The archive's own .prj is used for the source CRS rather than an
-        assumed EPSG, since the reference grid is not in a common code.
-        Note LCMAP's probe noise floor is wide (+/-0.023 balanced accuracy
-        under repeated splits), so it cannot resolve small differences --
-        see lab/findings/probe-noise-floors.md before reading its numbers.
+        Coordinates are the theoretical point locations (`th_lat`,
+        `th_long`), already in WGS84, so nothing is reprojected. Land-cover
+        classes with fewer than 50 points are dropped. LUCAS's probe noise floor is
+        +/-0.017 balanced accuracy under repeated splits; see
+        lab/findings/probe-noise-floors.md before reading its numbers.
         """
         import io
         import zipfile
