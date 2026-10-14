@@ -374,3 +374,15 @@ def record():
 if __name__ == "__main__":
     if sys.argv[1:] == ["record"]:
         record()
+
+
+def test_shippable_config_drops_machine_paths():
+    from georvq.ae.v2_bundle import shippable_config
+    d = {"data": {"store_dir": "/data/x", "source": "ae"},
+         "train": {"init_from": "/home/u/a.pt", "steps": 10,
+                   "rd_refs": ["/home/u/r.json|t|64|ref", "rel|t|64|ref"]},
+         "log": {"run_tag": "r"}}
+    assert shippable_config(d) == {
+        "data": {"store_dir": "", "source": "ae"},
+        "train": {"init_from": "", "steps": 10, "rd_refs": ["rel|t|64|ref"]},
+        "log": {"run_tag": "r"}}
