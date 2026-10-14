@@ -8,18 +8,10 @@ that tier's tokens before decoding. Nothing about the codebooks or the
 index stream changes, so a refinement is always optional — dropping one
 yields a valid decode at a lower rate.
 
-**Which tier pays is a property of the model, not of the format.** Models
-leave their slack in different places, so the tier is a parameter here
-rather than a constant:
-
-- The AlphaEarth release refines the **coarse** tier at 2 bits/dim
-  (`star.tif`, 66 B/window). Its coarse codebook carries the OOD error
-  tail — worst-0.1% pixel error is dominated by coarse misses — while
-  its mid and fine books already sit at their ceiling, where a sidecar
-  is worthless-to-harmful.
-- The Tessera release refines the **fine** tier, which is where that
-  model's slack sits: tier 2's residual is still decaying at level 20,
-  i.e. rate-limited rather than saturated.
+Which tier benefits depends on the model, so the tier is a parameter
+here rather than a constant. The Tessera release refines the fine tier,
+where that model's slack sits: tier 2's residual is still decaying at
+level 20, so it is rate-limited rather than saturated.
 
 Two quantizer families, both with a per-window scale so the coder adapts
 to outliers instead of clipping them:
@@ -28,8 +20,7 @@ to outliers instead of clipping them:
     Symmetric mid-rise uniform quantizer, `2**bits` levels at
     (±0.5, ±1.5, ...) x step, with step set from the window's own
     standard deviation. No fitted state, so nothing travels with the
-    release. This is the AlphaEarth `8*` sidecar, and at 2 bits it
-    retains 98% of the gain an unquantized residual would give.
+    release.
 
 `lloyd`
     A fixed Lloyd-Max table, fitted once on held-out residuals and

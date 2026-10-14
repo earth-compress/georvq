@@ -39,7 +39,7 @@ projection rounds small negative weights to -0.0, and the sign of zero
 is part of the bytes `bitstream_id` hashes, so the int8 code -128
 (outside the symmetric range) stores -0.0.
 
-The v1 bundles (`georvq.inference.release`) are separate and unchanged.
+Other releases' bundles (`georvq.inference.release`, used by Tessera) are a separate format.
 """
 from __future__ import annotations
 

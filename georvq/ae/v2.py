@@ -41,7 +41,6 @@ decodes it, in the environment, the local cache, or by downloading it
 from a trusted release (georvq.ae.v2_resolve). The bundle is located
 when pixels are first read, so reading metadata needs none.
 
-The v1 release (georvq.ae.cli, georvq.ae.cog) is separate and unchanged.
 """
 from __future__ import annotations
 
@@ -432,14 +431,23 @@ class AEV2Codec:
             return self._forward(zqs, depths, mean, v), v
 
 
+def requant_ae_np(x, valid=None, fill=NODATA):
+    """float32 field -> int8 signed-sqrt quantization (inverse of dequant);
+    invalid pixels -> `fill` (the source's own nodata value)."""
+    s = np.rint(np.sign(x) * np.sqrt(np.abs(x)) * 127.5)
+    s = np.clip(s, -127, 127).astype(np.int8)
+    if valid is not None:
+        s[np.broadcast_to(~valid[:, None], s.shape)] = fill
+    return s
+
+
 def requant(out, valid):
     """Decoded float field (n, C, W, W) -> int8, the signed-sqrt inverse of
     the AE dequantization, with invalid pixels at -128. On CUDA it runs
     on the device, where sqrt is correctly rounded; on CPU it runs in
     numpy, because torch's vectorized CPU sqrt is not correctly rounded
-    and would differ from `georvq.ae.cli.requant_ae_np` in rare cases."""
+    and would differ from `requant_ae_np` in rare cases."""
     if out.device.type != "cuda":
-        from georvq.ae.cli import requant_ae_np
         return requant_ae_np(out.cpu().numpy(), valid.cpu().numpy())
     import torch
     q = torch.clamp(torch.round(torch.sign(out) * torch.sqrt(out.abs())
@@ -531,7 +539,6 @@ class AEV2OnnxCodec:
         """As AEV2Codec.decode_records. The trace records the mean
         channel, the ONNX graphs (codebook lookup and decoder together)
         and requantization."""
-        from georvq.ae.cli import requant_ae_np
         n = base.shape[0]
         sp0 = self.specs[0]
         with span(trace, "decode", "mean channel"):

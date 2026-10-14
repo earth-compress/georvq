@@ -10,7 +10,7 @@ from rasterio.transform import Affine  # noqa: E402
 from rasterio.windows import Window  # noqa: E402
 
 from georvq.ae import v2  # noqa: E402
-from georvq.ae.cli import requant_ae_np  # noqa: E402
+from georvq.ae.v2 import requant_ae_np  # noqa: E402
 from georvq.config import TierSpec, load_config  # noqa: E402
 from georvq.factory import build_model  # noqa: E402
 from georvq.inference.api import Codec  # noqa: E402

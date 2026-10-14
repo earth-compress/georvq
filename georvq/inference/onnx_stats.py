@@ -3,10 +3,8 @@
 A `stats_cond` model subtracts the per-window stats before the encoder,
 conditions encoder and decoder on them, and adds them back after the
 decoder, after which a source may constrain the field
-(`finalize_uncentered`, e.g. AE renormalises each pixel). The v1 export
-(`georvq.inference.onnx_backend`) has no stats input and refuses nothing
-on this account, so these models are exported here instead. The split of
-the work is the same as in v1:
+(`finalize_uncentered`, e.g. AE renormalises each pixel). The work is
+split as follows:
 
 - `encoder.onnx`: (x, stats, valid) -> per-tier continuous latents z0..
   The centring and the encoder's stats embedding are inside the graph.
@@ -84,8 +82,7 @@ def export_stats_onnx(model, out_dir, extra_id=(), meta_extra=None,
     import torch
 
     if model.stats_cond is None:
-        raise ValueError("model has no stats_cond; use "
-                         "georvq.inference.onnx_backend.export_onnx")
+        raise ValueError("ONNX export supports stats_cond models only")
     if model.conditioner is not None or model.selector is not None:
         raise NotImplementedError(
             "ONNX export covers unconditioned codecs only "

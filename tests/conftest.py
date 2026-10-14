@@ -1,9 +1,4 @@
-import os
-
 import pytest
-
-RELEASE_BUNDLE = os.environ.get(
-    "GEORVQ_AE_BUNDLE", "/data/georvq-releases/ae-beta-v1/bundle")
 
 
 @pytest.fixture
