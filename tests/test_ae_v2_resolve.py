@@ -392,7 +392,7 @@ def test_cli_encode_writes_what_the_api_writes(tiny, tmp_path):
 
 
 def _response(status):
-    import httpx
+    httpx = pytest.importorskip("httpx")
     return httpx.Response(status, request=httpx.Request(
         "GET", "https://huggingface.co/api/models/earth-compress/georvq-ae-v2"))
 
