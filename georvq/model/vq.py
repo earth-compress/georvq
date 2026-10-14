@@ -385,26 +385,9 @@ class VectorQuantizer(nn.Module):
                 + self.codebook.weight.pow(2).sum(1, keepdim=True).t())
 
     @torch.no_grad()
-    def usage(self, indices):
-        """Fraction of codebook entries used in this batch."""
-        return indices.unique().numel() / self.num_codes
-
-    @torch.no_grad()
     def ema_usage(self):
         """Fraction of codebook entries above the dead-code threshold."""
         return (self.ema_count > self.dead_threshold).float().mean().item()
-
-    @torch.no_grad()
-    def perplexity(self, indices):
-        """Effective codebook size — exp(entropy of code distribution).
-
-        Healthy quantization has perplexity climbing toward a meaningful
-        fraction of K. Collapse shows up as perplexity << K."""
-        flat = indices.flatten()
-        counts = torch.bincount(flat, minlength=self.num_codes).float()
-        probs = counts / counts.sum().clamp_min(1)
-        ent = -(probs * probs.clamp_min(1e-12).log()).sum()
-        return torch.exp(ent).item()
 
 
 class ResidualVQ(nn.Module):
@@ -543,10 +526,6 @@ class ResidualVQ(nn.Module):
             residual = residual - q.detach()
             cum = cum + q.detach()
         return out
-
-    def usage(self, all_indices):
-        """Average codebook usage across levels."""
-        return sum(lev.usage(idx) for lev, idx in zip(self.levels, all_indices)) / len(all_indices)
 
     def ema_usage(self):
         """Average global codebook usage (EMA-based) across levels."""
