@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/earth-compress-dark.svg">
+    <img src="docs/assets/earth-compress.svg" alt="Earth Compress" width="420">
+  </picture>
+</p>
+
 # georvq
 
 Pyramidal residual-VQ compression for geospatial datasets.
@@ -205,6 +212,15 @@ This work was funded by the Advanced Research and Invention Agency
 (ARIA), as part of the Earth Compress project, a partnership between
 Asterisk Laboratories Co-operative Ltd. and the National Oceanography
 Centre.
+
+<p>
+  <a href="https://asterisk.coop">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="docs/assets/asterisk-labs-dark.svg">
+      <img src="docs/assets/asterisk-labs.svg" alt="Asterisk Labs" width="220">
+    </picture>
+  </a>
+</p>
 
 ## Licence
 
