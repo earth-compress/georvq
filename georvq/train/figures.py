@@ -140,8 +140,8 @@ def reset_figure(rst, specs, step):
 def cosdist_figure(cosdist, baseline, specs, step):
     """Per-tier cos-dist vs cumulative RVQ level (solid: this model; dotted:
     an optional {tier_name: [dists]} baseline)."""
-    names = ["coarse", "mid", "fine"][:len(specs)] \
-        or [f"tier{i}" for i in range(len(specs))]
+    names = (["coarse", "mid", "fine"][:len(specs)] if len(specs) <= 3
+             else [f"tier{i}" for i in range(len(specs))])
     fig, axes = plt.subplots(1, len(specs), figsize=(3.7 * len(specs), 3.2),
                              constrained_layout=True)
     if len(specs) == 1:
