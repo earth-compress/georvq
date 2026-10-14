@@ -244,6 +244,11 @@ def test_recon_figure_never_runs_the_model_in_train_mode():
     x, v = _batch(cfg, B=8, nodata=False)
 
     class Src:
+        name = "stub"
+
+        def normalizer(self, cfg):
+            return None
+
         def prep(self, raw, device):
             return x, v
 
