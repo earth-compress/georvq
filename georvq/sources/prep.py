@@ -10,13 +10,13 @@ to the decoder is MODEL machinery (stats_cond), not prep.
 
 Metrics and figure panels declare the space they are defined in
 (`Metric.space`); the harness inverts through the run's prep exactly
-once for the physical ones. A prep that declares `invertible = False`
-withholds physical metrics at report resolution rather than at figure
-time.
+once for the physical ones, calling `inverse(y, {})`. `invertible`
+says whether that call works with an empty meta; a prep that declares
+it False withholds physical metrics at report resolution rather than
+at figure time.
 
-Phase-1 status: `SourcePrep` delegates to the Source's existing
-`prep`/`normalizer` pair, so current recipes are unchanged; named
-preps land per source as they migrate (era5 first).
+`SourcePrep` delegates to the Source's existing `prep`/`normalizer`
+pair. ERA5 `boxcox` is the only named prep so far.
 """
 from __future__ import annotations
 
@@ -50,26 +50,60 @@ class Prep:
         """Fitted constants for checkpoint embedding (json-able)."""
         return {}
 
+    def load_state(self, state):
+        """Restore constants a checkpoint embedded through `state()`.
+        Preps whose constants are fixed in the source ignore it."""
+
 
 class SourcePrep(Prep):
     """Delegates to the Source's existing prep/normalizer pair -- the
-    compatibility default every current recipe resolves to."""
+    compatibility default every current recipe resolves to.
+
+    A normalizer with per-sample stats (DEM, S2: `per_sample = True`)
+    can only be inverted with the stats of the batch being inverted.
+    `forward` returns them as `meta["stats"]` and `inverse` reads them
+    from there, so `invertible` is False for those sources: the
+    harness inverts with an empty meta."""
+
+    def _norm(self):
+        return self.source.normalizer(self.cfg)
 
     def forward(self, raw, meta, device):
         x, valid = self.source.prep(raw, device)
+        n = self._norm()
+        if n is not None and getattr(n, "per_sample", False):
+            meta = {**meta, "stats": self.source.last_stats()}
         return x, valid, meta
 
     @property
     def invertible(self):
-        return self.source.normalizer(self.cfg) is not None
+        n = self._norm()
+        return n is not None and not getattr(n, "per_sample", False)
 
     def inverse(self, y, meta):
-        n = self.source.normalizer(self.cfg)
+        n = self._norm()
         if n is None:
             raise RuntimeError(
                 f"source {self.source.name!r} declares no normalizer; "
                 f"its model space has no physical inverse")
-        return n.denormalize(y, None)
+        if not getattr(n, "per_sample", False):
+            return n.denormalize(y, None)
+        stats = (meta or {}).get("stats")
+        if stats is None:
+            raise ValueError(
+                f"source {self.source.name!r} normalizes with per-sample "
+                f"stats; pass the meta that forward() returned for this "
+                f"batch, which carries them as meta['stats']")
+        return n.denormalize(y, stats)
+
+    def state(self):
+        st = getattr(self.source, "prep_state", None)
+        return {"source": st()} if st is not None and st() else {}
+
+    def load_state(self, state):
+        if state and "source" in state and \
+                hasattr(self.source, "load_prep_state"):
+            self.source.load_prep_state(state["source"])
 
 
 def build_prep(name, source, model_cfg):
@@ -85,3 +119,16 @@ def build_prep(name, source, model_cfg):
             f"source {source.name!r} has no prep {name!r}; "
             f"have {sorted(named) or ['(default only)']}")
     return named[name](source, model_cfg)
+
+
+def prep_of(model):
+    """The prep a model was trained with: `model.prep` when
+    `factory.from_checkpoint` attached it, else rebuilt by name from the
+    model's config (the source's default prep when the config names
+    none)."""
+    p = getattr(model, "prep", None)
+    if p is not None:
+        return p
+    cfg = getattr(model, "full_config", None)
+    name = cfg.data.prep.name if cfg is not None else None
+    return build_prep(name, model.source, model.cfg)

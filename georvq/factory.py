@@ -40,7 +40,7 @@ def compile_trunks(model):
 def from_checkpoint(path, device="cpu") -> PyramidCodec:
     """Rebuild the exact model from a checkpoint's embedded config and load
     its weights (strict). The returned model is in eval mode and carries the
-    resolved config as `.full_config`."""
+    resolved config as `.full_config` and the run's prep as `.prep`."""
     ck = torch.load(path, map_location=device, weights_only=False)
     if "config" not in ck:
         raise KeyError(
@@ -51,4 +51,17 @@ def from_checkpoint(path, device="cpu") -> PyramidCodec:
     model = build_model(cfg, device)
     model.load_state_dict(ck["model"], strict=True)
     model.eval()
+    attach_prep(model, ck.get("prep"))
     return model
+
+
+def attach_prep(model, state=None):
+    """Rebuild the run's named prep (`cfg.data.prep`) as `model.prep`, and
+    restore any constants the checkpoint embedded for it. Eval paths prep
+    through this, so a checkpoint trained under a named prep is scored in
+    the model space it was trained in."""
+    from georvq.sources.prep import build_prep
+    cfg = model.full_config
+    model.prep = build_prep(cfg.data.prep.name, model.source, cfg.model)
+    model.prep.load_state(state or {})
+    return model.prep
