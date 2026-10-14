@@ -1,5 +1,8 @@
 georvq
-Copyright 2026 the georvq authors
+Copyright 2026 Asterisk Labs
+
+Developed by Asterisk Labs as part of the Earth Compress project, a
+partnership between Asterisk Labs and the National Oceanography Centre.
 
 The source code in this repository is licensed under the Apache License,
 Version 2.0 (see LICENSE). The model weights published on Hugging Face
