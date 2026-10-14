@@ -17,10 +17,11 @@ class WindowSampler:
         self.pool = pool
         self.cfg = model_cfg
 
-    def draw(self, batch, align=False, return_rows=False):
+    def draw(self, batch, align=False, return_rows=False, generator=None):
         """(tensor [B, ...], meta dict of per-sample tensors)."""
         out = self.pool.sample_batch(batch, self.cfg.window, align=align,
-                                     return_rows=return_rows)
+                                     return_rows=return_rows,
+                                     generator=generator)
         if return_rows:
             crop, rows = out
             return crop, {"row": rows}

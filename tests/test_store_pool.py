@@ -160,3 +160,21 @@ def test_pool_rejects_crop_larger_than_slot(store):
     with pytest.raises(ValueError, match="does not fit"):
         pool.sample_batch(2, token=32)
     pool.shutdown()
+
+
+def test_sample_batch_draws_from_a_given_generator(store):
+    """A seeded generator makes the draws independent of the global one, so
+    a prefetch thread can sample without racing the main thread."""
+    pool = ChipPool(store, store.index, pool_size=len(store.index),
+                    device=torch.device("cpu"), workers=0, seed=0,
+                    pool_device="cpu")         # resident: no refresh between draws
+    draw = lambda g: pool.sample_batch(6, token=8, generator=g)
+    g1, g2 = torch.Generator().manual_seed(3), torch.Generator().manual_seed(3)
+    a = draw(g1)
+    torch.rand(100)                               # consume the global generator
+    b = draw(g2)
+    assert torch.equal(a, b)
+    torch.manual_seed(5); c = pool.sample_batch(6, token=8)
+    torch.manual_seed(5); d = pool.sample_batch(6, token=8)
+    assert torch.equal(c, d)
+    pool.shutdown()

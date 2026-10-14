@@ -429,7 +429,8 @@ class ChipPool:
                 f"data.pool.slot_rows >= {token} (and chips at least that "
                 f"wide)")
 
-    def sample_batch(self, batch, token=16, align=False, return_rows=False):
+    def sample_batch(self, batch, token=16, align=False, return_rows=False,
+                     generator=None):
         """(B, bands, token, token) store-dtype on `self.device` - one gather
         kernel on the pool's device, then a small H2D copy if the pool lives
         on CPU.
@@ -438,7 +439,10 @@ class ChipPool:
         Pool slots start at period-aligned offsets, so aligned crops all
         share the same phase relative to any periodic structure in the data
         (e.g. a 2x-upsampled source's aliasing grid) — the model can lock
-        onto and reproduce it instead of averaging it away."""
+        onto and reproduce it instead of averaging it away.
+
+        generator: a torch.Generator on the pool's device for the chip and
+        offset draws; None draws from the global generator."""
         self.check_health()
         self._check_token(token)
         pdev, dev = self.pool_device, self.device
@@ -447,15 +451,18 @@ class ChipPool:
         # by every group, so it must always land on the coarsest grid.
         if self.groups:
             align = True
-        ci = torch.randint(0, self.pool.shape[0], (batch,), device=pdev)
+        g = {"generator": generator} if generator is not None else {}
+        ci = torch.randint(0, self.pool.shape[0], (batch,), device=pdev, **g)
         # offsets run 0..slot_rows - token inclusive, so the last row and
         # column of a slot can be cropped
         if align and p > 1:
-            r = torch.randint(0, (self.slot_rows - token) // p + 1, (batch,), device=pdev) * p
-            c = torch.randint(0, (self.chip_px - token) // p + 1, (batch,), device=pdev) * p
+            r = torch.randint(0, (self.slot_rows - token) // p + 1, (batch,),
+                              device=pdev, **g) * p
+            c = torch.randint(0, (self.chip_px - token) // p + 1, (batch,),
+                              device=pdev, **g) * p
         else:
-            r = torch.randint(0, self.slot_rows - token + 1, (batch,), device=pdev)
-            c = torch.randint(0, self.chip_px - token + 1, (batch,), device=pdev)
+            r = torch.randint(0, self.slot_rows - token + 1, (batch,), device=pdev, **g)
+            c = torch.randint(0, self.chip_px - token + 1, (batch,), device=pdev, **g)
 
         def gather(name):
             ratio = self.ratio[name]
