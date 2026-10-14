@@ -1,4 +1,4 @@
-"""Sentinel-2 adapter: multi-group store, loader, native-res stems and
+"""Sentinel-2 adapter: multi-group store, pool, native-res stems and
 multi-res heads through the pyramid, toy optimization."""
 import numpy as np
 import pytest
@@ -6,7 +6,7 @@ import torch
 
 from georvq.config import Config
 from georvq.data.build import ShardWriter
-from georvq.data.pool import GroupChipLoader
+from georvq.data.pool import ChipPool
 from georvq.data.store import ChipStore
 from georvq.factory import build_model
 
@@ -49,9 +49,15 @@ def test_multigroup_store(s2_store):
     assert len(s2_store.index) == 6
 
 
+def _resident(store):
+    """Every chip resident, no refresh threads: what the S2 tests used to
+    get from the in-RAM group loader."""
+    return ChipPool(store, store.index, pool_size=len(store.index),
+                    device=torch.device("cpu"), workers=0, seed=0)
+
+
 def test_group_loader(s2_store):
-    loader = GroupChipLoader(s2_store, s2_store.index,
-                             torch.device("cpu"), seed=0)
+    loader = _resident(s2_store)
     batch = loader.sample_batch(5, token=24)
     assert batch["10m"].shape == (5, 4, 24, 24)
     assert batch["20m"].shape == (5, 6, 12, 12)
@@ -66,7 +72,7 @@ def test_s2_model_forward(s2_store):
     model = build_model(cfg)
     model.eval()
     source = model.source
-    loader = GroupChipLoader(s2_store, s2_store.index, torch.device("cpu"))
+    loader = _resident(s2_store)
     raw = loader.sample_batch(4, token=24)
     x, valid = source.prep(raw, "cpu")
     assert valid.shape == (4, 24, 24)
@@ -94,7 +100,7 @@ def test_s2_toy_training(s2_store):
     torch.manual_seed(0)
     model = build_model(cfg)
     source = model.source
-    loader = GroupChipLoader(s2_store, s2_store.index, torch.device("cpu"))
+    loader = _resident(s2_store)
     opt = torch.optim.AdamW(model.parameters(), lr=2e-3)
     losses = []
     from georvq.model.codec import sample_monotone_depths
@@ -210,9 +216,7 @@ def test_s2_round_trips_through_the_inference_codec():
 
     NOT yet charged: S2Normalizer removes a per-tile per-band mean/std (26
     floats) that no packet carries, so `packet_bits` here is the index cost
-    only. The generic machinery for this exists -- Codec takes a
-    stats_packer and charges it -- but nothing fits a StatsPacker for S2
-    yet. docs/ADDING_A_SOURCE.md is blunt about why that matters: an
+    only. docs/ADDING_A_SOURCE.md is blunt about why that matters: an
     uncharged stats channel once reached 34% of a bitstream unnoticed.
     """
     from georvq.inference.api import Codec

@@ -4,7 +4,7 @@ import torch
 
 from georvq.config import load_config
 from georvq.factory import build_model
-from georvq.train.warmstart import (decoder_tail_names, freeze_books,
+from georvq.train.warmstart import (encoder_param_names, freeze_books,
                                     set_params_frozen, trainable_params)
 
 
@@ -58,29 +58,29 @@ def test_books_move_without_the_freeze():
     assert not torch.equal(before, m.rvqs[0].levels[0].codebook.weight.data)
 
 
-def test_frozen_books_excluded_from_optimizer_but_tail_is_not():
+def test_frozen_books_excluded_from_optimizer_but_encoder_is_not():
     """The whole point of `trainable_params`: a param frozen for the first
-    N steps must still be owned by the optimizer, or releasing it later is
-    a silent no-op."""
+    N steps (the encoder under freeze_encoder_steps) must still be owned
+    by the optimizer, or releasing it later is a silent no-op."""
     cfg, m = _smoke_model()
     freeze_books(m)
-    tail = decoder_tail_names(m, 2)
+    tail = encoder_param_names(m)
     set_params_frozen(m, tail, True)
 
     def pred(n, p):
         return not n.startswith("rvqs.") and (p.requires_grad or n in tail)
     owned = {n for n, _ in trainable_params(m, pred)}
-    assert tail and tail <= owned, "frozen tail missing from optimizer"
+    assert tail and tail <= owned, "frozen encoder missing from optimizer"
     assert not any(n.startswith("rvqs.") for n in owned)
 
 
-def test_released_tail_param_actually_updates():
+def test_released_encoder_param_actually_updates():
     cfg, m = _smoke_model()
-    tail = decoder_tail_names(m, 2)
+    tail = encoder_param_names(m)
     set_params_frozen(m, tail, True)
     ps = [p for n, p in m.named_parameters() if not n.startswith("rvqs.")]
-    opt = torch.optim.AdamW(ps, lr=1e-2)          # owns the frozen tail too
-    name = sorted(tail)[0]
+    opt = torch.optim.AdamW(ps, lr=1e-2)          # owns the frozen encoder too
+    name = sorted(n for n in tail if n.startswith("tokenizer.out."))[0]
     watched = dict(m.named_parameters())[name]
     x = torch.randn(2, cfg.model.bands, cfg.model.window, cfg.model.window)
     Ls = torch.tensor([[3, 3]] * 2)
@@ -90,26 +90,14 @@ def test_released_tail_param_actually_updates():
     out, commit, _ = m.forward_train(x, Ls)
     (out.pow(2).mean() + commit).backward()
     opt.step(); opt.zero_grad(set_to_none=True)
-    assert torch.equal(before, watched.data), "frozen tail param moved"
+    assert torch.equal(before, watched.data), "frozen encoder param moved"
 
     set_params_frozen(m, tail, False)
     out, commit, _ = m.forward_train(x, Ls)
     (out.pow(2).mean() + commit).backward()
     opt.step()
     assert not torch.equal(before, watched.data), \
-        "released tail param never trained (not owned by the optimizer)"
-
-
-def test_decoder_tail_names_picks_the_last_blocks():
-    _, m = _smoke_model()
-    import re
-    idx = sorted({int(mm.group(1)) for n, _ in m.named_parameters()
-                  if (mm := re.match(r"decoder\.blocks\.(\d+)\.", n))})
-    got = decoder_tail_names(m, 2)
-    blocks = {int(re.match(r"decoder\.blocks\.(\d+)\.", n).group(1))
-              for n in got if n.startswith("decoder.blocks.")}
-    assert blocks == set(idx[-2:])
-    assert any(n.startswith("decoder.head.") for n in got)
+        "released encoder param never trained (not owned by the optimizer)"
 
 
 def test_loaded_cb_ignores_scalar_bookkeeping_buffers():

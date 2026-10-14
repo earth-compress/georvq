@@ -38,7 +38,6 @@ import torch
 
 from georvq.eval import codec_ab
 from georvq.eval.probes import run_probes
-from georvq.model.codec import tuple_bits
 
 
 def model_tag(path):
@@ -66,7 +65,7 @@ def sweep_ckpt(ckpt, windows, t, X_orig, y, groups, meta, args, device):
 
     rows = []
     for ls, Xr in zip(tuples, recons):
-        bpp = tuple_bits(specs, ls) / (W * W)
+        bpp = codec_ab.bits_per_px(model, ls)
         cos = float((X_orig * Xr).sum(1).mean())
         rr = run_probes(Xr, y, groups, meta["task"], budgets, probes,
                         args.test_frac, args.seed)

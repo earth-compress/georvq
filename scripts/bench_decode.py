@@ -10,7 +10,8 @@ import time
 
 import torch
 
-from georvq.inference.api import load_codec
+from georvq.eval.codec_ab import load_codec
+from georvq.inference.api import Codec
 from georvq.train.validate import canonical_tuples
 
 
@@ -25,7 +26,7 @@ def main():
     device = torch.device(args.device if torch.cuda.is_available()
                           else "cpu")
 
-    codec = load_codec(args.ckpt, device)
+    codec = Codec(load_codec(args.ckpt, device)[0])
     m = codec.model
     x = torch.nn.functional.normalize(
         torch.randn(args.batch, m.bands, m.window, m.window, device=device),

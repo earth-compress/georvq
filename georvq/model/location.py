@@ -87,6 +87,16 @@ def get_location_encoder(encoder="satclip", device="cpu", degree=40):
     return get_satclip(device)
 
 
+def location_dim(loc_cfg):
+    """Width of the per-chip location embedding `get_location_encoder`
+    produces for this config: 256 for SatCLIP, degree^2 for sphharm."""
+    if loc_cfg is None:
+        return 0
+    if loc_cfg.encoder == "sphharm":
+        return loc_cfg.degree ** 2
+    return 256
+
+
 def build_location_table(rows, device, encoder=None, standardize=True):
     """Per-row standardized location embeddings (len(rows), D) from each
     chip's lon/lat."""

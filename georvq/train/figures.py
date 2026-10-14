@@ -140,8 +140,8 @@ def reset_figure(rst, specs, step):
 def cosdist_figure(cosdist, baseline, specs, step):
     """Per-tier cos-dist vs cumulative RVQ level (solid: this model; dotted:
     an optional {tier_name: [dists]} baseline)."""
-    names = ["coarse", "mid", "fine"][:len(specs)] \
-        or [f"tier{i}" for i in range(len(specs))]
+    names = (["coarse", "mid", "fine"][:len(specs)] if len(specs) <= 3
+             else [f"tier{i}" for i in range(len(specs))])
     fig, axes = plt.subplots(1, len(specs), figsize=(3.7 * len(specs), 3.2),
                              constrained_layout=True)
     if len(specs) == 1:
@@ -159,13 +159,6 @@ def cosdist_figure(cosdist, baseline, specs, step):
         ax.set_ylabel("1 - cos") if t == 0 else None
         ax.grid(alpha=0.3, which="both"); ax.legend(fontsize=8)
     return fig
-
-
-# Back-compat aliases: the PCA-RGB renderer moved into the report layer so
-# that a source can declare a different one (grayscale relief, true colour)
-# instead of every plane being forced through three principal components.
-pca_rgb_basis = PCA_RGB.basis
-_pca_rgb = PCA_RGB.render
 
 
 def _run_prep(model, source, prep):
