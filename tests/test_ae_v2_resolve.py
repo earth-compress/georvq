@@ -5,6 +5,7 @@ mocked; no test touches the network."""
 import json
 import os
 import shutil
+import sys
 
 import numpy as np
 import pytest
@@ -366,3 +367,25 @@ print("ok")
                        text=True, cwd=os.getcwd(), env=env)
     assert r.returncode == 0, r.stderr
     assert r.stdout.strip() == "ok"
+
+
+def test_cli_encode_writes_what_the_api_writes(tiny, tmp_path):
+    """`python -m georvq.ae.v2 encode` on the tiny bundle reads back like
+    the fixture's `encode_tile` output, with the same release record."""
+    import subprocess
+    src = tiny["tmp"] / "tile.tif"
+    out = tmp_path / "cli.georvq.parquet"
+    r = subprocess.run(
+        [sys.executable, "-m", "georvq.ae.v2", "encode", str(src), str(out),
+         "--bundle", str(tiny["bundle"]), "--device", "cpu", "--fp32",
+         "--no-quality", "--revision", "abc123", "--batch", "8"],
+        capture_output=True, text=True, timeout=300)
+    assert r.returncode == 0, r.stderr
+    assert json.loads(r.stdout.strip().splitlines()[-1])["out"] == str(out)
+    with v2.open_dataset(out, codec=tiny["codec"]) as ds:
+        assert np.array_equal(ds.read(quality=RUNG), tiny["want"])
+        got = ds.reader.header
+    with v2.open_dataset(tiny["released"], codec=tiny["codec"]) as ds:
+        want = ds.reader.header
+    assert got["codec"]["release"] == want["codec"]["release"]
+    assert got["product"]["source"] == str(src)

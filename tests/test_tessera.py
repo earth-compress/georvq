@@ -209,7 +209,6 @@ def test_store_aux_planes_reach_prep(tmp_path):
     assert torch.allclose(x[0][:, valid[0]], ref[:, valid[0]], atol=1e-5)
 
 
-@pytest.mark.slow
 def test_tessera_training_smoke(tmp_path):
     """End-to-end pyramid smoke on a synthetic 128-band tessera store."""
     from georvq.config import load_config

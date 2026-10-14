@@ -14,12 +14,16 @@ license = { text = "MIT" }
 # tests/test_install_boundary.py checks that it imports and runs without
 # the [train] packages.
 dependencies = [
-    "torch>=2.1",
-    "numpy",
+    # 2.10 is the oldest release on which the suite passes: the AE v2
+    # golden gate (tests/test_ae_v2_bundle.py) sees different codes and
+    # decoded bits on 2.6-2.9, and uint16 pool indexing is missing there
+    "torch>=2.10",
+    # numpy 1.26 also changes the AE v2 golden codes
+    "numpy>=2.0",
     "pyarrow",
     "pydantic>=2.5",
     "pyyaml",
-    "rasterio",   # AE release layer: tile encode, GeoTIFF and COG output
+    "rasterio>=1.4",   # AE release layer: tile encode, GeoTIFF output
     "huggingface_hub",   # release bundles named by a file's header
 ]
 
@@ -29,17 +33,24 @@ train = ["pandas", "matplotlib", "scikit-learn", "wandb"]
 tessera = ["geotessera"]   # fetch Tessera tiles: the demo notebook, a store build
 # the tessera-vq baseline the demo compares against (Yang, Feng & Keshav)
 baseline = ["tessera-vq @ git+https://github.com/sk818/tessera-vq.git@v0.3.1"]
-# SatCLIP location conditioning (cascade / codebook-select)
-loc = ["huggingface_hub"]
 # Real entropy-coded archives (rANS via compressai)
 archive = ["compressai", "pandas"]
 # Downstream eval benchmarks (AEF extraction, ASTER GED, LUCAS/LCMAP)
 eval = ["georvq[train]", "h5py", "requests", "pyproj", "shapely"]
 # Rate-sweep GIF rendering
 viz = ["georvq[train]", "imageio", "pillow"]
-# ONNX export and onnxruntime decode (backend="onnx")
-onnx = ["onnx", "onnxruntime"]
-dev = ["georvq[train]", "pytest"]   # the suite covers training
+# ONNX export (the dynamo exporter imports onnxscript) and onnxruntime
+# decode (backend="onnx"); onnxruntime 1.19 is the first built for numpy 2
+onnx = ["onnx", "onnxruntime>=1.19", "onnxscript"]
+# ERA5 reader and the ERA5 / CMIP6 / NextGEMS store builders. zarr 3
+# needs Python 3.11 or later.
+era5 = ["zarr>=3", "xarray", "fsspec", "gcsfs", "aiohttp", "healpy"]
+# the demo notebooks and their generators
+notebooks = ["georvq[train]", "jupyter", "nbformat", "duckdb", "geopandas"]
+# the suite covers training; zarr and duckdb un-skip test_era5 and the
+# GeoParquet duckdb test
+dev = ["georvq[train]", "pytest", "duckdb",
+       "zarr>=3; python_version >= '3.11'"]
 
 [project.scripts]
 georvq-train = "georvq.cli:train_pyramid"
@@ -48,9 +59,11 @@ georvq-train-stage1 = "georvq.cli:train_stage1"
 [tool.setuptools.packages.find]
 include = ["georvq*"]
 
+[tool.setuptools.package-data]
+georvq = ["sources/*.json"]
+
 [tool.pytest.ini_options]
 markers = [
-    "slow: long-running tests (training smokes)",
-    "gpu: requires a CUDA device",
+    "slow: tests over about 10 s on CPU",
 ]
 testpaths = ["tests"]

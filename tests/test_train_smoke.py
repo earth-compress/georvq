@@ -7,8 +7,6 @@ import torch
 from georvq.config import load_config
 from georvq.data.build import build_synthetic_store
 
-pytestmark = pytest.mark.slow
-
 
 @pytest.fixture
 def smoke_cfg(tmp_path):

@@ -7,7 +7,8 @@ import pytest
 from georvq.data.live_dem import (CHIP_PX, N_SRC, col_map, first_occurrence,
                                   invert_cols)
 
-LIVE_DIR = "/data/georvq-stores/copdem_live"
+LIVE_DIR = os.environ.get("GEORVQ_TEST_COPDEM_LIVE",
+                          "/data/georvq-stores/copdem_live")
 needs_data = pytest.mark.skipif(not os.path.isdir(LIVE_DIR),
                                 reason="live COPDEM store not on this host")
 

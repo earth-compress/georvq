@@ -30,9 +30,12 @@ SRC_PREFIX = "s3://bucket/tge-labs/aef/v1/annual"
 TILES = [("2024", "33N", "xaaaa-0000000000-0000000000", 40, 48),
          ("2024", "33N", "xaaaa-0000000000-0000008192", 32, 40),
          ("2023", "34S", "xbbbb-0000000000-0000000000", 48, 32)]
-SMOKE = ("/home/ali/projects/georvq/scratch/ae-v2/parquet_smoke2/serve/"
-         "x21yfwngg902u0lsh-0000008192-0000000000.georvq.parquet")
-AEF_INDEX = "/data/AE-samples/aef_index.parquet"
+SMOKE = os.environ.get(
+    "GEORVQ_TEST_AE_V2_TILE",
+    "/home/ali/projects/georvq/scratch/ae-v2/parquet_smoke2/serve/"
+    "x21yfwngg902u0lsh-0000008192-0000000000.georvq.parquet")
+AEF_INDEX = os.environ.get("GEORVQ_TEST_AEF_INDEX",
+                           "/data/AE-samples/aef_index.parquet")
 
 
 def tiny_codec():

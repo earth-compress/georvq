@@ -14,7 +14,7 @@ from georvq.data.live_s2 import (GROUP_BANDS, GROUP_PX, LiveS2Store,
                                  cell_lat_lon)
 from georvq.data.pool import ChipPool
 
-ROOT = "/data/Major-TOM/Core-S2L1C"
+ROOT = os.environ.get("GEORVQ_TEST_MAJOR_TOM_S2", "/data/Major-TOM/Core-S2L1C")
 have_corpus = pytest.mark.skipif(
     not os.path.isdir(ROOT), reason="Major-TOM Core-S2L1C not present")
 

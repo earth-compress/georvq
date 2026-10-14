@@ -30,3 +30,10 @@ global_0.1_degree_representation/
 /*.pdf
 /*.tar.gz
 figures/*.png
+/*.onnx
+/*.tif
+/slurm-*.out
+/slurm-*.err
+
+# untracked scratch folder inside the checkout (CLAUDE.md conventions)
+/scratch/

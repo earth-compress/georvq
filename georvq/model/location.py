@@ -5,7 +5,7 @@ that carries strong geographic context. Its repo is not pip-packaged and its
 analytic spherical-harmonics tables are large, so instead of vendoring we
 clone a pinned commit into a local cache on first use (override with
 GEORVQ_SATCLIP_DIR to point at an existing checkout). Weights come from
-HuggingFace (`huggingface_hub`, install extra `georvq[loc]`).
+HuggingFace (`huggingface_hub`, a base dependency).
 """
 from __future__ import annotations
 
