@@ -5,6 +5,8 @@ Developed by Asterisk Laboratories Co-operative Ltd. (Asterisk Labs) as
 part of the Earth Compress project, a partnership between Asterisk Labs
 and the National Oceanography Centre.
 
+This work was funded by the Advanced Research and Invention Agency (ARIA).
+
 The source code in this repository is licensed under the Apache License,
 Version 2.0 (see LICENSE). The model weights published on Hugging Face
 (earth-compress/georvq-ae-v2) are also licensed under Apache 2.0.
