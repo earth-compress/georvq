@@ -1,0 +1,86 @@
+georvq
+Copyright 2026 the georvq authors
+
+The source code in this repository is licensed under the Apache License,
+Version 2.0 (see LICENSE). The model weights published on Hugging Face
+(earth-compress/georvq-ae-v2) are also licensed under Apache 2.0.
+
+Some files in this repository are derived from third-party datasets and
+are licensed under the terms those datasets require, not under Apache 2.0.
+The licence texts are in LICENSES/.
+
+
+AlphaEarth Foundations Satellite Embedding dataset -- CC-BY 4.0
+(LICENSES/CC-BY-4.0.txt)
+
+  The AlphaEarth Foundations Satellite Embedding dataset is produced by
+  Google and Google DeepMind.
+
+  Files:
+    tests/golden/divfull_val_tokens.npz
+        64 x 64 px windows extracted from annual embedding tiles, as
+        distributed in int8 on Source Cooperative.
+    tests/golden/ae_v2_golden.npz
+        codes and decode hashes of those windows under the georvq AE v2
+        codec.
+    tests/golden/ae_v2_tile.georvq.parquet
+        a small tile built from those windows and encoded with the
+        georvq AE v2 codec (lossy).
+    notebooks/demo_ae.ipynb (cell outputs)
+        figures and values computed from AlphaEarth tiles and their
+        georvq encodings.
+  Changes: windows were cropped from the source tiles; encoded files are
+  lossy reconstructions of them.
+
+
+TESSERA embeddings (University of Cambridge) -- CC-BY-SA 4.0
+(LICENSES/CC-BY-SA-4.0.txt)
+
+  TESSERA embeddings, Energy and Environment Group, Department of
+  Computer Science and Technology, University of Cambridge, via
+  geotessera (https://github.com/ucam-eo/geotessera).
+
+  Files:
+    tests/golden/tessera_val_windows.npz
+        three windows of TESSERA embeddings from validation chips.
+    tests/golden/tessera_golden.npz
+        codes, mean-channel codes and decode hashes of those windows
+        under the georvq Tessera release codec.
+    notebooks/demo_tessera_codec.ipynb (cell outputs)
+        figures and values computed from TESSERA embeddings and their
+        georvq encodings.
+  Changes: windows were cropped from the distributed int8 embeddings and
+  their scale planes; codes are lossy encodings of them. These files
+  are shared under the same licence.
+
+
+Major TOM Core-S2L1C -- CC-BY-SA 4.0 (LICENSES/CC-BY-SA-4.0.txt)
+
+  Major TOM Core-S2L1C (https://huggingface.co/datasets/Major-TOM/Core-S2L1C).
+  Contains modified Copernicus Sentinel data [2016-2024].
+
+  Files:
+    artifacts/s2_stats_pca.npz
+        a PCA basis fitted to per-tile band statistics of Core-S2L1C
+        chips.
+  Changes: only fitted statistics are included, no imagery. This file
+  is shared under the same licence.
+
+
+ERA5 (ECMWF, Copernicus Climate Change Service) -- CC-BY 4.0
+(LICENSES/CC-BY-4.0.txt)
+
+  ECMWF Reanalysis data (ERA5), (c) European Centre for Medium-Range
+  Weather Forecasts (ECMWF), retrieved via the Copernicus Climate Data
+  Store. Contains modified Copernicus Climate Change Service information.
+  Neither the European Commission nor ECMWF is responsible for any use
+  that may be made of the Copernicus information or data it contains.
+
+  Files:
+    georvq/sources/era5_stats.json
+        per-variable, per-level moments of the ERA5 training store.
+    lab/experiments/era5-onboarding-probes-2026-08-31/level_stats.json
+        per-level statistics from the same store.
+    lab/experiments/era5-q-boxcox-2026-09-08/*.png
+        histograms of ERA5 specific humidity.
+  Changes: only summary statistics and histograms are included.
