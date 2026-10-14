@@ -1099,9 +1099,10 @@ class AEV2Dataset(WindowMethodsMixin, TransformMethodsMixin):
         / `out` sample at nearest-neighbour positions as GDAL does; other
         `resampling` methods raise NotImplementedError. `masked` returns
         a numpy masked array masking nodata pixels and pixels outside the
-        raster (where rasterio, for a boundless read with a fill_value,
-        masks only the outside). `out_dtype` converts as GDAL does,
-        clamping integers to the type's range.
+        raster; for a boundless read with a `fill_value` it masks, as
+        rasterio does, the pixels outside the raster and those equal to
+        `fill_value`, and not nodata pixels. `out_dtype`
+        converts as GDAL does, clamping integers to the type's range.
 
         `quality`: a rung ("8-8-2" or a tuple), a bound on a quality stat
         ("p99<=0.02", resolved per window to the cheapest rung meeting
@@ -1137,7 +1138,12 @@ class AEV2Dataset(WindowMethodsMixin, TransformMethodsMixin):
             elif not masked:
                 res[nod] = fill_value
         if masked:
-            res = np.ma.array(res, mask=nod, fill_value=(
+            # rasterio reads a boundless window through a VRT whose nodata
+            # is the fill_value: it masks the pixels outside the raster and
+            # those equal to fill_value, and leaves nodata pixels unmasked
+            mask = (~inside[None] | (res == fill_value)
+                    if boundless and fill_value is not None else nod)
+            res = np.ma.array(res, mask=mask, fill_value=(
                 fill_value if fill_value is not None else self.nodata))
         if two_d:
             res = res[0]

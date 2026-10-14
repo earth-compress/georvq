@@ -379,6 +379,12 @@ READ_CASES = [
     {"window": Window(40, 0, 90, 60), "masked": True},
     {"window": Window(40, 0, 90, 60), "masked": True, "fill_value": 5},
     {"window": Window(-20, 150, 90, 80), "boundless": True, "masked": True},
+    # rasterio masks the outside and pixels equal to fill_value here,
+    # not nodata
+    {"window": Window(-20, 150, 90, 80), "boundless": True, "masked": True,
+     "fill_value": 7},
+    {"window": Window(-20, 150, 90, 80), "boundless": True, "masked": True,
+     "fill_value": 7, "out_dtype": "float32", "out_shape": (17, 23)},
     {"window": Window(40, 0, 90, 60), "out_dtype": "uint8"},
     {"window": Window(40, 0, 90, 60), "out_dtype": "float32", "masked": True},
 ]
@@ -402,19 +408,6 @@ def test_read_matches_rasterio_on_the_decoded_tile(setup, recon, kw, indexes):
         m_got, m_want = ds.read_masks(indexes, **mkw), r.read_masks(indexes, **mkw)
         assert m_got.dtype == np.uint8 and np.array_equal(m_got, m_want)
         assert np.array_equal(ds.dataset_mask(**mkw), r.dataset_mask(**mkw))
-
-
-def test_boundless_masked_read_with_a_fill_value_masks_nodata(setup, recon):
-    # rasterio masks only the outside here; the dataset also masks nodata
-    kw = {"window": Window(-20, 150, 90, 80), "boundless": True,
-          "masked": True, "fill_value": 7}
-    with rasterio.open(recon) as r, \
-            v2.open_dataset(setup["file"], codec=setup["codec"]) as ds:
-        got, want = ds.read(quality="3-2-1", **kw), r.read(**kw)
-        assert np.array_equal(got.data, want.data) and got.fill_value == 7
-        outside = ~np.ma.getmaskarray(r.read(window=kw["window"],
-                                             boundless=True, masked=True))
-        assert np.array_equal(~got.mask, outside)
 
 
 def test_read_out_and_resampling(setup, recon):
