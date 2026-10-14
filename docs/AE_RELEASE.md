@@ -2,13 +2,11 @@ Draft for review: wording not yet approved by the maintainer; `[pending: ...]` m
 
 # The AlphaEarth release codec
 
-The release codec for the AlphaEarth Foundations annual
-embedding tiles. Each source tile becomes one GeoParquet file that can
-be read in place of the source tile, at any of 23 rates, with windowed
-range reads over HTTP. The release policy lives in `georvq/ae/v2.py`;
-the container is the source-agnostic `georvq/inference/georvq_parquet.py`
-and the mean coder is `RVQPCAMeanChannel` in
-`georvq/inference/mean_codec.py`.
+This document describes the released georvq codec for the AlphaEarth Foundations annual
+embedding tiles. The model that this codec uses is [released on HuggingFace]([pending: hosting]). 
+We use this codec to encode source tiles into a geoparquet file that contains the compressed
+blobs used by the decoder. These GeoParquet files can be streamed from their location on the cloud at any of 23 bitrates, with windowed
+range reads over HTTP, allowing users to access lossily compressed AlphaEarth Foundations data at bitrates from ~0.1-7.5 bits per pixel, with cosine similarity going from 97.2% to 99.8%. The code that this release uses is in `georvq/ae/v2.py`, and the GeoParquet file format is defined in `georvq/inference/georvq_parquet.py`.
 
 ## Who is this for
 
@@ -18,7 +16,9 @@ and the mean coder is `RVQPCAMeanChannel` in
 | archive operator, bulk-encoding source tiles | `python -m georvq.ae.v2 encode` on a GPU, the quality column, the Encoding cost section |
 | codec researcher | `georvq/{model,train,...}` and `docs/OVERVIEW.md`; `georvq/ae/v2.py` is a worked example of a release layer on the GeoParquet container |
 
-## The release
+## Model details
+
+Note: this information only makes sense if you are familiar with the georvq codebase, and you can just ignore it if you're more interested in the data.
 
 - Model: a `stats_cond` model with 8-bit (int8) codebooks: window 64 px, 64 bands, tiers `1:256:2048:8` /
   `4:192:8192:8` / `16:64:16384:8`, minimum depths `2-0-0`. The weights
@@ -41,7 +41,7 @@ and the mean coder is `RVQPCAMeanChannel` in
   Runtime (`backend="onnx"`, or `--backend onnx` on the command line);
   its output matches torch to about 1e-6.
 
-## Format: one tile = one GeoParquet file
+## Data Format
 
 We are using a mirrored structure to [Taylor Geospatial's AlphaEarth release on source.coop](https://source.coop/tge-labs/aef), where each of our geoparquet files corresponds to one of their 8192x8192 tiles. Because of the structure of the georvq model's outputs, we've opted to use a geoparquet file so that we can make independent chunks for different parts of the model's output. These files are named `{source stem}.georvq.parquet` and
 placed at the path that mirrors the source tile's path
@@ -78,6 +78,8 @@ tile measured below (2021, zone 44N, 11% nodata) the file is 64.2 MB:
 Functionally, most users will not need to worry about anything beyond this, as our reader handles the filesystem and requests for you. For those interested to learn more about how those files are arranged, refer to `docs/GEORVQ_PARQUET.md`. 
 
 ## Reading
+
+The main principle being followed in the reader's design is to mirror the behaviour of a rasterio file object's read method, so that after replacing `rasterio.open()` with `georvq.ae.open()` in your code, the `.read` will work as it did before. This is to make the transition as straightforward as possible for people who are already using the AlphaEarth Foundations dataset on source.coop.
 
 `georvq.ae.open(path_or_url, ...)` returns a lazy-loaded read-only dataset with the
 source tile's georeferencing and shape: `crs`, `transform`, `width`,
@@ -164,7 +166,7 @@ per pixel, and `info` prints them.
 
 ## Getting the model
 
-Weights are not in git. They will be published on Hugging Face as
+Weights are not in git. They are published on Hugging Face as
 `earth-compress/georvq-ae-v2` `[pending: hosting]`, without pickled
 files: model tensors, codebooks, mean-channel tables, the rung table
 and a `bundle.json` holding the ids.
@@ -180,11 +182,10 @@ huggingface-cli download earth-compress/georvq-ae-v2 \
 Encoded tiles will be hosted at `<host>/annual/{year}/{zone}/{stem}.georvq.parquet`
 `[pending: hosting]`; `georvq.ae.open` reads them by URL.
 
-## Encoding cost
+## Encoding and decoding cost
 
-Over the 16 tiles, on one A100: encoding takes about 113 s per full
-tile with the quality stats (less for partial tiles), and decoding a
-whole tile takes 7-9 s at every rung, because the decoder runs at full
-resolution whatever the depth; fetching the codes is under 1.3 s of
-that. On CPU through ONNX Runtime, decoding runs at about 45 windows/s
+The data comes with precomputed quality metrics that are calculated by encoding once and then decoding 
+at 23 different bitrates. This means that the time taken for encoding is actually dominated by decodes. The encoding takes about 20 s per tile on an A100, but with quality measures, the process takes 113 s per tile. 
+
+For a user, decoding on one A100 takes 7-9 s for a whole tile at any rung, because the decoder runs at full resolution whatever the depth, and fetching the codes is under 1.3 s of that. A single 1024 px block takes about 0.1 s of GPU time, so reading one over HTTP is dominated by the requests: about 1.6 s in all at the latency and throughput measured from our server to Source Cooperative. On CPU through ONNX Runtime, decoding runs at about 45 windows/s
 with 16 threads, about 6 minutes for a full tile.
