@@ -53,9 +53,9 @@ GeoParquet file per source tile, a column per RVQ level
 ## Entropy coding (not shipped)
 
 Measured on the first AlphaEarth release, order-0 rANS recovered only
-~0.6% over deflated raw indices (the fine tier runs at ~95% of codebook
-entropy), so the shipped formats store uncoded indices, and the rANS
-archive writer has been removed.
+~0.6% over deflated raw indices (the fine tier ran at ~95% of codebook
+entropy), so the shipped formats store uncoded indices and georvq has
+no entropy coder.
 
 Models trained with the context entropy model report their
 *achievable* rate (`model.entropy_level_bits`, hard-index -log2 q). The gap
