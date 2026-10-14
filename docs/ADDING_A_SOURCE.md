@@ -91,9 +91,16 @@ Subclass `georvq.sources.Source` and add it to the `SOURCES` table in
   source's choice: S2 packs them with
   `georvq.inference.stats_codec.StatsPacker` (about 10 bytes at low
   rates), DEM sends two float32 values.
+  A normalizer whose stats are per sample sets `per_sample = True`, so
+  that `SourcePrep.inverse` takes the batch's own stats and
+  `SourcePrep.invertible` is False. Constants the source fits once (for
+  example the size of S2's PCA stats channel) are embedded in the
+  checkpoint through `prep_state()` and restored by
+  `load_prep_state(state)`.
   A separate option, `model.stats_cond`, *transmits* the per-window mean
   and codes only the remainder; it pays when the mean is a large share of
-  window energy and the field is not unit-norm. The codec charges that
+  window energy. On a unit-norm field such as AlphaEarth the decoder
+  renormalises after the mean is added back. The codec charges that
   channel itself.
 - `recon_stats(out, x, valid) -> (loss, metrics)` — the training loss and
   quality metrics in model space.
@@ -120,11 +127,12 @@ Subclass `georvq.sources.Source` and add it to the `SOURCES` table in
 `georvq/sources/s2.py` is the full multi-resolution example.
 
 A newer layer separates two things `prep` used to do at once: a
-sampler (`data.sampler`, `georvq/data/sampler.py`) decides the sample
-geometry, and a prep (`data.prep`, `georvq/sources/prep.py`) is a
+sampler (`georvq/data/sampler.py`, a single `WindowSampler` with no
+config of its own) cuts the sample from the pool, and a prep
+(`data.prep`, `georvq/sources/prep.py`) is a
 static, fitted transform to model space with a declared inverse. Sources
 are moving to it one at a time; ERA5's Box-Cox prep is the first, and
-leaving both fields unset gives the behaviour described above.
+leaving `data.prep` unset gives the behaviour described above.
 
 ## 3. A YAML preset
 
@@ -149,14 +157,15 @@ fastest way to see which decisions are policy rather than architecture:
 
 | | AlphaEarth (`georvq/ae/`) | Tessera (`georvq/tessera/`) |
 |---|---|---|
-| container | COG assets mirroring the source's 1024 px block quantum | packets; no container yet, none required |
-| stats channel | none — the field is exactly unit-norm | the patch mean, 768 bits/window, charged |
-| refinement | coarse tier, 2-bit uniform, always on (+1.5% rate) | fine tier, 1-bit rotated Lloyd, opt-in (+150% rate) |
+| container | one GeoParquet file per source tile | packets; no container yet, none required |
+| stats channel | the window mean, 440 bits/window (RVQ + PCA), charged | the patch mean, 768 bits/window, charged |
+| refinement | none | fine tier, 1-bit rotated Lloyd, opt-in (+150% rate) |
 | quality control | encode-time measured error ladder | not built — nobody has asked |
 
 Every one of those differences is a measured response to the data, and
-the refinement row is the cautionary one: the coarse-tier sidecar that
-recovers ~98% of AlphaEarth's quantizer gap recovers 0.0% on Tessera.
+the refinement row is the cautionary one: the coarse-tier refinement
+that recovered ~98% of the first AlphaEarth release's quantizer gap
+recovers 0.0% on Tessera.
 Locate your model's slack (compare full-depth reconstruction against the
 un-quantized ceiling, per tier) before copying either.
 
