@@ -291,4 +291,5 @@ def test_tile_helpers_match_per_window_coding(tiny_release):
     x, v = prep(emb)
     xw, vw, _ = to_windows(x, v, R.window)
     want = R.decode(R.encode(xw, vw), depths=[3, 2, 2])
-    assert torch.equal(to_windows(tile, v, R.window)[0], want)
+    # different batch sizes: float matrix products may differ in the last bits
+    assert torch.allclose(to_windows(tile, v, R.window)[0], want, rtol=0, atol=1e-5)
