@@ -10,7 +10,7 @@ training used.
 
     python scripts/build_release_tessera.py \
         --ckpt .../statscond_step32500.pt \
-        --out /data/georvq-releases/tessera-beta-v1/bundle --gpu 1
+        --out /data/georvq-releases/tessera-beta-v1/bundle --gpu 0
 """
 from __future__ import annotations
 
@@ -32,7 +32,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--ckpt", required=True)
     ap.add_argument("--out", required=True)
-    ap.add_argument("--gpu", type=int, default=1)
+    ap.add_argument("--gpu", type=int, default=0,
+                    help="CUDA device index, -1 for CPU (under Slurm the "
+                         "allocated card is 0)")
     ap.add_argument("--fit-windows", type=int, default=512)
     ap.add_argument("--eval-windows", type=int, default=512)
     ap.add_argument("--chunk", type=int, default=8)
