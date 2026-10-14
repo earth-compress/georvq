@@ -25,6 +25,25 @@ def test_a_checkpoint_carrying_retired_fields_still_loads():
     Config.model_validate(drop_retired(raw))     # ...but recoverable
 
 
+def test_slim_tier2_fields_still_validate_from_a_checkpoint():
+    """Configs saved before the trap and the sampler seam were removed
+    carry them, sometimes with non-default values."""
+    raw = _raw()
+    raw["train"]["trap"] = {"gnorm_abs": 0.5, "gnorm_ratio": 10.0,
+                            "min_step": 200, "n_dumps": 3, "cooldown": 250,
+                            "hold": True, "hold_port": 4444,
+                            "hold_timeout": 14400.0, "snapshot_every": 500,
+                            "stats_every": 10, "batch_history_bytes": 0,
+                            "flight_maxlen": 20000}
+    with pytest.raises(Exception):
+        Config.model_validate(raw)
+    cfg = Config.model_validate(drop_retired(raw))
+    assert cfg.model_dump(mode="json") == Config.model_validate(
+        _raw()).model_dump(mode="json")
+    raw["train"]["trap"] = None
+    Config.model_validate(drop_retired(raw))
+
+
 def test_yaml_presets_still_hard_fail_on_unknown_keys():
     """Retirement is for history, not for typos: a stray key in a preset
     is a mistake and must still be an error."""

@@ -491,17 +491,6 @@ def _train(cfg: Config, gpu, stop):
                   f"moments at lr=0.", flush=True)
         del ck
 
-    trap = None
-    if cfg.train.trap is not None and D.is_main():
-        from georvq.train.trap import Trap
-        assert cfg.model.vq is not None and cfg.model.vq.clip_norm, \
-            "trap needs model.vq.clip_norm for the gnorm"
-        trap = Trap(cfg.train.trap, model, run_dir)
-        print(f"trap armed: abs>{cfg.train.trap.gnorm_abs} and "
-              f"ratio>{cfg.train.trap.gnorm_ratio}x EMA, "
-              f"{cfg.train.trap.n_dumps} dumps, hold="
-              f"{cfg.train.trap.hold}", flush=True)
-
     use_wandb = cfg.log.wandb and D.is_main()
     step0 = cfg.log.step_offset
     reporter = None
@@ -688,7 +677,6 @@ def _train(cfg: Config, gpu, stop):
                 out = model.decode(zs, Lw, st, valid)
             out = out.float()
             commit = torch.zeros((), device=device)
-            Ls_used = Lw
         else:
             if cfg.model.depth_sampling == "path":
                 Ls = sample_path_depths(x.shape[0], specs, device, mins=mins,
@@ -723,7 +711,6 @@ def _train(cfg: Config, gpu, stop):
             with amp:
                 out = model.decode(zqs, Ls, st, valid)
             out = out.float()
-            Ls_used = Ls
         recon_loss, m = source.recon_stats(out, x, valid)
         # ladder decoder: every exit a row's tuple licenses is supervised
         # (1:1:1); `out` carries the deepest, the shallower ones are here
@@ -770,35 +757,6 @@ def _train(cfg: Config, gpu, stop):
         if v.clip_norm:
             gnorm = float(torch.nn.utils.clip_grad_norm_(
                 base_p + rate_p, v.clip_norm))
-            if trap is not None:
-                # observe (and possibly dump) BEFORE the non-finite skip
-                # zeroes the grads and before opt.step() moves the
-                # weights: a dump holds the exact pre-transition state.
-                # Scalars only on stats-cadence or loud steps: each
-                # float() is a host sync (clip has already synced once,
-                # but ~12 conversions per step still add up)
-                tscal = {}
-                if (gnorm > 0.5 * trap.cfg.gnorm_abs
-                        or not math.isfinite(gnorm)
-                        or step % max(trap.cfg.stats_every, 1) == 0):
-                    tscal = {"loss": float(loss.detach()),
-                             "recon": float(recon_loss.detach()),
-                             "commit": float(commit.detach()),
-                             "select": float(select.detach()),
-                             **{f"aux{i}": float(a)
-                                for i, a in enumerate(aux_vals)},
-                             **{f"act_{k}": float(av) for k, av in
-                                getattr(model.decoder, "act_max",
-                                        {}).items()}}
-                if trap.observe(step, gnorm, opt, tscal):
-                    trap.dump(step, model, opt, sched,
-                              batch={"x": x, "valid": valid, "st": st,
-                                     "Ls": Ls_used, "loc": loc, "pt": pt},
-                              scalars={"gnorm": gnorm, **tscal})
-                    if trap.cfg.hold and trap.dumps == 1:
-                        # hold only at the first trip (the onset); later
-                        # trips in the same storm dump and move on
-                        trap.hold({"trap": trap})
         skipped = gnorm is not None and not math.isfinite(gnorm)
         if skipped:
             # a non-finite gradient would write NaN/inf into Adam's
@@ -812,10 +770,6 @@ def _train(cfg: Config, gpu, stop):
         else:
             opt.step()
         sched.step()
-        if trap is not None and not skipped:
-            trap.after_step(step, model, opt,
-                            {"x": x, "valid": valid, "st": st,
-                             "Ls": Ls_used, "loc": loc, "pt": pt})
 
         rst = {}
         for i, rvq in enumerate(model.rvqs):

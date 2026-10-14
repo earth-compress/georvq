@@ -52,13 +52,13 @@ def main():
         specs = load_config(cand, []).model.tiers
         print(f"specs from {cand}")
     else:
-        from georvq.config import Config
+        from georvq.config import Config, migrate
         cfg = dict(run.config)
         if not cfg.get("model"):
             raise SystemExit(
                 f"no tier specs: {cand} not found and the run's wandb "
                 f"config is empty (still syncing?). Pass --config.")
-        specs = Config.model_validate(cfg).model.tiers
+        specs = Config.model_validate(migrate(cfg)).model.tiers
 
     keys = [k for k in run.summary.keys() if k.startswith("reset/")] or None
     hist = run.history(keys=None, pandas=True)

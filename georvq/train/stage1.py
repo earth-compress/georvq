@@ -32,7 +32,7 @@ from georvq.train.warmstart import load_partial
 
 #: train.* knobs the stage-2 loop implements and this trainer does not.
 #: A stage-1 config that sets one is refused rather than run without it.
-UNSUPPORTED_TRAIN = ("batch_ramp", "guard_drop", "trap", "resume",
+UNSUPPORTED_TRAIN = ("batch_ramp", "guard_drop", "resume",
                      "freeze_encoder_steps", "freeze_codec",
                      "freeze_head_steps", "refit_books")
 
