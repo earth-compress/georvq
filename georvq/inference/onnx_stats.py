@@ -126,7 +126,7 @@ def export_stats_onnx(model, out_dir, extra_id=(), meta_extra=None,
         os.path.join(out_dir, ENCODER_NAME),
         input_names=["x", "stats", "valid"], output_names=z_names,
         dynamic_shapes=({0: batch}, {0: batch}, {0: batch}),
-        opset_version=opset)
+        opset_version=opset, dynamo=True)
 
     with torch.no_grad():
         zs = model.encode_levels(x, stats, valid)
@@ -140,7 +140,7 @@ def export_stats_onnx(model, out_dir, extra_id=(), meta_extra=None,
         output_names=["recon"],
         dynamic_shapes=(tuple({0: batch} for _ in specs), {0: batch},
                         {0: batch}, {0: batch}),
-        opset_version=opset)
+        opset_version=opset, dynamo=True)
 
     books = {f"cb_t{i}_l{j}": lev.codebook.weight.detach()
              .float().cpu().numpy()

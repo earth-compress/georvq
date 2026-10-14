@@ -1,0 +1,38 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  fast-suite:
+    name: python ${{ matrix.python }}, torch ${{ matrix.torch }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # the declared floors: requires-python, torch, numpy, onnxruntime,
+          # rasterio
+          - python: "3.10"
+            torch: "2.10.0"
+            pins: "numpy==2.0.2 onnxruntime==1.19.2 rasterio==1.4.0"
+          # the latest releases
+          - python: "3.13"
+            torch: "2.14.1"
+            pins: ""
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install "torch==${{ matrix.torch }}" \
+            --index-url https://download.pytorch.org/whl/cpu
+          pip install -e ".[dev,onnx]" ${{ matrix.pins }}
+      - name: Fast suite
+        # the release golden gates skip: their bundles are not on the runner
+        run: pytest -m "not slow" -rs
