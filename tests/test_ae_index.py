@@ -229,3 +229,22 @@ def test_real_file_against_the_aef_index():
     assert r["rungs"][-1]["rung"] == "8-8-8"
     assert (r["rungs"][-1]["bytes"] + r["quality_bytes"] + r["footer_bytes"]
             < r["file_bytes"])
+
+
+def test_build_script_warns_without_a_url_prefix(tmp_path, monkeypatch, capsys):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "build_ae_index", "scripts/build_ae_index.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    class _T:
+        num_rows = 0
+    monkeypatch.setattr(mod, "build_index", lambda *a, **kw: _T())
+    assert mod.main([str(tmp_path), "--source-index", "x.parquet",
+                     "--out", str(tmp_path / "i.parquet")]) == 0
+    assert "no --url-prefix" in capsys.readouterr().err
+    assert mod.main([str(tmp_path), "--source-index", "x.parquet",
+                     "--url-prefix", "annual",
+                     "--out", str(tmp_path / "i.parquet")]) == 0
+    assert "url-prefix" not in capsys.readouterr().err
