@@ -10,8 +10,10 @@ HuggingFace (`huggingface_hub`, install extra `georvq[loc]`).
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 
 import numpy as np
 import torch
@@ -32,12 +34,20 @@ def _satclip_src() -> str:
                          "satclip")
     if not os.path.isdir(os.path.join(cache, "satclip")):
         os.makedirs(os.path.dirname(cache), exist_ok=True)
+        # clone and pin in a staging directory, and move it into place
+        # only once pinned, so a failed checkout never leaves an
+        # unpinned clone where the next call would reuse it
+        tmp = tempfile.mkdtemp(prefix="satclip-", dir=os.path.dirname(cache))
         try:
-            subprocess.run(["git", "clone", "--quiet", SATCLIP_GIT, cache],
+            subprocess.run(["git", "clone", "--quiet", SATCLIP_GIT, tmp],
                            check=True)
-            subprocess.run(["git", "-C", cache, "checkout", "--quiet",
+            subprocess.run(["git", "-C", tmp, "checkout", "--quiet",
                             SATCLIP_COMMIT], check=True)
+            if os.path.isdir(cache):         # a stale clone with no package
+                shutil.rmtree(cache)
+            os.replace(tmp, cache)
         except Exception as e:
+            shutil.rmtree(tmp, ignore_errors=True)
             raise RuntimeError(
                 f"could not fetch the SatCLIP source ({e}); clone "
                 f"{SATCLIP_GIT} yourself and set GEORVQ_SATCLIP_DIR") from e
@@ -135,7 +145,8 @@ def build_base(d_in, d_out, hidden=512, layers=1, bottleneck=0, pre_layers=0,
 def load_coarse_prior(ckpt_path, out_dim, device):
     """A pretrained frozen location->coarse-latent prior (see
     scripts/pretrain_location_prior.py). Returns (module, feature_dim)."""
-    bk = torch.load(ckpt_path, map_location=device, weights_only=False)
+    from georvq.repro import load_checkpoint
+    bk = load_checkpoint(ckpt_path, map_location=device)
     m = build_base(bk["sdim"], out_dim, bk["hidden"], bk["layers"],
                    bottleneck=bk.get("bottleneck", 0),
                    pre_layers=bk.get("pre_layers", 0),

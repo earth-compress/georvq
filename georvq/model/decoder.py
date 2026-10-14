@@ -75,7 +75,6 @@ class PyramidAttnDecoder(nn.Module):
         self.grad_ckpt = False        # set by the factory from train cfg
         self.specs = specs
         self.fine = specs[-1]
-        fdim = dim
         n_tokens = sum(sp.cells for sp in specs)
         self.projs = nn.ModuleList([
             nn.Linear(sp.dim, dim)
@@ -105,9 +104,8 @@ class PyramidAttnDecoder(nn.Module):
     def head_in_dim(specs, dim, cls_bridge):
         """Input width of the pixel head: fine token, plus (with cls_bridge)
         every ancestor token concatenated per fine cell."""
-        fdim = dim
         cls_bridge = cls_bridge and len(specs) > 1
-        return fdim + (dim * (len(specs) - 1) if cls_bridge else 0)
+        return dim + (dim * (len(specs) - 1) if cls_bridge else 0)
 
     def forward(self, zqs, cond_arg, stats=None):
         """zqs: list of (B, cells_i, dim_i). cond_arg: (B, n_tiers) integer
@@ -226,7 +224,7 @@ class DecoderBank(nn.Module):
     def _one(self, k, zqs, cond_arg, stats, native):
         dec = self.members[k]
         n = len(dec.specs)
-        out = dec([z[:, :, :] for z in zqs[:n]], cond_arg[:, :n], stats=stats)
+        out = dec(list(zqs[:n]), cond_arg[:, :n], stats=stats)
         return out if native else _to_window(out, self.window)
 
     def forward(self, zqs, cond_arg, stats=None, member=None,
