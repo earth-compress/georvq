@@ -648,6 +648,17 @@ class TrainConfig(StrictModel):
     tf32: bool = True
     compile: bool = False          # torch.compile the trunk layer forwards
     init_from: Optional[Path] = None
+    # A warm start with vq.warmup_steps > 0 refits the codebooks by
+    # k-means at warmup_steps + 1. When the init_from checkpoint supplied
+    # shape-matching books, that refit discards them, and the trainer
+    # refuses to start unless this is set to say the refit is intended
+    # (a cascade whose books must now quantize residuals, for example).
+    refit_books: bool = False
+    # Continue a run from its own checkpoint (a model.pt written by this
+    # trainer): weights, optimizer, scheduler, step, best score, RNG
+    # state and per-level reset/decay state are restored, and the
+    # schedule carries on from the saved step. Exclusive with init_from.
+    resume: Optional[Path] = None
     freeze_encoder_steps: int = 0
     freeze_codec: bool = False
     # Hold the decoder's output end still while its internal representation

@@ -84,7 +84,14 @@ class LiveDEMStore:
         self.grid_period = m.get("grid_period")
         self.index = pd.read_parquet(
             os.path.join(self.dir, "index.parquet"))
-        # O(1) hot-path lookup tables (pool threads bypass pandas)
+        # O(1) hot-path lookup tables (pool threads bypass pandas),
+        # indexed by chip_id, so row i of the index must be chip i
+        ids = self.index.chip_id.to_numpy()
+        if not np.array_equal(ids, np.arange(len(ids))):
+            raise ValueError(
+                f"{self.dir}/index.parquet: chip_id must equal the row "
+                f"position (0..{len(ids) - 1} in order); read_chip indexes "
+                f"its lookup tables by chip_id")
         self._band = self.index.band.to_numpy(np.int32)
         self._vrow0 = self.index.vrow0.to_numpy(np.int64)
         self._vcol0 = self.index.vcol0.to_numpy(np.int64)

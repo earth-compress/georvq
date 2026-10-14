@@ -112,3 +112,34 @@ def test_physical_metric_routes_through_prep_inverse():
     assert phys.space == "physical"
     want = masked_rmse(p.inverse(o, {}), p.inverse(x, {}), v)
     assert torch.allclose(phys(p.inverse(o, {}), p.inverse(x, {}), v), want)
+
+
+def test_params_reach_the_constructors(rig):
+    """data.sampler.params / data.prep.params are passed on, so a
+    component that takes none rejects them instead of ignoring them."""
+    cfg, source, pool = rig
+    with pytest.raises(ValueError, match="data.sampler.params"):
+        build_sampler(None, pool, cfg.model, source=source,
+                      params={"stride": 2})
+    with pytest.raises(ValueError, match="data.prep.params"):
+        build_prep(None, source, cfg.model, params="fitted_v1")
+
+    class _Sampler(WindowSampler):
+        def __init__(self, pool, model_cfg, stride=1):
+            super().__init__(pool, model_cfg)
+            self.stride = stride
+
+    class _Prep(SourcePrep):
+        def __init__(self, source, model_cfg, params=None):
+            super().__init__(source, model_cfg)
+            self.params = params
+
+    source.default_sampler = _Sampler
+    source.named_preps = lambda: {"fitted": _Prep}
+    try:
+        assert build_sampler(None, pool, cfg.model, source=source,
+                             params={"stride": 2}).stride == 2
+        assert build_prep("fitted", source, cfg.model,
+                          params="v1").params == "v1"
+    finally:
+        del source.default_sampler, source.named_preps

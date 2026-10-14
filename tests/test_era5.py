@@ -158,3 +158,58 @@ def test_boxcox_variant_roundtrips_and_departs_from_raw():
     # rmse_phys of a perfect reconstruction is zero
     v = torch.ones(2, 8, 8, dtype=torch.bool)
     assert float(bc._rmse_phys(yb, yb, v)) < 1e-9
+
+
+def test_nan_coded_variable_is_served_as_nan(tmp_path):
+    """sst-style variables reserve -32768 as NaN and dequantize with
+    +32767; variables not listed in nan_coded_vars keep +32768."""
+    zarr = pytest.importorskip("zarr")
+    q_t, sc_t, off_t = _synth_store(tmp_path)
+    root = zarr.open(str(tmp_path / "cubes.zarr"), mode="a")
+    rng = np.random.default_rng(1)
+    q = rng.integers(-32767, 32767, (2, 8, 8, 8)).astype(np.int16)
+    q[:, :, :3, :2] = -32768                      # "land"
+    root.create_array("sst", shape=q.shape, dtype="int16")[:] = q
+    sc = rng.uniform(1e-3, 2e-3, 2)
+    off = rng.uniform(270, 280, 2)
+    root.create_array("sst_scale", shape=sc.shape, dtype="float64")[:] = sc
+    root.create_array("sst_offset", shape=off.shape, dtype="float64")[:] = off
+    root.attrs.update({"nan_coded_vars": ["sst"]})
+    from georvq.data.store import open_store
+    stores = {}
+    for var in ("sst", "t"):
+        out = tmp_path / f"store_{var}"
+        subprocess.run(
+            [sys.executable, str(REPO / "scripts" / "index_store_era5.py"),
+             "--zarr-dir", str(tmp_path), "--var", var,
+             "--stride-h", "2", "--out", str(out)], check=True)
+        stores[var] = open_store(out)
+    chip = stores["sst"].open_shard(1)[4]
+    assert chip.shape == (1, 8, 8)
+    gap = q[1, 4] == -32768
+    assert np.isnan(chip[0][gap]).all() and gap.sum() == 6
+    want = (q[1, 4].astype(np.int64) + 32767) * sc[1] + off[1]
+    np.testing.assert_allclose(chip[0][~gap], want[~gap].astype(np.float32),
+                               rtol=0, atol=0)
+    t = stores["t"].open_shard(1)[4]
+    want_t = ((q_t[1, :, 4].astype(np.int64) + 32768)
+              * sc_t[1][:, None, None] + off_t[1][:, None, None])
+    np.testing.assert_allclose(t, want_t.astype(np.float32), rtol=0, atol=0)
+
+
+def test_prep_marks_nan_pixels_invalid(era5_cfg):
+    src = get_source("era5:t", era5_cfg.model)
+    raw = 250 + 5 * torch.randn(3, 37, 8, 8,
+                                generator=torch.Generator().manual_seed(0))
+    x0, v0 = src.prep(raw, "cpu")
+    assert v0.all()
+    gappy = raw.clone()
+    gappy[1, :, 2:4, 5] = float("nan")
+    gappy[2, 7, 0, 0] = float("nan")              # one level missing
+    x, v = src.prep(gappy, "cpu")
+    assert torch.isfinite(x).all()
+    assert int((~v).sum()) == 3 and not v[1, 2, 5] and not v[2, 0, 0]
+    assert (x[1, :, 2:4, 5] == 0).all()
+    # finite pixels are prepped exactly as in a gap-free batch
+    assert torch.equal(x[v.unsqueeze(1).expand_as(x)],
+                       x0[v.unsqueeze(1).expand_as(x0)])

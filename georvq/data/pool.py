@@ -140,6 +140,13 @@ class ChipPool:
                                     device=self.pool_device)   # chip-row per slot (side-info)
         self.cuda_lock = threading.Lock()
         self.chips_loaded = 0
+        # refresh read failures: counted, logged and backed off by the
+        # reader threads; the training thread raises in sample_batch once
+        # they look like a broken store rather than the odd bad chip
+        self.read_failures = 0
+        self._consecutive_failures = 0
+        self._fail_lock = threading.Lock()
+        self._last_failure = None
         self.stop = threading.Event()
         self._sleep = workers / max(refresh_chips_per_s, 1e-3)
         if cycle:
@@ -158,6 +165,8 @@ class ChipPool:
                  f"({self._n_tiles / pool_size:.1f} pool-fills/epoch) ..."
                  if cycle else f"from {len(self.rows)} train chips ..."),
               flush=True)
+        if self.pool_device.type == "cpu":
+            _warn_slurm_mem(nbytes)
         from concurrent.futures import ThreadPoolExecutor
 
         def _fill(i):
@@ -256,17 +265,67 @@ class ChipPool:
         r = self.rows.iloc[ri]
         return self._read_at(r, self._rand_r0(rng)), ri
 
+    #: The training thread raises once this many refresh reads in a row
+    #: have failed across all workers (the store is unreachable), or once
+    #: failures pass MAX_FAIL_FRAC of all refresh reads after
+    #: MIN_FAILURES of them.
+    MAX_CONSECUTIVE_FAILURES = 50
+    MIN_FAILURES = 100
+    MAX_FAIL_FRAC = 0.05
+
+    def _read_ok(self):
+        if self._consecutive_failures:
+            with self._fail_lock:
+                self._consecutive_failures = 0
+
+    def _read_failed(self, exc, what, streak):
+        """Count and log one failed refresh read, then back off. Returns
+        the worker's new failure streak."""
+        with self._fail_lock:
+            self.read_failures += 1
+            self._consecutive_failures += 1
+            self._last_failure = f"{what}: {exc!r}"
+            n = self.read_failures
+        if n <= 10 or n % 100 == 0:
+            print(f"pool: refresh read failed ({what}): {exc!r} "
+                  f"[{n} failures so far]", flush=True)
+        streak += 1
+        self.stop.wait(min(60.0, self._sleep * 2 ** min(streak, 10)))
+        return streak
+
+    def check_health(self):
+        """Raise if the refresh threads' read failures say the store is
+        broken. Called from the training thread."""
+        n = self.read_failures
+        if not n:
+            return
+        frac = n / max(n + self.chips_loaded, 1)
+        if (self._consecutive_failures >= self.MAX_CONSECUTIVE_FAILURES
+                or (n >= self.MIN_FAILURES and frac > self.MAX_FAIL_FRAC)):
+            raise RuntimeError(
+                f"pool refresh failing: {n} failed reads ({frac:.1%} of "
+                f"refresh reads, {self._consecutive_failures} in a row); "
+                f"last: {self._last_failure}")
+
     def _refresher(self, seed):
         rng = np.random.default_rng(seed)
+        streak = 0
         while not self.stop.is_set():
             slot = int(rng.integers(0, self.pool.shape[0]))
             # coverage mode: keep every chip resident, just re-roll its strip
             ridx = slot if self.coverage else None
-            data, ri = self._load(rng, ridx); self.slot_row[slot] = ri
+            try:
+                data, ri = self._load(rng, ridx)
+            except Exception as e:      # a bad chip must not end the thread
+                streak = self._read_failed(e, f"slot {slot}", streak)
+                continue
+            streak = 0
+            self._read_ok()
+            self.slot_row[slot] = ri
             with self.cuda_lock:
                 self._write_slot(slot, data, pin=True)
             self.chips_loaded += 1
-            time.sleep(self._sleep)
+            self.stop.wait(self._sleep)
 
     # ---- cycle mode: FIFO sweep over a shuffled full-dataset tile cursor ----
     def _build_cursor(self, seed):
@@ -324,13 +383,22 @@ class ChipPool:
         size, so shrinking the pool costs instantaneous diversity but not
         throughput.
         """
+        streak = 0
         while not self.stop.is_set():
             slot, (ci, r0) = self._next_tile()
-            data = self._load_tile(ci, r0); self.slot_row[slot] = ci
+            try:
+                data = self._load_tile(ci, r0)
+            except Exception as e:      # skip the tile, keep the slot's data
+                streak = self._read_failed(e, f"chip row {ci} r0 {r0}",
+                                           streak)
+                continue
+            streak = 0
+            self._read_ok()
+            self.slot_row[slot] = ci
             with self.cuda_lock:
                 self._write_slot(slot, data, pin=True)
             self.chips_loaded += 1
-            time.sleep(self._sleep)
+            self.stop.wait(self._sleep)
 
     @property
     def reuse_estimate(self):
@@ -358,6 +426,7 @@ class ChipPool:
         share the same phase relative to any periodic structure in the data
         (e.g. a 2x-upsampled source's aliasing grid) — the model can lock
         onto and reproduce it instead of averaging it away."""
+        self.check_health()
         pdev, dev = self.pool_device, self.device
         p = self.period
         # A multi-group store has no unaligned mode: one origin is shared
@@ -399,6 +468,38 @@ class ChipPool:
             rows = self.slot_row[ci]
             return crop, (rows.to(dev, non_blocking=True) if pdev != dev else rows)
         return crop
+
+
+def _slurm_mem_bytes():
+    """The job's host-memory allocation from Slurm's environment, or None
+    outside a job (or when the allocation is not expressed per node or
+    per GPU). Slurm reports these in MB."""
+    env = os.environ
+    if "SLURM_MEM_PER_NODE" in env:
+        return int(env["SLURM_MEM_PER_NODE"]) * 2 ** 20
+    if "SLURM_MEM_PER_GPU" in env:
+        gpus = env.get("SLURM_GPUS_ON_NODE") or env.get("SLURM_GPUS") or "1"
+        try:
+            n = int(gpus.split(":")[-1])
+        except ValueError:
+            n = 1
+        return int(env["SLURM_MEM_PER_GPU"]) * 2 ** 20 * n
+    return None
+
+
+def _warn_slurm_mem(pool_bytes):
+    """Warn when a host-resident pool is larger than the job's memory
+    allocation, before the prefill spends minutes reaching the OOM."""
+    try:
+        alloc = _slurm_mem_bytes()
+    except ValueError:
+        return
+    if alloc is not None and pool_bytes > alloc:
+        print(f"WARNING: the pool needs {pool_bytes / 2**30:.1f} GiB of "
+              f"host RAM but the Slurm job has {alloc / 2**30:.1f} GiB; "
+              f"the prefill will be OOM-killed. Request more with "
+              f"--mem (pool plus about 30% for the process) or shrink "
+              f"data.pool.size.", flush=True)
 
 
 class GroupChipLoader:

@@ -6,20 +6,16 @@ per-sample provenance travels with it. The loop sees only
 `draw(batch) -> (tensor, meta)`, where meta is a dict of per-sample
 tensors (level index, hour, store row, ...) that starts empty and is
 filled by samplers that discard identity the tensors alone cannot
-carry (the design contract is DRAFT_sampler_prep_contract.md; the
-motivating failures are the era5 single-level hacks it retires).
-
-`val_mode` is a context manager for deterministic sampling keyed by
-sample identity, so validation scores the same slices every pass.
-Samplers whose draws are already deterministic ignore it.
+carry (the motivating failures are the era5 single-level hacks this
+interface retires). Validation does not draw through a sampler: it
+scores fixed tokens, and a source with sampled prep makes it
+deterministic through `_prep_deterministic`.
 
 Phase-1 status: WindowSampler delegates to ChipPool.sample_batch, so
 existing recipes are bit-identical; new geometries subclass Sampler
 instead of growing store flags and prep branches.
 """
 from __future__ import annotations
-
-from contextlib import contextmanager
 
 
 class Sampler:
@@ -32,21 +28,10 @@ class Sampler:
     def __init__(self, pool, model_cfg):
         self.pool = pool
         self.cfg = model_cfg
-        self._deterministic = False
 
     def draw(self, batch, align=False, return_rows=False):
         """(tensor [B, ...], meta dict of per-sample tensors)."""
         raise NotImplementedError
-
-    @contextmanager
-    def val_mode(self):
-        """Deterministic draws keyed by sample identity, for validation."""
-        prev = self._deterministic
-        self._deterministic = True
-        try:
-            yield self
-        finally:
-            self._deterministic = prev
 
 
 class WindowSampler(Sampler):
@@ -65,19 +50,32 @@ class WindowSampler(Sampler):
         return out, {}
 
 
-def build_sampler(name, pool, model_cfg, source=None):
+def build_sampler(name, pool, model_cfg, source=None, params=None):
     """Resolve a sampler by config name; None picks the source's default
-    (WindowSampler unless the source overrides `default_sampler`)."""
+    (WindowSampler unless the source overrides `default_sampler`).
+    `params` (data.sampler.params) are passed to the constructor as
+    keyword arguments, so a sampler that takes none rejects them."""
+    params = dict(params or {})
     if name is None:
         if source is not None and hasattr(source, "default_sampler"):
-            return source.default_sampler(pool, model_cfg)
-        return WindowSampler(pool, model_cfg)
-    reg = {"window": WindowSampler}
+            make = source.default_sampler
+        else:
+            make = WindowSampler
+    else:
+        reg = {"window": WindowSampler}
+        try:
+            from georvq.sources.era5 import MonoLevelSampler
+            reg["mono_level"] = MonoLevelSampler
+        except ImportError:
+            pass
+        if name not in reg:
+            raise KeyError(f"unknown sampler {name!r}; have {sorted(reg)}")
+        make = reg[name]
     try:
-        from georvq.sources.era5 import MonoLevelSampler
-        reg["mono_level"] = MonoLevelSampler
-    except ImportError:
-        pass
-    if name not in reg:
-        raise KeyError(f"unknown sampler {name!r}; have {sorted(reg)}")
-    return reg[name](pool, model_cfg)
+        return make(pool, model_cfg, **params)
+    except TypeError as e:
+        if not params:
+            raise
+        raise ValueError(
+            f"sampler {name or 'default'!r} does not accept "
+            f"data.sampler.params {sorted(params)}: {e}") from e

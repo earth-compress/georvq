@@ -1,6 +1,7 @@
 # Tiny synthetic-store smoke config (CI / laptop).
 data:
   source: ae
+  # build it first: python -c "from georvq.data.build import build_synthetic_store as b; b('/tmp/georvq-smoke-store')"
   store_dir: /tmp/georvq-smoke-store
   val_frac: 0.25
   pool: {size: 8, workers: 1, device: cpu}

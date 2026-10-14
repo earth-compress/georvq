@@ -102,3 +102,29 @@ def test_update_ratio_reads_adam_moments(tmp_path):
     opt.step()                                # moments now exist
     row = trap._group_stats(opt)
     assert any(k.startswith("u_") and v > 0 for k, v in row.items())
+
+
+def test_group_of_plain_decoder_blocks():
+    assert group_of("decoder.blocks.3.ada.1.weight") == "dec.block3.ada"
+    assert group_of("decoder.blocks.0.attn.in_proj_weight") == \
+        "dec.block0.attn"
+    assert group_of("decoder.blocks.2.norm.weight") == "dec.block2.other"
+
+
+def test_hold_listens_on_a_private_unix_socket(tmp_path):
+    import stat
+    import threading
+    import time
+    _, trap, _ = _toy(tmp_path, hold_timeout=1.0)
+    path = os.path.join(trap.dir, "trap_hold.sock")
+    t = threading.Thread(target=trap.hold, args=({},))
+    t.start()
+    for _ in range(200):
+        if os.path.exists(path):
+            break
+        time.sleep(0.005)
+    st = os.stat(path)
+    assert stat.S_ISSOCK(st.st_mode)
+    assert stat.S_IMODE(st.st_mode) == 0o600
+    t.join(5)
+    assert not t.is_alive() and not os.path.exists(path)

@@ -26,6 +26,7 @@ model:
 train:
   steps: 60000
   init_from: checkpoints/dem128_overnight_resume/model_best.pt
+  refit_books: true    # the warmup k-means replaces the loaded books
   freeze_encoder_steps: 60000
   # fine-tune schedule (init from a trained codec), not dem128's hot LR
   optim: {lr: 2.5e-4, wd: 0.01, warmup: 500}

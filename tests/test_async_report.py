@@ -52,7 +52,7 @@ def test_rd_err_split_matches_one_call(  ):
         def train(self):
             return self
 
-        def level_cumsums(self, x, loc=None):
+        def level_cumsums(self, x, loc=None, valid=None):
             return None, None
 
         def eval_tuple(self, cums, t, ref, valid=None):
