@@ -51,10 +51,11 @@ is what lets a better decoder ship later against the same
     bundle/refine_table.npz    the fine-tier Lloyd table
     bundle/bundle.json         bitstream_id, decoder_id, tiers, refinement spec
 
-Always verify the checksum. `model.pt` is a torch pickle and the
-config is stored inside it, so it is loaded with `weights_only=False`,
-and loading it executes code. Treat an unverified bundle the way you
-would treat an unverified script.
+Always verify the checksum. `model.pt` is a torch pickle with the
+config stored inside it. It is loaded through
+`georvq.repro.load_checkpoint` with `weights_only=True`, which refuses
+pickled code, and `georvq.tessera.load` checks the `bitstream_id`, but
+only the checksum shows that the bundle is the one released.
 
 ## Weight precision
 
@@ -122,6 +123,8 @@ for tup in R.ladder():
 One encode serves every rate: `packets` are full depth, and `depths`
 truncates at decode time. A tile is cropped to whole 64 px windows
 rather than padded — pad upstream if you need the last partial window.
+`grid` carries the tile's validity, and `decode_tile` returns nodata
+pixels as zero vectors.
 
 Already-dequantized float embeddings work too: pass them without a
 `scale`. `georvq.tessera.prep` is the single-window form of the same
@@ -209,37 +212,41 @@ recovered):
 | 2 (fine), 1 bit | +16 b/px | 56.2% |
 | 2 (fine), 2 bits | +32 b/px | 81.2% |
 
-The AlphaEarth release refines tier **0** and recovers ~98% of its gap
-there; the identical policy applied here recovers nothing. AE's
-coarse book carries its error tail while its finer books sit at their
-ceiling; Tessera's coarse book is healthy and its fine tier is still
+The first AlphaEarth release (v1, since replaced) refined tier **0** and
+recovered ~98% of its gap there; the identical policy applied here
+recovers nothing. That AE model's coarse book carried its error tail
+while its finer books sat at their ceiling; Tessera's coarse book is
+healthy and its fine tier is still
 rate-limited, with its residual measurably decaying at level 20. Slack
 has to be located per model.
 
 That asymmetry is also why the default differs. A refinement costs
 `cells x dim x bits`, so on a 1/4/16 pyramid the same idea is +1.5% of
-rate on the coarse tier and +150% on the fine one. AE leaves its
-sidecar on always; here it is off unless asked for, and it is a
+rate on the coarse tier and +150% on the fine one. The first AE
+release left its coarse refinement on always (the current AE release
+has none); here it is off unless asked for, and it is a
 maximum-fidelity option rather than a default, because it more than
 doubles the bitstream to recover part of a gap that no benchmark in
 the suite can currently resolve.
 
 ## Deliberate non-features
 
-- **No COG asset container.** The AlphaEarth release stores packets as
-  georeferenced COGs because AEF ships as 1024-px-blocked COG tiles, so
-  ranged reads need no extra machinery. Tessera is distributed as `geotessera`
-  tiles with a separate per-pixel scale sidecar; the equivalent container
+- **No container.** The AlphaEarth release stores packets in one
+  GeoParquet file per source tile (`docs/GEORVQ_PARQUET.md`), mirroring
+  the source's tiles so that a ranged read fetches only what a window
+  and rate need. Tessera is distributed as `geotessera`
+  tiles with a separate per-pixel scale sidecar; a container for it
   is worth building when there is a delivery requirement to shape it,
   and packets are container-agnostic until then.
-- **No entropy coding.** Order-0 rANS recovered ~0.6% on the AlphaEarth
-  release and is not expected to do better here; the remaining gap is
+- **No entropy coding.** Order-0 rANS recovered ~0.6% on the first
+  AlphaEarth release and is not expected to do better here; the remaining gap is
   cross-tier context, which needs the learned context model rather than
   a better static coder.
 - **No quality-controlled delivery.** The encode-side self-measurement
-  that gives AE its `--quality p90<=0.02` control is source-agnostic and
-  could be turned on here; it has not been, because no consumer has
-  asked for it.
+  behind AE's quality bounds (`quality="p99<=0.02"`, on the `mean` or
+  `p99` of per-pixel `1 - cos`) could be applied here, and the
+  GeoParquet container has a column for it; it has not been, because no
+  consumer has asked for it.
 - **No `use_std`.** The release does not use it, and a model trained
   with it should not be shipped, because matching the reconstructed standard deviation
   to the source's was measured to hurt: the decoder is already smoother
@@ -250,7 +257,7 @@ the suite can currently resolve.
 
 ```bash
 python scripts/build_release_tessera.py \
-    --ckpt <checkpoint.pt> --out <bundle-dir> --gpu 1
+    --ckpt <checkpoint.pt> --out <bundle-dir> --device cuda
 ```
 
 Fits the mean channel's constants and the refinement table on held-out
