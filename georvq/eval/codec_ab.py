@@ -13,7 +13,6 @@ import torch
 
 from georvq.eval.extract import dequant_np, l2norm_np
 from georvq.model.codec import monotone_tuples, tuple_bits
-from georvq.sources.ae import dequant
 
 
 def load_codec(ckpt_path, device):
@@ -63,7 +62,7 @@ def unique_windows(windows, t, W):
 
 @torch.no_grad()
 def reconstruct_tuples(model, win_int8, inv, lr, lc, tuples_ls, device,
-                       chunk=256, source="ae"):
+                       chunk=256):
     """Reconstruct every target pixel at each rate tuple. Encodes each window
     once; decodes all tuples from the cached cumulative codes. Returns a list
     (aligned to tuples_ls) of (N, bands) L2-normed reconstructions."""
@@ -72,17 +71,13 @@ def reconstruct_tuples(model, win_int8, inv, lr, lc, tuples_ls, device,
     for a in range(0, len(win_int8), chunk):
         b = min(a + chunk, len(win_int8))
         raw = torch.from_numpy(win_int8[a:b])
-        if source == "ae":
-            # historical AE eval path: plain dequant, no re-norm/mask
-            x = dequant(raw.to(device))
-        else:
-            x, _ = model.source.prep(raw, device)    # exact training prep
-        _, cums = model.level_cumsums(x)
+        x, valid = model.source.prep(raw, device)    # exact training prep
+        _, cums = model.level_cumsums(x, valid=valid)
         mask = (inv >= a) & (inv < b)
         idx = np.nonzero(mask)[0]
         loc, lrm, lcm = inv[mask] - a, lr[mask], lc[mask]
         for j, ls in enumerate(tuples_ls):
-            o = model.eval_tuple(cums, ls, x).float().cpu().numpy()
+            o = model.eval_tuple(cums, ls, x, valid).float().cpu().numpy()
             out[j][idx] = l2norm_np(o[loc, :, lrm, lcm])
     return out
 

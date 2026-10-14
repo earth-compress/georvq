@@ -45,21 +45,6 @@ class Packet:
     # refining differs by model (see georvq.inference.refine); dropping a
     # refinement always yields a valid decode.
 
-    @property
-    def coarse_residual(self):
-        """The tier-0 refinement, under the name the AlphaEarth release
-        gave it ('8*'). Retained because that release is frozen."""
-        return (self.refinements or {}).get(0)
-
-    @coarse_residual.setter
-    def coarse_residual(self, v):
-        if self.refinements is None:
-            self.refinements = {}
-        if v is None:
-            self.refinements.pop(0, None)
-        else:
-            self.refinements[0] = v
-
 
 def load_codec(ckpt_path, device="cpu"):
     """Model from a checkpoint (either format), wrapped in a Codec."""
@@ -86,15 +71,14 @@ class Codec:
     # ---- encode ----
 
     @torch.no_grad()
-    def encode(self, x, loc=None, refine_tiers=(), valid=None, mean=None,
-               coarse_residual=False) -> list[Packet]:
+    def encode(self, x, loc=None, refine_tiers=(), valid=None, mean=None
+               ) -> list[Packet]:
         """x: (B, C, W, W) prepared model-space input -> one Packet per
         window, at full depth (truncate at decode time for lower rates).
 
         refine_tiers: tier indices whose post-RVQ residual to carry as an
         additive refinement (see georvq.inference.refine). Which tier is
-        worth refining is model-specific. `coarse_residual=True` is the
-        AlphaEarth release's name for `refine_tiers=(0,)`.
+        worth refining is model-specific.
 
         valid/mean: for `stats_cond` models the per-window mean is part
         of the packet. It is measured from the input unless supplied —
@@ -102,8 +86,7 @@ class Codec:
         release will actually transmit, so encoder and decoder agree.
         """
         stacked, res, mean = self.encode_batch(
-            x, loc=loc, refine_tiers=refine_tiers, valid=valid, mean=mean,
-            coarse_residual=coarse_residual)
+            x, loc=loc, refine_tiers=refine_tiers, valid=valid, mean=mean)
         B = stacked[0].shape[0]
         loc_np = (loc.cpu().numpy() if isinstance(loc, torch.Tensor)
                   else loc) if loc is not None else None
@@ -117,7 +100,7 @@ class Codec:
 
     @torch.no_grad()
     def encode_batch(self, x, loc=None, refine_tiers=(), valid=None,
-                     mean=None, coarse_residual=False):
+                     mean=None):
         """The batch form behind `encode`: `(stacked, refinements, mean)`.
 
         `stacked` is one `(B, cells, depth)` index array per tier -- the
@@ -132,7 +115,7 @@ class Codec:
             # (B, bands) mean, or [mean ‖ std] for a use_std model
             mean = m.patch_stats(x, valid)
         zs = m.encode_levels(x, stats=mean, valid=valid)
-        want = set(refine_tiers) | ({0} if coarse_residual else set())
+        want = set(refine_tiers)
         if want and (m.selector is not None or m.conditioner is not None):
             raise NotImplementedError(
                 "refinements are supported for plain codecs only")

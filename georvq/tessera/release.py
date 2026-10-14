@@ -32,17 +32,12 @@ from georvq.model.codec import tuple_bits as _codec_tuple_bits
 #:     tier 2, 1 bit      +16.0 b/px         56.2%
 #:     tier 2, 2 bits     +32.0 b/px         81.2%
 #:
-#: The coarse tier returns *nothing* — the AlphaEarth release refines
-#: exactly that tier, and transplanting its policy here would spend rate
-#: for no measurable gain. Which tier holds a model's slack has to be
-#: measured per model; it is not a property of the architecture.
+#: The coarse tier returns nothing. Which tier holds a model's slack has
+#: to be measured per model; it is not a property of the architecture.
 REFINEMENT = RefinementSpec(tier=2, bits=1, quantizer="lloyd",
                             rotate_seed=0)
 
-#: ...and it is OFF by default, which is the other way round from
-#: AlphaEarth. There the sidecar costs +1.5% of rate and removes the
-#: error tail, so it is free enough to always apply. Here it costs +16
-#: b/px — it more than doubles the bitstream to recover 56% of a gap that
+#: It is off by default. It costs +16 b/px: it more than doubles the bitstream to recover 56% of a gap that
 #: the downstream benchmarks cannot resolve at all. It is a
 #: maximum-fidelity option, not a default.
 REFINE_BY_DEFAULT = False

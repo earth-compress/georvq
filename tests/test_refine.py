@@ -1,14 +1,8 @@
-"""Additive residual refinements (georvq.inference.refine).
-
-The load-bearing property is byte-freezing: the AlphaEarth release ships
-`star.tif` publicly, so the generic uniform coder must reproduce its
-payload exactly, forever.
-"""
+"""Additive residual refinements (georvq.inference.refine)."""
 import numpy as np
 import pytest
 
 from georvq.inference import refine as R
-from georvq.inference.api import Packet
 
 
 def _res(seed=0, n=6, cells=8, dim=32, outlier=True):
@@ -19,26 +13,7 @@ def _res(seed=0, n=6, cells=8, dim=32, outlier=True):
     return r
 
 
-def test_uniform_matches_frozen_ae_star_bit_for_bit():
-    """The AE release's 8* sidecar is RefinementSpec(0, 2, uniform, 2.0)."""
-    from georvq.ae.cli import STAR_BITS, STAR_SIGMA, STAR_SPEC
-    res = _res(dim=64, cells=1)
-    spec = R.RefinementSpec(tier=0, bits=STAR_BITS, quantizer="uniform",
-                            sigma=STAR_SIGMA)
-    assert STAR_SPEC == spec
-    codes, step = R.pack(res, spec)
-    # the historical implementation, inlined so the test is independent
-    r = res.reshape(res.shape[0], -1).astype(np.float32)
-    h_step = (STAR_SIGMA * r.std(axis=1, keepdims=True) / 1.5).clip(min=1e-12)
-    c = np.clip(np.round(r / h_step - 0.5) + 0.5, -1.5, 1.5) + 1.5
-    h_codes = np.packbits(
-        ((c.astype(np.uint8)[:, :, None] >> np.arange(1, -1, -1)) & 1)
-        .reshape(c.shape[0], -1), axis=1)
-    assert np.array_equal(codes, h_codes)
-    assert np.array_equal(step, h_step[:, 0].astype(np.float16))
-
-
-def test_ae_star_cost_is_66_bytes_per_window():
+def test_cost_counts_codes_and_the_f16_scale():
     """1 cell x 256 dims x 2 bits + f16 scale = 528 bits = 66 B."""
     spec = R.RefinementSpec(tier=0, bits=2)
     assert spec.cost_bits(cells=1, dim=256) == 66 * 8
@@ -100,20 +75,9 @@ def test_lloyd_requires_a_rotation():
         R.RefinementSpec(tier=0, bits=2, quantizer="lloyd")
 
 
-def test_packet_exposes_tier_0_under_the_ae_name():
-    p = Packet(indices=[], refinements={0: np.zeros((1, 4), np.float32)})
-    assert p.coarse_residual is not None
-    p2 = Packet(indices=[])
-    assert p2.coarse_residual is None
-    p2.coarse_residual = np.ones((1, 4), np.float32)   # setter path
-    assert p2.refinements[0].shape == (1, 4)
-    p2.coarse_residual = None
-    assert p2.refinements == {}
-
-
 def test_refinement_is_tier_generic():
-    """Nothing in the coder privileges tier 0 — the AE release's choice of
-    the coarse tier is policy, not format."""
+    """The coder treats every tier alike; which one to refine is release
+    policy."""
     res = _res()
     for tier in (0, 1, 2):
         spec = R.RefinementSpec(tier=tier, bits=2)

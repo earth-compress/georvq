@@ -104,9 +104,8 @@ def save_release(out_dir, model, cfg, step=0, cdfs_path=None,
 
     if fp16:
         # Halve BEFORE hashing. An id that does not describe the bytes
-        # being shipped is not an id: `georvq.ae.cog.openr` and the tile
-        # backends RECOMPUTE it from the weights they loaded and refuse a
-        # mismatch, so a stored id that disagrees with the shipped
+        # being shipped is not an id: loaders RECOMPUTE it from the
+        # weights they loaded and refuse a mismatch, so a stored id that disagrees with the shipped
         # weights would be rejected by the very check it exists to serve.
         halve_weights(ckpt)
         from georvq.factory import from_checkpoint

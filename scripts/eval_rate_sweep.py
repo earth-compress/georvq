@@ -52,8 +52,7 @@ def sweep_ckpt(ckpt, windows, t, X_orig, y, groups, meta, args, device):
 
     win, inv, lr, lc = codec_ab.unique_windows(windows, t, W)
     recons = codec_ab.reconstruct_tuples(model, win, inv, lr, lc, tuples,
-                                         device,
-                                         source=meta.get("source", "ae"))
+                                         device)
     budgets = [None if b == "all" else int(b) for b in args.budgets.split(",")]
     probes = tuple(args.probes.split(","))
 
