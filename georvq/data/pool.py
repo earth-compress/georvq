@@ -71,12 +71,15 @@ class GroupBatch(dict):
 class ChipPool:
     def __init__(self, store, rows: pd.DataFrame, pool_size, device,
                  workers=2, refresh_chips_per_s=2.0, seed=0, slot_rows=None,
-                 pool_device=None, cycle=False, period=1):
+                 pool_device=None, cycle=False, period=1, token=None):
         """slot_rows: pool-slot height in pixels. None = whole chips; e.g.
         128 = full-width row-strips (contiguous per band, zero read
         amplification) -> ~8x more distinct chips resident per GiB.
         period: the store's pixel grid period; `sample_batch(align=True)`
         snaps crop offsets to multiples of it.
+        token: the crop size `sample_batch` will be asked for, if known,
+        so a slot too small for it fails here rather than at the first
+        batch.
 
         Multi-group (multi-resolution) stores are held as one resident
         tensor PER GROUP, all indexed by the same slot number. Everything
@@ -124,6 +127,8 @@ class ChipPool:
                 (f"slot_rows {self.slot_rows} must be a multiple of the "
                  f"group period {self.period} so every group's strip is a "
                  f"whole number of its own rows")
+        if token is not None:
+            self._check_token(token)
 
         dtype = torch.from_numpy(np.zeros(0, dtype=store.dtype)).dtype
         self.gpools = {
@@ -416,6 +421,14 @@ class ChipPool:
         for w in self.workers:
             w.join(timeout=5)
 
+    def _check_token(self, token):
+        if token > self.slot_rows or token > self.chip_px:
+            raise ValueError(
+                f"crop size {token} px does not fit a pool slot of "
+                f"{self.slot_rows} x {self.chip_px} px; set "
+                f"data.pool.slot_rows >= {token} (and chips at least that "
+                f"wide)")
+
     def sample_batch(self, batch, token=16, align=False, return_rows=False):
         """(B, bands, token, token) store-dtype on `self.device` - one gather
         kernel on the pool's device, then a small H2D copy if the pool lives
@@ -427,6 +440,7 @@ class ChipPool:
         (e.g. a 2x-upsampled source's aliasing grid) — the model can lock
         onto and reproduce it instead of averaging it away."""
         self.check_health()
+        self._check_token(token)
         pdev, dev = self.pool_device, self.device
         p = self.period
         # A multi-group store has no unaligned mode: one origin is shared
@@ -434,12 +448,14 @@ class ChipPool:
         if self.groups:
             align = True
         ci = torch.randint(0, self.pool.shape[0], (batch,), device=pdev)
+        # offsets run 0..slot_rows - token inclusive, so the last row and
+        # column of a slot can be cropped
         if align and p > 1:
-            r = torch.randint(0, (self.slot_rows - token) // p, (batch,), device=pdev) * p
-            c = torch.randint(0, (self.chip_px - token) // p, (batch,), device=pdev) * p
+            r = torch.randint(0, (self.slot_rows - token) // p + 1, (batch,), device=pdev) * p
+            c = torch.randint(0, (self.chip_px - token) // p + 1, (batch,), device=pdev) * p
         else:
-            r = torch.randint(0, self.slot_rows - token, (batch,), device=pdev)
-            c = torch.randint(0, self.chip_px - token, (batch,), device=pdev)
+            r = torch.randint(0, self.slot_rows - token + 1, (batch,), device=pdev)
+            c = torch.randint(0, self.chip_px - token + 1, (batch,), device=pdev)
 
         def gather(name):
             ratio = self.ratio[name]
