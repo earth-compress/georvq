@@ -33,8 +33,6 @@ train = ["pandas", "matplotlib", "scikit-learn", "wandb"]
 tessera = ["geotessera"]   # fetch Tessera tiles: the demo notebook, a store build
 # the tessera-vq baseline the demo compares against (Yang, Feng & Keshav)
 baseline = ["tessera-vq @ git+https://github.com/sk818/tessera-vq.git@v0.3.1"]
-# Real entropy-coded archives (rANS via compressai)
-archive = ["compressai", "pandas"]
 # Downstream eval benchmarks (AEF extraction, ASTER GED, LUCAS/LCMAP)
 eval = ["georvq[train]", "h5py", "requests", "pyproj", "shapely"]
 # Rate-sweep GIF rendering

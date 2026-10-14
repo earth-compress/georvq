@@ -521,14 +521,6 @@ class PoolConfig(StrictModel):
         return self
 
 
-class SamplerConfig(StrictModel):
-    """Sample geometry (georvq/data/sampler.py). name=None resolves to
-    the source's default sampler (WindowSampler for every source
-    today), which reproduces the historical behaviour exactly."""
-    name: Optional[str] = None
-    params: dict = Field(default_factory=dict)
-
-
 class PrepConfig(StrictModel):
     """Model-space transform (georvq/sources/prep.py). name=None
     resolves to the source's default prep, which delegates to the
@@ -550,7 +542,6 @@ class DataConfig(StrictModel):
     #   deterministic subsample of N chips (nested: N ⊂ 2N for the same
     #   split_seed); the val split always stays full
     pool: PoolConfig = Field(default_factory=PoolConfig)
-    sampler: SamplerConfig = Field(default_factory=SamplerConfig)
     prep: PrepConfig = Field(default_factory=PrepConfig)
 
     @field_validator("val_frac")
@@ -595,38 +586,6 @@ class BatchRamp(StrictModel):
         return self
 
 
-class TrapConfig(StrictModel):
-    """Instability trap (georvq/train/trap.py): per-step flight recorder
-    plus a tripwire on the pre-clip gradient norm. On a trip the loop
-    saves pre-step weights, gradients, optimizer state, the batch and
-    RNG states, so the offending step can be replayed exactly. `hold`
-    additionally parks the process on a localhost pdb socket for live
-    inspection. Requires train.optim -- the update-ratio telemetry reads
-    Adam moments -- and model.vq.clip_norm, which provides the norm."""
-    gnorm_abs: float = 0.5         # trip only above this absolute norm
-    gnorm_ratio: float = 10.0      # ... and above ratio * running EMA
-    min_step: int = 200            # let init transients through
-    n_dumps: int = 3
-    cooldown: int = 250            # min steps between dumps: a storm
-    #                                trips every step; spacing the dumps
-    #                                samples its whole arc
-    hold: bool = False
-    hold_port: int = 4444
-    hold_timeout: float = 14400.0
-    snapshot_every: int = 500      # rolling pre-history model+opt copy
-    # per-group grad norms + Adam update ratios cost ~1500 small kernels
-    # and a host sync per call; every step was measured at ~27% of
-    # ladder-w320 throughput. The tripwire itself reads only the free
-    # whole-model gnorm, so throttled group stats lose nothing but
-    # flight-record resolution between trips.
-    stats_every: int = 10
-    # per-step CPU copies of the batch (~310 MB/step at batch 1024) buy
-    # pre-trip context only; the trip step's own batch is dumped live.
-    # 0 disables.
-    batch_history_bytes: int = 0
-    flight_maxlen: int = 20000
-
-
 class TrainConfig(StrictModel):
     steps: int = 20000
     batch_windows: int = 512
@@ -638,7 +597,6 @@ class TrainConfig(StrictModel):
     # training dead weights for hours; benign spikes recover between
     # validations and never trip it. None disables.
     guard_drop: Optional[float] = 0.05
-    trap: Optional[TrapConfig] = None
     # Carry optimizer+scheduler state in the periodic model.pt (about 3x
     # the file) so a resume continues the Adam trajectory instead of
     # rebuilding fresh moments, which storms; see save_checkpoint.
@@ -733,6 +691,8 @@ RETIRED_FIELDS = (
     "model.vq.refit_dead_frac", "model.vq.refit_recycle_frac",
     "model.vq.drift_interval", "model.vq.drift_windows",   # served its purpose
     "model.tokenizer.suffix_dim", "model.decoder.suffix_dim",
+    "train.trap",                                          # debugging tool
+    "data.sampler",                                        # one geometry
 )
 
 

@@ -385,26 +385,9 @@ class VectorQuantizer(nn.Module):
                 + self.codebook.weight.pow(2).sum(1, keepdim=True).t())
 
     @torch.no_grad()
-    def usage(self, indices):
-        """Fraction of codebook entries used in this batch."""
-        return indices.unique().numel() / self.num_codes
-
-    @torch.no_grad()
     def ema_usage(self):
         """Fraction of codebook entries above the dead-code threshold."""
         return (self.ema_count > self.dead_threshold).float().mean().item()
-
-    @torch.no_grad()
-    def perplexity(self, indices):
-        """Effective codebook size — exp(entropy of code distribution).
-
-        Healthy quantization has perplexity climbing toward a meaningful
-        fraction of K. Collapse shows up as perplexity << K."""
-        flat = indices.flatten()
-        counts = torch.bincount(flat, minlength=self.num_codes).float()
-        probs = counts / counts.sum().clamp_min(1)
-        ent = -(probs * probs.clamp_min(1e-12).log()).sum()
-        return torch.exp(ent).item()
 
 
 class ResidualVQ(nn.Module):
@@ -544,10 +527,6 @@ class ResidualVQ(nn.Module):
             cum = cum + q.detach()
         return out
 
-    def usage(self, all_indices):
-        """Average codebook usage across levels."""
-        return sum(lev.usage(idx) for lev, idx in zip(self.levels, all_indices)) / len(all_indices)
-
     def ema_usage(self):
         """Average global codebook usage (EMA-based) across levels."""
         return sum(lev.ema_usage() for lev in self.levels) / len(self.levels)
@@ -560,41 +539,3 @@ def _chunked_assign(x, C, chunk=32768):
         outs.append(d.argmin(1))
     return torch.cat(outs)
 
-
-@torch.no_grad()
-def kmeans_init_rvq(rvq, z, iters=6, expected_batch=4096):
-    """Residual k-means init after a VQ-free warmup: fit level 1 on latents,
-    level 2 on its residuals, etc. Writes codebooks and EMA buffers (counts
-    at steady-state assignment rates so nothing is instantly 'dead') and
-    marks levels initialized so the lazy data-init never fires."""
-    residual = z.reshape(-1, z.shape[-1]).float()
-    if residual.shape[0] > 1_000_000:
-        residual = residual[torch.randperm(residual.shape[0],
-                                           device=z.device)[:1_000_000]]
-    N = residual.shape[0]
-    dev = residual.device
-    for lev in rvq.levels:
-        K = lev.num_codes
-        C = residual[torch.randperm(N, device=dev)[:K]].clone()
-        ones = torch.ones(N, device=dev)
-        for _ in range(iters):
-            assign = _chunked_assign(residual, C)
-            sums = torch.zeros_like(C)
-            cnt = torch.zeros(K, device=dev)
-            sums.index_add_(0, assign, residual)
-            cnt.index_add_(0, assign, ones)
-            live = cnt > 0
-            C[live] = sums[live] / cnt[live, None]
-            n_dead = int((~live).sum())
-            if n_dead:
-                C[~live] = residual[torch.randint(0, N, (n_dead,), device=dev)] \
-                    + 1e-4 * torch.randn(n_dead, C.shape[1], device=dev)
-        assign = _chunked_assign(residual, C)
-        cnt = torch.zeros(K, device=dev)
-        cnt.index_add_(0, assign, ones)
-        lev.codebook.weight.data.copy_(C)
-        lev.ema_count.copy_((cnt / N * expected_batch)
-                            .clamp_min(2 * lev.dead_threshold))
-        lev.ema_sum.copy_(C * lev.ema_count[:, None])
-        lev.initialized.fill_(True)
-        residual = residual - C[assign]

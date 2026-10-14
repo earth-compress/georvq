@@ -15,12 +15,15 @@ for _v in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS"):
     os.environ.setdefault(_v, "16")
 
 import argparse
+import sys
 
 import torch
 
 from georvq.config import TierSpec, parse_tier
 from georvq.eval import codec_ab
-from georvq.viz import panels
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import panels  # noqa: E402
 
 DEFAULT_CKPTS = ["checkpoints/ae_pyr128_deep/model_best.pt",
                  "checkpoints/ae_pyr64_divfull/model_best.pt"]

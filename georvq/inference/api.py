@@ -236,8 +236,7 @@ class Codec:
     @torch.no_grad()
     def entropy_bits(self, x) -> Optional[torch.Tensor]:
         """Entropy-model bits per window (B, total-levels summed); None if
-        the model has no rate model. Real coded sizes come from
-        georvq.inference.archive."""
+        the model has no rate model."""
         if self.model.rate is None:
             return None
         per_tier = self.model.entropy_level_bits(x)
