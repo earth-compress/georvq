@@ -1,12 +1,12 @@
-"""Golden tests for the Sampler/Prep seam: the defaults must reproduce
-the legacy pool.sample_batch / Source.prep path exactly."""
+"""Golden tests for the sampler and the Prep seam: the defaults must
+reproduce the legacy pool.sample_batch / Source.prep path exactly."""
 import pytest
 import torch
 
 from georvq.config import load_config
 from georvq.data.build import build_synthetic_store
 from georvq.data.pool import ChipPool
-from georvq.data.sampler import WindowSampler, build_sampler
+from georvq.data.sampler import WindowSampler
 from georvq.factory import build_model
 from georvq.sources.prep import SourcePrep, build_prep
 
@@ -31,8 +31,7 @@ def rig(tmp_path_factory):
 
 def test_window_sampler_matches_legacy_sample_batch(rig):
     cfg, source, pool = rig
-    s = build_sampler(None, pool, cfg.model, source=source)
-    assert isinstance(s, WindowSampler)
+    s = WindowSampler(pool, cfg.model)
     torch.manual_seed(7)
     a, meta = s.draw(4)
     torch.manual_seed(7)
@@ -56,20 +55,16 @@ def test_source_prep_matches_legacy_prep(rig):
     assert meta == {"k": 1}          # passed through untouched
 
 
-def test_unknown_names_and_meta_mismatch_fail_loud(rig):
+def test_unknown_prep_names_fail_loud(rig):
     cfg, source, pool = rig
-    with pytest.raises(KeyError):
-        build_sampler("no_such", pool, cfg.model)
     with pytest.raises(KeyError):
         build_prep("no_such", source, cfg.model)
 
 
-def test_config_accepts_sampler_and_prep_blocks(tmp_path):
+def test_config_accepts_a_prep_block(tmp_path):
     cfg = load_config("configs/smoke.yaml", [
         "data.store_dir=/tmp/x",
-        "data.sampler={name: window}",
         "data.prep={name: null}"])
-    assert cfg.data.sampler.name == "window"
     assert cfg.data.prep.name is None
 
 
@@ -114,32 +109,21 @@ def test_physical_metric_routes_through_prep_inverse():
     assert torch.allclose(phys(p.inverse(o, {}), p.inverse(x, {}), v), want)
 
 
-def test_params_reach_the_constructors(rig):
-    """data.sampler.params / data.prep.params are passed on, so a
-    component that takes none rejects them instead of ignoring them."""
+def test_params_reach_the_constructor(rig):
+    """data.prep.params is passed on, so a prep that takes none rejects
+    it instead of ignoring it."""
     cfg, source, pool = rig
-    with pytest.raises(ValueError, match="data.sampler.params"):
-        build_sampler(None, pool, cfg.model, source=source,
-                      params={"stride": 2})
     with pytest.raises(ValueError, match="data.prep.params"):
         build_prep(None, source, cfg.model, params="fitted_v1")
-
-    class _Sampler(WindowSampler):
-        def __init__(self, pool, model_cfg, stride=1):
-            super().__init__(pool, model_cfg)
-            self.stride = stride
 
     class _Prep(SourcePrep):
         def __init__(self, source, model_cfg, params=None):
             super().__init__(source, model_cfg)
             self.params = params
 
-    source.default_sampler = _Sampler
     source.named_preps = lambda: {"fitted": _Prep}
     try:
-        assert build_sampler(None, pool, cfg.model, source=source,
-                             params={"stride": 2}).stride == 2
         assert build_prep("fitted", source, cfg.model,
                           params="v1").params == "v1"
     finally:
-        del source.default_sampler, source.named_preps
+        del source.named_preps

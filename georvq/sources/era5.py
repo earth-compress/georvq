@@ -115,7 +115,6 @@ class Era5BoxcoxPrep:
     source grammar (kept for old resolved configs); new configs write
     `data.prep: {name: boxcox}`."""
 
-    requires: tuple = ()
     invertible = True
 
     def __init__(self, source, model_cfg):

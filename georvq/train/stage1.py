@@ -151,17 +151,11 @@ def _train(cfg: Config, gpu, stop):
           flush=True)
     store, train_rows, val_rows, val_s, pool = setup_data(cfg, source, device)
     val_rows.to_parquet(os.path.join(run_dir, "val_chips.parquet"))
-    from georvq.data.sampler import build_sampler
+    from georvq.data.sampler import WindowSampler
     from georvq.sources.prep import build_prep
-    sampler = build_sampler(cfg.data.sampler.name, pool, cfg.model,
-                            source=source, params=cfg.data.sampler.params)
+    sampler = WindowSampler(pool, cfg.model)
     prep = build_prep(cfg.data.prep.name, source, cfg.model,
                       params=cfg.data.prep.params)
-    missing = [k for k in prep.requires if k not in sampler.provides]
-    if missing:
-        raise ValueError(
-            f"prep {cfg.data.prep.name!r} needs meta {missing} that sampler "
-            f"{type(sampler).__name__} does not provide")
     print(f"model: {sum(p.numel() for p in model.parameters())/1e6:.2f}M "
           f"params", flush=True)
     if cfg.train.init_from:

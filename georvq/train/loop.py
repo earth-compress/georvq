@@ -310,19 +310,13 @@ def _train(cfg: Config, gpu, stop):
                   f"{cfg.model.vq.warmup_steps + 1}", flush=True)
     store, train_rows, val_rows, val_s, pool = setup_data(cfg, source, device)
     val_rows.to_parquet(os.path.join(run_dir, "val_chips.parquet"))
-    # geometry and model-space transform resolve by name; the defaults
-    # delegate to pool.sample_batch and Source.prep, so a config that
-    # names neither runs the historical path exactly
-    from georvq.data.sampler import build_sampler
+    # the model-space transform resolves by name; the default delegates
+    # to Source.prep, so a config that names none runs the historical path
+    from georvq.data.sampler import WindowSampler
     from georvq.sources.prep import build_prep
-    sampler = build_sampler(cfg.data.sampler.name, pool, cfg.model,
-                            source=source, params=cfg.data.sampler.params)
+    sampler = WindowSampler(pool, cfg.model)
     prep = build_prep(cfg.data.prep.name, source, cfg.model,
                       params=cfg.data.prep.params)
-    missing = [k for k in prep.requires if k not in sampler.provides]
-    assert not missing, (
-        f"prep {cfg.data.prep.name!r} needs meta {missing} that sampler "
-        f"{type(sampler).__name__} does not provide")
 
     # location side-info (conditioner / selector)
     needs_loc = model.conditioner is not None or model.selector is not None

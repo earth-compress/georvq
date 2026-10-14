@@ -521,14 +521,6 @@ class PoolConfig(StrictModel):
         return self
 
 
-class SamplerConfig(StrictModel):
-    """Sample geometry (georvq/data/sampler.py). name=None resolves to
-    the source's default sampler (WindowSampler for every source
-    today), which reproduces the historical behaviour exactly."""
-    name: Optional[str] = None
-    params: dict = Field(default_factory=dict)
-
-
 class PrepConfig(StrictModel):
     """Model-space transform (georvq/sources/prep.py). name=None
     resolves to the source's default prep, which delegates to the
@@ -550,7 +542,6 @@ class DataConfig(StrictModel):
     #   deterministic subsample of N chips (nested: N ⊂ 2N for the same
     #   split_seed); the val split always stays full
     pool: PoolConfig = Field(default_factory=PoolConfig)
-    sampler: SamplerConfig = Field(default_factory=SamplerConfig)
     prep: PrepConfig = Field(default_factory=PrepConfig)
 
     @field_validator("val_frac")
@@ -701,6 +692,7 @@ RETIRED_FIELDS = (
     "model.vq.drift_interval", "model.vq.drift_windows",   # served its purpose
     "model.tokenizer.suffix_dim", "model.decoder.suffix_dim",
     "train.trap",                                          # debugging tool
+    "data.sampler",                                        # one geometry
 )
 
 
