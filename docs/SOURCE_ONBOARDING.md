@@ -228,7 +228,7 @@ which for several steps is still only habit.
 
 | # | parameter | derived from | current evidence |
 |---|---|---|---|
-| 0 | **objective** | use-case: task eval, band subsetting | point-thematic transparency at ~1 b/px, cos ~0.93; cosine is NOT transferable across sources; fine-scale use unmeasured |
+| 0 | **objective** | use-case: task eval, band subsetting | point-thematic transparency at ~1 b/px, cos ~0.93 (on an earlier Tessera model); cosine is NOT transferable across sources; fine-scale use unmeasured |
 | 1 | **W** (window) | autocorrelation range; between/within variance vs W | 64 px, unjustified |
 | 2 | **P**, **G** (tiers, grids) | power spectrum; autocorrelation scale breaks | fine cell 4 px matches lag-0.5 point |
 | 3 | **L** (latent dims/tier) | data d95; ~4 bits/dim saturation | latent d95 51/91/71 of 512/512/256 on Tessera — over-provisioned several fold (`cosine-not-transferable`) |
