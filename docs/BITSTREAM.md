@@ -1,4 +1,4 @@
-# Bitstream and archive format
+# Bitstream format
 
 ## What defines the bitstream
 
@@ -8,22 +8,25 @@ fully determined by:
 1. the tier specs (`grid:dim:codes:depth` per tier),
 2. the codebook tensors (and conditioning priors, if any),
 3. the stats side-channel codec (PCA basis), when the source uses one, and
-4. the CDF tables, when an entropy-coded archive is used (none shipped;
-   see below).
+4. the release layer's own decode state, when it has any: the
+   transmitted-mean channel's tables, and a refinement's table and
+   rotation seed (the `extra` argument of
+   `georvq.inference.release.bitstream_id`).
 
 The decoder weights are deliberately excluded. Releases carry
 `bitstream_id` = hash(1–4): any future decoder trained against the same
 id (bigger trunk, seam deblocker, task-specialised head) decodes
-existing packets and archives with no re-encoding, so decode-side
+existing packets with no re-encoding, so decode-side
 quality upgrades cost nothing. Decoder-*specific* artifacts (e.g. the AE release's
-per-window quality rasters) are keyed by a second hash, `decoder_id`
+per-window quality column) are keyed by a second hash, `decoder_id`
 (the decoder weights), so variant decoders publish alongside each other.
 
 Optional additive refinements extend a packet without changing the
-indices: the AE release's 8* sidecar carries the coarse tier's
-post-quantization residual (2-bit scalar-quantized, per-window scale)
-and is added to the coarse tokens whenever that tier decodes at full
-depth. Removing or ignoring a refinement always yields a valid decode.
+indices: the Tessera release's opt-in refinement carries the fine
+tier's post-quantization residual and is added to the fine tokens when
+that tier decodes at full depth. Removing or ignoring a refinement
+always yields a valid decode. The AE release has no refinement; its
+transmitted per-window mean is part of the packet (item 4 above).
 
 ## Packet layout
 
@@ -44,26 +47,18 @@ Nominal cost: `sum_tiers cells * depth_used * log2(codes)` bits
 `Packet` is the abstract unit; how packets are containerized is a
 per-release decision. The AlphaEarth release stores them in one
 GeoParquet file per source tile, a column per RVQ level
-(`docs/GEORVQ_PARQUET.md`, `docs/AE_RELEASE.md`); the patch dev tool
-uses a flat npz. Both stamp `bitstream_id` so
-mismatched models are refused.
+(`docs/GEORVQ_PARQUET.md`, `docs/AE_RELEASE.md`), and stamps
+`bitstream_id` in the file header so mismatched models are refused.
 
-## Entropy-coded archives (research capability, not shipped)
+## Entropy coding (not shipped)
 
-Measured on the AlphaEarth release, order-0 rANS recovers only ~0.6%
-over deflated raw indices (the fine tier runs at ~95% of codebook
-entropy), so the shipped format stores uncoded indices. The machinery
-remains for sources and coders which benefit from using it:
+Measured on the first AlphaEarth release, order-0 rANS recovered only
+~0.6% over deflated raw indices (the fine tier ran at ~95% of codebook
+entropy), so the shipped formats store uncoded indices and georvq has
+no entropy coder.
 
-`georvq.inference.archive` writes real files: rANS (compressai backend)
-over the flattened symbols (tier-major, level-major, cells within level)
-with one calibrated, Laplace-smoothed CDF per (tier, level) at 16-bit
-precision. Every bitstream is round-trip verified during writing;
-`metadata.json` records the realized bytes against the naive bits, so
-reported sizes are measured rather than estimated.
-
-Models trained with the context entropy model additionally report their
+Models trained with the context entropy model report their
 *achievable* rate (`model.entropy_level_bits`, hard-index -log2 q). The gap
-between that and the static-CDF archive is the headroom a context-adaptive
+between that and the uncoded indices is the headroom a context-adaptive
 coder (driven by the same `ContextRateModel`) would recover; it slots in
 behind the same packet layout.

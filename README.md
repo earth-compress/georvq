@@ -23,11 +23,9 @@ embedding fields (e.g. AlphaEarth, Tessera), multispectral imagery
   ramps, dead-code resets, fp32 VQ state under bf16 training — the
   machinery that keeps codebooks in use, from K=256 (Tessera) to 16,384
   (AlphaEarth).
-- **Learned entropy model + honest bytes (exploratory).** An optional per-tier context
+- **Learned entropy model (exploratory).** An optional per-tier context
   model makes codes cheaper (rate-aware training via soft-rate, gradient
-  codebooks) and reports achievable bits; `georvq.inference.archive`
-  writes real rANS files with byte-exact verification so claimed ratios
-  are realized ones.
+  codebooks) and reports achievable bits.
 - **Stats side-channel.** Sources that need per-tile normalization ship
   their stats alongside the indices, and the rate figures charge them
   (S2 sends its 26 values as about 10 bytes of PCA-packed stats at low
@@ -41,8 +39,7 @@ embedding fields (e.g. AlphaEarth, Tessera), multispectral imagery
   still decodes.
 - **Location conditioning (exploratory).** Predict-and-subtract cascades
   (frozen location→latent prior + cross-tier predictors) and
-  location-gated codebook subsetting, via SatCLIP embeddings
-  (`georvq[loc]`).
+  location-gated codebook subsetting, via SatCLIP embeddings.
 - **Warm starts and staged training.** Warm-start with shape
   reconciliation and encoder/codec freeze schedules; σ-conditioned
   continuous stage-1 pretraining (exploratory).
@@ -60,8 +57,13 @@ exactly by `georvq.from_checkpoint()`. Compare any two runs with
 ```bash
 pip install -e .                                    # decoding
 pip install -e ".[train]"                           # + training
-pip install -e ".[train,loc,archive,eval,viz,dev]"  # everything
+pip install -e ".[train,eval,viz,onnx,era5,dev]"   # everything
 ```
+
+The extras are `train`, `tessera`, `baseline`, `eval`, `viz`, `onnx`,
+`era5`, `notebooks` and `dev`. The oldest tested versions are Python
+3.10, torch 2.10, numpy 2.0, rasterio 1.4 and, in `[onnx]`, onnxruntime
+1.19; `[era5]` needs Python 3.11 for zarr 3.
 
 ## Quickstart: the AlphaEarth release codec
 
@@ -69,7 +71,7 @@ The most mature part of the codebase currently is the AlphaEarth release. Workin
 takes five steps. For more detailed information about the release, see `docs/AE_RELEASE.md`.
 
 ```bash
-# 1. install (add ".[onnx]" for torch-free decode)
+# 1. install (add ".[onnx]" for ONNX Runtime decode)
 git clone <this repo> && cd georvq
 pip install -e .
 
@@ -87,7 +89,7 @@ a = ds.read(window=((0, 1024), (0, 1024)), quality="p99<=0.02")
 
 The file names the release that decodes it, so when you first `open` a file that uses the codec, the
 bundle will be automatically downloaded from Hugging Face. Decoding runs
-on torch, or on ONNX Runtime when torch is not installed.
+on torch, or on ONNX Runtime when asked for (`backend="onnx"`).
 
 ## Train
 
@@ -127,9 +129,8 @@ the source *before* choosing an architecture for it.
 
 - `scripts/eval_rate_sweep.py` — downstream probe metrics across the whole
   R-D front (frozen-embedding kNN/linear probes on contamination-checked
-  held-out windows, geographic splits).
-- `scripts/eval_run_ab.py` — original-vs-reconstructed A/B on a benchmark
-  (with identity/noise sanity harnesses).
+  held-out windows, geographic splits), with identity and noise sanity
+  harnesses (`--sanity identity|noise`).
 - `scripts/baseline_classical.py` — classical codec baselines at actual
   file bytes.
 
@@ -187,14 +188,16 @@ recon = R.decode(R.encode(x, valid=v), depths=[20, 20, 5], valid=v)
 ## Tests
 
 ```bash
-pytest -m "not slow and not gpu"   # fast suite
-pytest                             # everything (training smokes included)
+pytest -m "not slow"   # fast suite, training smokes included (about 80 s on 8 CPUs)
+pytest                 # adds the resume and real-checkpoint tests
 ```
 
 The golden decode tests (`tests/test_ae_v2_bundle.py` for the AlphaEarth
-release, `tests/test_compat.py` for older bundles) verify that released
-weights still decode bit-faithfully; they self-skip where the bundle
-isn't present (`GEORVQ_AE_V2_BUNDLE`, `GEORVQ_AE_BUNDLE`).
+release, `tests/test_tessera_bundle.py` for the Tessera release) verify
+that released weights still encode and decode bit for bit; they
+self-skip where the bundle isn't present (`GEORVQ_AE_V2_BUNDLE`,
+`GEORVQ_AE_BUNDLE`, `GEORVQ_TESSERA_BUNDLE`). The recorded hashes hold
+on torch 2.10 or later with numpy 2; older versions give different codes.
 
 ## Funding
 
