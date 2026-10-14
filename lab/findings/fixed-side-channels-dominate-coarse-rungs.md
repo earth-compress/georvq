@@ -11,6 +11,7 @@ keywords: [rate, side-channel, normalizer, stats, coarse, ladder]
 related:
   - supports: cells-dominate-rate
   - supports: stats-channel-is-per-field
+  - supports: ae-transmitted-mean
 ---
 
 A side channel costs the same number of bits at every depth, while the
