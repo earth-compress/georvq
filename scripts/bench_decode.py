@@ -17,12 +17,12 @@ from georvq.train.validate import canonical_tuples
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--ckpt", required=True)
-    ap.add_argument("--gpu", type=int, default=0)
+    ap.add_argument("--device", default="cuda",
+                    help="torch device; cuda is the card Slurm allocated")
     ap.add_argument("--batch", type=int, default=256)
     ap.add_argument("--iters", type=int, default=20)
     args = ap.parse_args()
-    device = torch.device(f"cuda:{args.gpu}"
-                          if torch.cuda.is_available() and args.gpu >= 0
+    device = torch.device(args.device if torch.cuda.is_available()
                           else "cpu")
 
     codec = load_codec(args.ckpt, device)

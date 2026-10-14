@@ -32,9 +32,10 @@ from georvq.sources import Source
 _STATS_PATH = os.path.join(os.path.dirname(__file__), "era5_stats.json")
 
 # Units of the DEQUANTIZED store values, per variable (ECMWF conventions).
+# Only variables with moments in era5_stats.json can load; add a unit
+# here when its moments are added there.
 _UNITS = {"t": "K", "z": "m2 s-2", "u": "m s-1", "v": "m s-1",
-          "q": "kg kg-1", "msl": "Pa", "t2m": "K", "u10": "m s-1",
-          "v10": "m s-1"}
+          "q": "kg kg-1"}
 
 
 class _FixedNormalizer:
@@ -109,8 +110,10 @@ class Era5BoxcoxPrep:
 
     def __init__(self, source, model_cfg):
         # a boxcox-mode twin of the source does the arithmetic; the
-        # outer source (plain moments) keeps serving the model/report
-        self._src = Era5Source(model_cfg, var=source.var + "+boxcox")
+        # outer source (plain moments) keeps serving the model/report.
+        # The twin is built from the outer source's full spec so a level
+        # subset (@std13) carries over.
+        self._src = Era5Source(model_cfg, var=source.spec + "+boxcox")
 
     def forward(self, raw, meta, device):
         x, valid = self._src.prep(raw, device)
@@ -118,6 +121,11 @@ class Era5BoxcoxPrep:
 
     def inverse(self, y, meta):
         return self._src.normalizer(None).denormalize(y, None)
+
+    def load_state(self, state):
+        """The exponents and moments come from era5_stats.json, which
+        the module docstring freezes, so the embedded copy is not read
+        back."""
 
     def state(self):
         return {"boxcox": {"lam": self._src._lam.view(-1).tolist(),
@@ -146,6 +154,9 @@ class Era5Source(Source):
             var = var[:-len("+boxcox")]
             self._bc = True
         self._single = False
+        #: "<var>[@subset]" without "+boxcox": what a named prep rebuilds
+        #: its twin from
+        self.spec = var
         if "@" in var:
             var, subset = var.split("@", 1)
             if subset == _SINGLE:
@@ -156,6 +167,13 @@ class Era5Source(Source):
                 raise KeyError(f"unknown era5 level subset {subset!r}; "
                                f"have {sorted(_LEVEL_SUBSETS)} + "
                                f"{_SINGLE!r}")
+        if self._bc and self._single:
+            # the @single path standardizes by the drawn level's moments
+            # and never applies the transform, and the Box-Cox inverse
+            # needs the level, which is not carried past prep
+            raise ValueError(
+                f"era5:{self.spec}: Box-Cox is not supported with "
+                f"@{_SINGLE}")
         self.var = var
         with open(_STATS_PATH) as f:
             stats = json.load(f)

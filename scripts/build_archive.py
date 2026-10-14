@@ -17,6 +17,7 @@ from georvq.data.pool import fixed_val_tokens
 from georvq.data.store import ChipStore
 from georvq.inference.api import load_codec
 from georvq.inference.archive import write_archive
+from georvq.sources.prep import prep_of
 
 
 def main():
@@ -24,15 +25,15 @@ def main():
     ap.add_argument("--ckpt", required=True)
     ap.add_argument("--store-dir", required=True)
     ap.add_argument("--out", required=True)
-    ap.add_argument("--gpu", type=int, default=0)
+    ap.add_argument("--device", default="cuda",
+                    help="torch device; cuda is the card Slurm allocated")
     ap.add_argument("--windows", type=int, default=2048)
     ap.add_argument("--batch", type=int, default=256)
     ap.add_argument("--val-frac", type=float, default=0.04)
     ap.add_argument("--split-seed", type=int, default=0)
     ap.add_argument("--split", choices=["train", "val"], default="val")
     args = ap.parse_args()
-    device = torch.device(f"cuda:{args.gpu}"
-                          if torch.cuda.is_available() and args.gpu >= 0
+    device = torch.device(args.device if torch.cuda.is_available()
                           else "cpu")
 
     codec = load_codec(args.ckpt, device)
@@ -46,7 +47,7 @@ def main():
     def batches():
         for i in range(0, toks.shape[0], args.batch):
             s = toks[i:i + args.batch]
-            x, _ = codec.model.source.prep(s, device)
+            x, _ = prep_of(codec.model)(s, {}, device)[:2]
             meta = [{"window_id": i + j} for j in range(s.shape[0])]
             yield x, None, meta
 

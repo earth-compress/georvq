@@ -66,12 +66,14 @@ def reconstruct_tuples(model, win_int8, inv, lr, lc, tuples_ls, device,
     """Reconstruct every target pixel at each rate tuple. Encodes each window
     once; decodes all tuples from the cached cumulative codes. Returns a list
     (aligned to tuples_ls) of (N, bands) L2-normed reconstructions."""
+    from georvq.sources.prep import prep_of
+    prep = prep_of(model)
     N, bands = len(inv), model.cfg.bands
     out = [np.empty((N, bands), np.float32) for _ in tuples_ls]
     for a in range(0, len(win_int8), chunk):
         b = min(a + chunk, len(win_int8))
         raw = torch.from_numpy(win_int8[a:b])
-        x, valid = model.source.prep(raw, device)    # exact training prep
+        x, valid, _ = prep(raw, {}, device)          # the run's training prep
         _, cums = model.level_cumsums(x, valid=valid)
         mask = (inv >= a) & (inv < b)
         idx = np.nonzero(mask)[0]

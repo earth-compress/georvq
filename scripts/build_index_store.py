@@ -38,6 +38,7 @@ from georvq.data.store import open_store
 from georvq.factory import from_checkpoint
 from georvq.inference.api import Codec
 from georvq.inference.release import bitstream_id
+from georvq.sources.prep import prep_of
 
 
 def window_grid(chip_px, win):
@@ -64,7 +65,8 @@ def main():
     ap.add_argument("--ckpt", required=True)
     ap.add_argument("--store", required=True)
     ap.add_argument("--out", required=True)
-    ap.add_argument("--gpu", type=int, default=0)
+    ap.add_argument("--device", default="cuda",
+                    help="torch device; cuda is the card Slurm allocated")
     ap.add_argument("--batch", type=int, default=256,
                     help="windows per encode call")
     ap.add_argument("--readers", type=int, default=8)
@@ -72,7 +74,7 @@ def main():
                     help="smoke-test subset")
     args = ap.parse_args()
 
-    dev = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available()
+    dev = torch.device(args.device if torch.cuda.is_available()
                        else "cpu")
     model = from_checkpoint(args.ckpt, dev).eval()
     cfg = model.full_config
@@ -123,7 +125,7 @@ def main():
             return
         raw = torch.from_numpy(np.stack(buf_x)).to(dev)
         te = time.time()
-        x, valid = model.source.prep(raw, dev)
+        x, valid = prep_of(model)(raw, {}, dev)[:2]
         stacked, _, mean = codec.encode_batch(x, valid=valid)
         torch.cuda.synchronize() if dev.type == "cuda" else None
         enc_time += time.time() - te
