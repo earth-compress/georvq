@@ -120,15 +120,6 @@ def average_grads(params):
         g.copy_(s)
 
 
-def all_reduce_mean(x, device):
-    """Mean of a scalar across ranks (for logging a true global value)."""
-    if not is_distributed():
-        return float(x)
-    t = torch.tensor([float(x)], device=device)
-    dist.all_reduce(t, op=dist.ReduceOp.SUM)
-    return float(t.item() / world_size())
-
-
 def barrier():
     if is_distributed():
         dist.barrier()

@@ -91,14 +91,6 @@ def test_deep_supervision_reaches_every_exit(ld_cfg):
     assert all(v > 0 for v in m.decoder.act_max.values())
 
 
-def test_compile_trunks_reaches_stem_and_stages(ld_cfg):
-    from georvq.factory import compile_trunks
-    m = build_model(ld_cfg, torch.device("cpu"))
-    compile_trunks(m)
-    blocks = list(m.decoder.stem) + [b for st in m.decoder.stages for b in st]
-    assert blocks and all("forward" in vars(b) for b in blocks)
-
-
 def test_decoder_ff_ratio_widens_only_the_decoder(ld_cfg):
     def counts(ff):
         raw = ld_cfg.model_dump(mode="json")

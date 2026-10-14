@@ -128,17 +128,6 @@ def test_sigma_with_stats_cond_rejected(tiny_raw_cfg):
             tiny_raw_cfg, vq=None, sigma={}, stats_cond={}))
 
 
-def test_local_attn_with_decoder_bank_rejected(tiny_raw_cfg):
-    bank = [{"tiers": 1, "out_px": 4, "dim": 32, "depth": 1, "heads": 4,
-             "head_feat": 8},
-            {"tiers": 2, "out_px": 16, "dim": 32, "depth": 1, "heads": 4,
-             "head_feat": 8}]
-    Config.model_validate(_model_raw(tiny_raw_cfg, decoder_bank=bank))
-    with pytest.raises(ValidationError, match="local_attn"):
-        Config.model_validate(_model_raw(
-            tiny_raw_cfg, decoder_bank=bank, local_attn=[None, 1]))
-
-
 def test_norm_latents_declared_once():
     import inspect
 

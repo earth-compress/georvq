@@ -185,27 +185,13 @@ def test_prep_of_rebuilds_named_prep():
     assert isinstance(prep_of(_M()), Era5BoxcoxPrep)
 
 
-# ---- heads honour decoder.head_dw -----------------------------------------
+# ---- head layout -----------------------------------------------------------
 
-def test_dem_head_state_dict_unchanged_without_head_dw(dem_cfg):
+def test_dem_head_state_dict_layout(dem_cfg):
     head = get_source("dem", dem_cfg.model).build_head(dem_cfg.model, 32)
     assert sorted(head.state_dict()) == sorted(
         f"{m}.{p}" for m in ("to_patch", "conv.0", "conv.2", "conv.4")
         for p in ("weight", "bias"))
-
-
-def test_dem_head_dw_is_applied(dem_cfg):
-    cfg = dem_cfg.model.model_copy(deep=True)
-    cfg.decoder.head_dw = True
-    head = get_source("dem", cfg).build_head(cfg, 32)
-    assert head.conv[0].groups > 1
-
-
-def test_s2_head_dw_raises():
-    cfg = _s2_cfg()
-    cfg.model.decoder.head_dw = True
-    with pytest.raises(ValueError, match="head_dw"):
-        build_model(cfg, "cpu")
 
 
 # ---- eval exclusion guards and import side effects ------------------------

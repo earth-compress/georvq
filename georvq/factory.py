@@ -1,8 +1,6 @@
 """Build models from configs; rebuild them exactly from checkpoints."""
 from __future__ import annotations
 
-import torch
-
 from georvq.config import Config
 from georvq.model.codec import PyramidCodec
 from georvq.sources import get_source
@@ -22,30 +20,7 @@ def build_model(cfg: Config, device="cpu") -> PyramidCodec:
     model.decoder.grad_ckpt = cfg.train.grad_ckpt
     model.source = source
     model.full_config = cfg
-    if cfg.train.compile and device != "cpu":
-        compile_trunks(model)
     return model
-
-
-def _decoder_blocks(decoder):
-    """The per-layer trunk blocks of any decoder kind: a plain or tiersum
-    decoder's `blocks`, every `DecoderBank` member's, and a ladder's stem
-    plus each stage's blocks."""
-    if hasattr(decoder, "members"):
-        return [b for m in decoder.members for b in _decoder_blocks(m)]
-    if hasattr(decoder, "stages"):
-        return list(decoder.stem) + [b for st in decoder.stages for b in st]
-    return list(decoder.blocks)
-
-
-def compile_trunks(model):
-    """torch.compile the per-layer forwards of both trunks. Compiling bound
-    forwards (not the modules) keeps state-dict names untouched, so
-    checkpoints stay loadable everywhere."""
-    for layer in model.tokenizer.vit.layers:
-        layer.forward = torch.compile(layer.forward)
-    for blk in _decoder_blocks(model.decoder):
-        blk.forward = torch.compile(blk.forward)
 
 
 def from_checkpoint(path, device="cpu") -> PyramidCodec:

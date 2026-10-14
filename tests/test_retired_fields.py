@@ -98,3 +98,43 @@ def test_a_current_config_wins_over_a_stale_old_name():
     raw["train"]["optim"]["grad_clip"] = 0.5      # stale
     raw["model"]["vq"]["clip_norm"] = 2.0         # current
     assert Config.model_validate(migrate(raw)).model.vq.clip_norm == 2.0
+
+
+def test_slim_tier1_fields_still_validate_from_a_checkpoint():
+    """Configs dumped before the tier-1 removals carry these fields at
+    their defaults (every checkpoint on record does)."""
+    raw = _raw()
+    raw["model"]["local_attn"] = None
+    raw["model"]["tokenizer"]["late_join"] = 0
+    raw["model"]["decoder"]["late_join"] = 0
+    raw["model"]["decoder"]["head_dw"] = False
+    raw["train"]["compile"] = False
+    raw["train"]["freeze_head_steps"] = 0
+    raw["train"]["freeze_head_blocks"] = 3
+    raw["data"]["limit_chips"] = None
+    with pytest.raises(Exception):
+        Config.model_validate(raw)
+    cfg = Config.model_validate(drop_retired(raw))
+    assert cfg.model_dump(mode="json") == Config.model_validate(
+        _raw()).model_dump(mode="json")
+
+
+@pytest.mark.parametrize("path,value", [
+    ("model.local_attn", [None, 2]),
+    ("model.tokenizer.late_join", 2),
+    ("model.decoder.late_join", 1),
+    ("model.decoder.head_dw", True),
+    ("train.compile", True),
+    ("train.freeze_head_steps", 500),
+    ("train.freeze_head_blocks", 2),
+    ("data.limit_chips", 1000),
+])
+def test_each_tier1_field_is_retired(path, value):
+    assert path in RETIRED_FIELDS
+    raw = _raw()
+    *head, last = path.split(".")
+    cur = raw
+    for k in head:
+        cur = cur[k]
+    cur[last] = value
+    Config.model_validate(drop_retired(raw))

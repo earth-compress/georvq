@@ -140,17 +140,6 @@ def test_the_schema_rejects_a_malformed_bank(bad, match):
         Config.model_validate(raw)
 
 
-def test_compile_trunks_reaches_every_member():
-    from georvq.factory import compile_trunks
-    model = build_model(_cfg())
-    compile_trunks(model)
-    for mem in model.decoder.members:
-        for blk in mem.blocks:
-            assert "forward" in vars(blk)
-    # bound-forward compilation leaves the state dict names alone
-    assert set(model.state_dict()) == set(build_model(_cfg()).state_dict())
-
-
 def _bank_head_widths(cfg, widths):
     raw = cfg.model_dump(mode="json")
     for st, w in zip(raw["model"]["decoder_bank"], widths):

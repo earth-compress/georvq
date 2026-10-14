@@ -34,7 +34,7 @@ from georvq.train.warmstart import load_partial
 #: A stage-1 config that sets one is refused rather than run without it.
 UNSUPPORTED_TRAIN = ("batch_ramp", "guard_drop", "resume",
                      "freeze_encoder_steps", "freeze_codec",
-                     "freeze_head_steps", "refit_books")
+                     "refit_books")
 
 SIG_FRACS = [0.0, 0.1, 0.25, 0.5, 1.0]   # val sigma levels (fractions of max)
 

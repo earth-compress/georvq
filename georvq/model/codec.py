@@ -23,7 +23,6 @@ from georvq.model.decoder import PyramidAttnDecoder
 from georvq.model.layers import thermometer
 from georvq.model.rate import PyramidRateModel
 from georvq.model.tokenizer import ViTTokenizer
-from georvq.model.attnmask import build_local_mask
 from georvq.model.vq import ResidualVQ
 
 
@@ -150,13 +149,8 @@ class PyramidCodec(nn.Module):
         self.tokenizer = ViTTokenizer(
             self.specs, cfg.window, cfg.bands, dim=cfg.tokenizer.dim,
             depth=cfg.tokenizer.depth, ff_ratio=cfg.ff_ratio,
-            late_join=cfg.tokenizer.late_join,
             stem_pyramid=cfg.tokenizer.stem_pyramid,
             embed_norm=cfg.tokenizer.embed_norm)
-        if cfg.local_attn is not None:
-            m = build_local_mask(self.specs, cfg.window, cfg.local_attn)
-            # computed once; non-persistent so checkpoints stay unchanged
-            self.tokenizer.register_buffer("attn_mask", m, persistent=False)
 
         if not self.continuous:
             v = cfg.vq
@@ -236,8 +230,8 @@ class PyramidCodec(nn.Module):
         elif cfg.decoder.kind == "ladder":
             assert cfg.decoder.map_px is not None, \
                 "decoder.kind=ladder requires decoder.map_px"
-            assert cfg.sigma is None and cfg.local_attn is None, \
-                "ladder supports neither stage-1 sigma mode nor local attention"
+            assert cfg.sigma is None, \
+                "ladder does not support stage-1 sigma mode"
             assert cfg.depth_sampling == "path", \
                 "ladder exits follow the tier-presence prefix, which only " \
                 "fill-order (depth_sampling=path) training guarantees"
@@ -251,8 +245,8 @@ class PyramidCodec(nn.Module):
         elif cfg.decoder.kind == "tiersum":
             assert cfg.decoder.map_px is not None, \
                 "decoder.kind=tiersum requires decoder.map_px"
-            assert cfg.sigma is None and cfg.local_attn is None, \
-                "tiersum supports neither stage-1 sigma mode nor local attention"
+            assert cfg.sigma is None, \
+                "tiersum does not support stage-1 sigma mode"
             assert cfg.depth_sampling == "path", \
                 "tiersum groups rows by tier-presence prefix, which only " \
                 "fill-order (depth_sampling=path) training guarantees"
@@ -273,13 +267,7 @@ class PyramidCodec(nn.Module):
                 heads=cfg.decoder.heads, cls_bridge=cfg.decoder.cls_bridge,
                 ff_ratio=dec_ff,
                 sigma_cond=cfg.sigma is not None,
-                sigma_freqs=cfg.sigma.freqs if cfg.sigma else 8,
-                late_join=cfg.decoder.late_join)
-        if cfg.local_attn is not None:
-            self.decoder.register_buffer(
-                "attn_mask", build_local_mask(self.specs, cfg.window,
-                                              cfg.local_attn),
-                persistent=False)
+                sigma_freqs=cfg.sigma.freqs if cfg.sigma else 8)
 
     # ---- encode / decode ----
 

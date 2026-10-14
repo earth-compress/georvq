@@ -518,62 +518,6 @@ def _warn_slurm_mem(pool_bytes):
               f"data.pool.size.", flush=True)
 
 
-class GroupChipLoader:
-    """Batch loader for multi-group (multi-resolution) stores: all groups of
-    the working set resident in RAM, consistent random crops across groups
-    (offsets snapped to the coarsest grid). Same `sample_batch` contract as
-    ChipPool, yielding a dict of per-group crops. Suited to working sets
-    that fit memory; background-refresh streaming for multi-group stores is
-    a roadmap item."""
-
-    def __init__(self, store, rows: pd.DataFrame, device, period=None,
-                 seed=0, max_chips=None):
-        assert store.groups, "GroupChipLoader needs a multi-group store"
-        self.store = store
-        self.device = device
-        rows = rows.reset_index(drop=True)
-        if max_chips and len(rows) > max_chips:
-            rows = rows.head(max_chips)
-        self.rows = rows
-        self.groups = {g["name"]: (g["bands"], g["px"]) for g in store.groups}
-        self.chip_px = max(px for _, px in self.groups.values())
-        # ratio of the finest grid to each group's grid (e.g. 1 / 2 / 6)
-        self.ratio = {n: self.chip_px // px for n, (_, px) in self.groups.items()}
-        self.period = period or max(self.ratio.values())
-        self.cycle = False
-        self.chips_loaded = len(rows)
-        self.data = {n: [] for n in self.groups}
-        for _, r in rows.iterrows():
-            for n in self.groups:
-                arr = store.open_shard(int(r["shard"]), n)[int(r["slot"])]
-                self.data[n].append(torch.from_numpy(np.ascontiguousarray(arr)))
-        self.data = {n: torch.stack(v) for n, v in self.data.items()}
-        self.gen = torch.Generator().manual_seed(seed)
-
-    def sample_batch(self, batch, token=16, align=True, return_rows=False):
-        """token: crop size in FINEST-grid pixels (must divide by every
-        group ratio). Crops are always aligned to the coarsest grid."""
-        p = self.period
-        ci = torch.randint(0, len(self.rows), (batch,), generator=self.gen)
-        r0 = torch.randint(0, (self.chip_px - token) // p + 1, (batch,),
-                           generator=self.gen) * p
-        c0 = torch.randint(0, (self.chip_px - token) // p + 1, (batch,),
-                           generator=self.gen) * p
-        out = {}
-        for n, ratio in self.ratio.items():
-            t = token // ratio
-            rr, cc = r0 // ratio, c0 // ratio
-            crops = [self.data[n][ci[b], :, rr[b]:rr[b] + t, cc[b]:cc[b] + t]
-                     for b in range(batch)]
-            out[n] = torch.stack(crops).to(self.device, non_blocking=True)
-        if return_rows:
-            return out, ci.to(self.device)
-        return out
-
-    def shutdown(self):
-        pass
-
-
 def fixed_val_tokens(store, rows: pd.DataFrame, token=16, per_chip=16,
                      max_chips=256, max_tokens=4096, nodata=None,
                      sat_table=None):
