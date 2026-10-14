@@ -1,9 +1,7 @@
-Draft for review: wording not yet approved by the maintainer; `[pending: ...]` marks values still being measured or built.
-
 # The AlphaEarth release codec
 
 This document describes the released georvq codec for the AlphaEarth Foundations annual
-embedding tiles. The model that this codec uses is [released on HuggingFace]([pending: hosting]). 
+embedding tiles. The model that this codec uses is [released on HuggingFace](https://huggingface.co/earth-compress/georvq-ae-v2). 
 We use this codec to encode source tiles into a geoparquet file that contains the compressed
 blobs used by the decoder. These GeoParquet files can be streamed from their location on the cloud at any of 23 bitrates, with windowed
 range reads over HTTP, allowing users to access lossily compressed AlphaEarth Foundations data at bitrates from ~0.1-7.5 bits per pixel, with cosine similarity going from 97.2% to 99.8%. The code that this release uses is in `georvq/ae/v2.py`, and the GeoParquet file format is defined in `georvq/inference/georvq_parquet.py`.
@@ -50,7 +48,8 @@ placed at the path that mirrors the source tile's path
 A tile index, `aef_georvq_index.parquet`, has the source index's
 columns with paths to the coded files, plus each file's `bitstream_id`
 and bytes per rung (`georvq/ae/index.py`, `scripts/build_ae_index.py`;
-published with the files `[pending: hosting]`). The files are
+published with the files; the sample's index is in the
+[sample dataset](https://huggingface.co/datasets/earth-compress/georvq-ae-v2-sample)). The files are
 GeoParquet 1.1, so pyarrow and DuckDB read their rows directly; the
 georvq header is JSON in the file's key-value metadata, and the source
 tile's profile, tags, band descriptions and orientation are kept as
@@ -93,7 +92,7 @@ stored mask. The file's header names the release that decodes it, and
 `open` finds that release's bundle by its `bitstream_id`: in a local
 cache (`~/.cache/georvq/bundles/<bitstream_id>/`), at `GEORVQ_AE_BUNDLE`,
 or by downloading it from the `earth-compress` organisation on Hugging
-Face `[pending: hosting]`. A bundle whose ids do not match the file is
+Face ([`earth-compress/georvq-ae-v2`](https://huggingface.co/earth-compress/georvq-ae-v2)). A bundle whose ids do not match the file is
 refused. The device defaults to CUDA when available, and the backend to
 torch when installed, otherwise ONNX Runtime.
 
@@ -167,7 +166,7 @@ per pixel, and `info` prints them.
 ## Getting the model
 
 Weights are not in git. They are published on Hugging Face as
-`earth-compress/georvq-ae-v2` `[pending: hosting]`, without pickled
+[`earth-compress/georvq-ae-v2`](https://huggingface.co/earth-compress/georvq-ae-v2), without pickled
 files: model tensors, codebooks, mean-channel tables, the rung table
 and a `bundle.json` holding the ids.
 
@@ -175,12 +174,16 @@ and a `bundle.json` holding the ids.
 git clone <this repo> && cd georvq
 pip install -e .                    # decode, encode and reconstruct
 pip install -e ".[onnx]"            # adds torch-free decode
-huggingface-cli download earth-compress/georvq-ae-v2 \
-    --local-dir georvq-ae-v2        # [pending: hosting]
+hf download earth-compress/georvq-ae-v2 \
+    --local-dir georvq-ae-v2
 ```
 
-Encoded tiles will be hosted at `<host>/annual/{year}/{zone}/{stem}.georvq.parquet`
-`[pending: hosting]`; `georvq.ae.open` reads them by URL.
+A sample of six encoded tiles with their index is on Hugging Face as
+[`earth-compress/georvq-ae-v2-sample`](https://huggingface.co/datasets/earth-compress/georvq-ae-v2-sample), in the same
+`annual/{year}/{zone}/` layout; `georvq.ae.open` reads them by URL, e.g.
+`https://huggingface.co/datasets/earth-compress/georvq-ae-v2-sample/resolve/main/annual/2025/32N/xh72hhha3ih6mroc7-0000008192-0000008192.georvq.parquet`.
+The full set of encoded tiles will be hosted at
+`<host>/annual/{year}/{zone}/{stem}.georvq.parquet` `[pending: hosting]`.
 
 ## Encoding and decoding cost
 
