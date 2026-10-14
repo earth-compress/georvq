@@ -145,21 +145,6 @@ def freeze_books(model):
                for l in rvq.levels)
 
 
-def decoder_tail_names(model, n_blocks):
-    """Names of the last `n_blocks` decoder blocks plus the output head."""
-    import re
-    idx = {int(m.group(1)) for n, _ in model.named_parameters()
-           if (m := re.match(r"decoder\.blocks\.(\d+)\.", n))}
-    tail = {i for i in sorted(idx)[-n_blocks:]} if n_blocks > 0 else set()
-    keep = set()
-    for n, _ in model.named_parameters():
-        m = re.match(r"decoder\.blocks\.(\d+)\.", n)
-        if (m and int(m.group(1)) in tail) or \
-                n.startswith(("decoder.head.", "decoder.norm_out.")):
-            keep.add(n)
-    return keep
-
-
 def set_params_frozen(model, names, frozen: bool):
     """Freeze/unfreeze by name. Safe to call after the optimizer is built:
     the optimizer holds every trainable param from the start (see

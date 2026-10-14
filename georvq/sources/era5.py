@@ -293,8 +293,7 @@ class Era5Source(Source):
         return DenseHead(in_dim, grid=grid, p=p,
                          bands=model_cfg.bands,
                          head_feat=model_cfg.decoder.head_feat,
-                         normalize=False,
-                         dw=model_cfg.decoder.head_dw)
+                         normalize=False)
 
     def normalizer(self, model_cfg):
         if self._lam is not None:

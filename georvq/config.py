@@ -60,10 +60,6 @@ def parse_tier(v):
 class TokenizerConfig(StrictModel):
     dim: int = 256
     depth: int = 9
-    # finest tier joins the trunk only for the last k layers (0 = every
-    # layer). High-frequency content is local: a few joint layers suffice
-    # and the coarse-only prefix runs at a fraction of the sequence length
-    late_join: int = 0
     # One conv pyramid instead of an independent patch embed per tier and
     # a CLS parameter for the coarsest. The coarse token then arrives with
     # a convolutional read of the image rather than as a constant the
@@ -118,7 +114,6 @@ class DecoderConfig(StrictModel):
     heads: int = 8
     head_feat: int = 64
     cls_bridge: bool = True
-    late_join: int = 0             # same contract as tokenizer.late_join
     # Decoder-only FFN width multiplier. None = share `model.ff_ratio`
     # with the tokenizer, which is the historical behaviour. Set it to
     # widen the DECODER's MLPs without touching the encoder -- required
@@ -126,8 +121,6 @@ class DecoderConfig(StrictModel):
     # training from cached latents), because a wider encoder FFN is a
     # different encoder and its cached latents would no longer apply.
     ff_ratio: Optional[float] = None
-    head_dw: bool = False          # depthwise-separable head convs (8x fewer
-                                   # MACs; smooths intra-window tile seams)
     map_px: Optional[list[int]] = None   # tiersum: per-tier map size, px
     solo_hidden: int = 512               # tiersum coarse-only MLP width
     solo_layers: int = 3
@@ -377,9 +370,6 @@ class ModelConfig(StrictModel):
     stats_cond: Optional[StatsCondConfig] = None
     conditioning: Optional[Conditioning] = None
     rate: Optional[RateConfig] = None
-    # hierarchical local attention: per-tier radius in own-tier cells
-    # (null = global tier). e.g. [null, null, 2, 4]. None = full attention.
-    local_attn: Optional[list[Optional[int]]] = None
 
     @field_validator("tiers", mode="before")
     @classmethod
@@ -451,11 +441,6 @@ class ModelConfig(StrictModel):
                         f"decoder_bank[{s.tiers}]: window {self.window} not "
                         f"divisible by out_px {s.out_px}; the resample back "
                         "to full resolution has to be an integer factor")
-            if self.local_attn is not None:
-                # the mask is built for the full token set and registered
-                # on the bank, which its members never read
-                raise ValueError(
-                    "local_attn is not supported with decoder_bank")
             if self.stats_cond is not None and self.stats_cond.cond_decoder:
                 # the patch-mean embedding is added to each member's AdaLN
                 # conditioning, and one StatsEmbed serves them all, so the
@@ -538,9 +523,6 @@ class DataConfig(StrictModel):
     reader: Literal["auto", "chipstore", "live_s2"] = "auto"
     val_frac: float = 0.04
     split_seed: int = 0
-    limit_chips: Optional[int] = None   # data-scaling probes: train on a
-    #   deterministic subsample of N chips (nested: N ⊂ 2N for the same
-    #   split_seed); the val split always stays full
     pool: PoolConfig = Field(default_factory=PoolConfig)
     prep: PrepConfig = Field(default_factory=PrepConfig)
 
@@ -604,7 +586,6 @@ class TrainConfig(StrictModel):
     amp: bool = True
     grad_ckpt: bool = False
     tf32: bool = True
-    compile: bool = False          # torch.compile the trunk layer forwards
     init_from: Optional[Path] = None
     # A warm start with vq.warmup_steps > 0 refits the codebooks by
     # k-means at warmup_steps + 1. When the init_from checkpoint supplied
@@ -619,11 +600,6 @@ class TrainConfig(StrictModel):
     resume: Optional[Path] = None
     freeze_encoder_steps: int = 0
     freeze_codec: bool = False
-    # Hold the decoder's output end still while its internal representation
-    # re-adapts to quantized latents: freeze the last `freeze_head_blocks`
-    # decoder blocks plus norm_out/head for this many steps.
-    freeze_head_steps: int = 0
-    freeze_head_blocks: int = 3
     optim: OptimConfig = Field(default_factory=OptimConfig)
     seed: int = 0
     val_interval: int = 1000
@@ -693,6 +669,13 @@ RETIRED_FIELDS = (
     "model.tokenizer.suffix_dim", "model.decoder.suffix_dim",
     "train.trap",                                          # debugging tool
     "data.sampler",                                        # one geometry
+    # no preset or finding used these; removed 2026-10-14
+    "model.local_attn",
+    "model.tokenizer.late_join", "model.decoder.late_join",
+    "model.decoder.head_dw",
+    "train.compile",
+    "train.freeze_head_steps", "train.freeze_head_blocks",
+    "data.limit_chips",
 )
 
 

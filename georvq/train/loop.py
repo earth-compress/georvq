@@ -37,9 +37,8 @@ from georvq.sources.report import resolve_report
 from georvq.train.validate import canonical_tuples, load_rd_ref, tname, validate
 from georvq.train import dist as D
 from georvq.train.signals import stop_on_signals
-from georvq.train.warmstart import (check_warm_start, decoder_tail_names,
-                                    freeze_books, load_partial,
-                                    set_encoder_frozen, set_params_frozen,
+from georvq.train.warmstart import (check_warm_start, freeze_books,
+                                    load_partial, set_encoder_frozen,
                                     trainable_params)
 
 
@@ -216,13 +215,6 @@ def setup_data(cfg: Config, source, device):
     elif D.is_main():
         print(f"data: {len(store.index)} chips -> {len(train_rows)} train / "
               f"{len(val_rows)} val", flush=True)
-    if cfg.data.limit_chips:
-        order = np.random.default_rng(cfg.data.split_seed).permutation(
-            len(train_rows))
-        train_rows = train_rows.iloc[
-            order[:cfg.data.limit_chips]].reset_index(drop=True)
-        print(f"data: limit_chips -> training on {len(train_rows)} chips",
-              flush=True)
     val_s = fixed_val_tokens(store, val_rows, token=cfg.model.window)
     if D.is_main():
         print(f"data: {val_s.shape[0]} fixed val tokens", flush=True)
@@ -402,14 +394,6 @@ def _train(cfg: Config, gpu, stop):
         n_book = freeze_books(model)
         print(f"vq.freeze_books: {n_book/1e6:.1f}M codebook weights frozen "
               f"(no EMA, no resets, no grad)", flush=True)
-    head_names = set()
-    if cfg.train.freeze_head_steps > 0:
-        head_names = decoder_tail_names(model, cfg.train.freeze_head_blocks)
-        set_params_frozen(model, head_names, True)
-        print(f"froze {len(head_names)} decoder-tail tensors "
-              f"(last {cfg.train.freeze_head_blocks} blocks + head) for "
-              f"{cfg.train.freeze_head_steps} steps", flush=True)
-
     if ddp_world > 1:
         # Absorb prefill skew explicitly before the first real collective:
         # ranks reach this point many minutes apart because each fills its
@@ -433,14 +417,14 @@ def _train(cfg: Config, gpu, stop):
     # a fresh rate model gets its own (higher) LR so it can learn while a
     # warm-started codec fine-tunes at the small base LR. The optimizer owns
     # every param that trains at ANY point in the run — temporarily frozen
-    # params (encoder, decoder tail) must be present from the start or
+    # params (the encoder) must be present from the start or
     # unfreezing them later would never take effect.
     def _trains_eventually(n, p):
         if v.freeze_books and n.startswith("rvqs."):
             return False              # frozen for the whole run
         if cfg.train.freeze_codec:
             return n.startswith("selector.")
-        return p.requires_grad or n in head_names or \
+        return p.requires_grad or \
             (enc_frozen and n.startswith(("tokenizer.", "stem.")))
     rate_p = [p for n, p in trainable_params(model, _trains_eventually)
               if n.startswith("rate.")]
@@ -569,10 +553,6 @@ def _train(cfg: Config, gpu, stop):
             print(f"step {step}: unfroze encoder (co-adaptation begins)",
                   flush=True)
 
-        if head_names and step > cfg.train.freeze_head_steps:
-            set_params_frozen(model, head_names, False)
-            print(f"step {step}: unfroze decoder tail", flush=True)
-            head_names = set()
         if v.reset_freeze_frac and \
                 step == int(cfg.train.steps * v.reset_freeze_frac):
             for rvq in model.rvqs:

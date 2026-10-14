@@ -136,10 +136,10 @@ class LadderDecoder(nn.Module):
         if self.grad_ckpt and self.training:
             from torch.utils.checkpoint import checkpoint
             for blk in blocks:
-                h = checkpoint(blk, h, c, None, use_reentrant=False)
+                h = checkpoint(blk, h, c, use_reentrant=False)
         else:
             for blk in blocks:
-                h = blk(h, c, None)
+                h = blk(h, c)
         return h
 
     def forward(self, zqs, cond_arg, stats=None):

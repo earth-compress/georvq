@@ -161,13 +161,6 @@ def cosdist_figure(cosdist, baseline, specs, step):
     return fig
 
 
-# Back-compat aliases: the PCA-RGB renderer moved into the report layer so
-# that a source can declare a different one (grayscale relief, true colour)
-# instead of every plane being forced through three principal components.
-pca_rgb_basis = PCA_RGB.basis
-_pca_rgb = PCA_RGB.render
-
-
 def _run_prep(model, source, prep):
     """The run's prep, or the source's default for ad-hoc callers (the
     same fallback `validate()` uses)."""
