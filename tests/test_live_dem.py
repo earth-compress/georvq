@@ -58,3 +58,21 @@ def test_shard_slot_contract():
     via_shard = store.open_shard(int(r["shard"]))[int(r["slot"])]
     direct = store.read_chip(int(r.chip_id))
     assert (via_shard == direct).all()
+
+
+def test_index_must_be_in_chip_id_order(tmp_path):
+    import json
+
+    import pandas as pd
+
+    from georvq.data.live_dem import LiveDEMStore
+    (tmp_path / "manifest.json").write_text(json.dumps(
+        {"kind": "live_dem", "chip_px": CHIP_PX, "bands": 1,
+         "dtype": "float32", "nodata": -32767.0}))
+    idx = pd.DataFrame({"chip_id": [0, 2, 1], "band": [0, 0, 0],
+                        "vrow0": [0, 0, 0], "vcol0": [0, 0, 0]})
+    idx.to_parquet(tmp_path / "index.parquet")
+    with pytest.raises(ValueError, match="chip_id"):
+        LiveDEMStore(tmp_path)
+    idx.sort_values("chip_id").to_parquet(tmp_path / "index.parquet")
+    LiveDEMStore(tmp_path)

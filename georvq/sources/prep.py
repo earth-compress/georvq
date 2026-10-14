@@ -72,16 +72,31 @@ class SourcePrep(Prep):
         return n.denormalize(y, None)
 
 
-def build_prep(name, source, model_cfg):
+def build_prep(name, source, model_cfg, params=None):
     """Resolve a prep by config name; None picks the source's default
-    (SourcePrep unless the source overrides `default_prep`)."""
+    (SourcePrep unless the source overrides `default_prep`). `params`
+    (data.prep.params, a named fitted-state artifact) is passed as the
+    `params` keyword, so a prep that has no fitted state rejects it."""
     if name is None:
         if hasattr(source, "default_prep"):
-            return source.default_prep(model_cfg)
-        return SourcePrep(source, model_cfg)
-    named = getattr(source, "named_preps", lambda: {})()
-    if name not in named:
-        raise KeyError(
-            f"source {source.name!r} has no prep {name!r}; "
-            f"have {sorted(named) or ['(default only)']}")
-    return named[name](source, model_cfg)
+            make = source.default_prep
+            args = (model_cfg,)
+        else:
+            make = SourcePrep
+            args = (source, model_cfg)
+    else:
+        named = getattr(source, "named_preps", lambda: {})()
+        if name not in named:
+            raise KeyError(
+                f"source {source.name!r} has no prep {name!r}; "
+                f"have {sorted(named) or ['(default only)']}")
+        make = named[name]
+        args = (source, model_cfg)
+    if params is None:
+        return make(*args)
+    try:
+        return make(*args, params=params)
+    except TypeError as e:
+        raise ValueError(
+            f"prep {name or 'default'!r} does not accept data.prep.params "
+            f"({params!r}): {e}") from e
