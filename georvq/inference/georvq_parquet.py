@@ -765,124 +765,44 @@ def _transient(e) -> bool:
                           http.client.HTTPException))
 
 
-class RVQParquetReader:
-    """Reads a georvq GeoParquet file from a local path or an http(s)
-    URL (HTTP Range requests).
+def check_header(header, source="") -> None:
+    """Refuse a header of another format or major version."""
+    if header.get("format") != FORMAT:
+        raise ValueError(f"{source}: format {header.get('format')!r}")
+    major = int(str(header["version"]).split(".")[0])
+    if major != MAJOR:
+        raise ValueError(f"{source}: {FORMAT} major version {major}, "
+                         f"this reader handles {MAJOR}")
 
-    Opening costs one suffix read of `first_read` bytes, and a second
-    when the footer is longer. A read plans the column chunks it needs,
-    leaves out those in `cache` or in the fetched tail, merges ranges
-    whose gap is at most `gap` bytes, and fetches them, up to
-    `concurrency` at a time over HTTP and in turn from a local file.
-    `cache` defaults to a RecordCache of `cache_bytes`, on disk under
-    `cache_dir` when one is given. `stats` counts requests, bytes,
-    retried requests, values served from the cache and their bytes.
-    `trace`, a Trace, records each byte request and the parsing work
-    when given.
 
-    Over HTTP each request times out after `timeout` seconds (None for
-    no limit). A request that fails with a 5xx or 429 answer, a timeout
-    or a broken connection is repeated up to `retries` times, waiting
-    `backoff` seconds and doubling the wait each time; any other 4xx
-    answer fails at once. The server must honour Range: a response whose
-    Content-Range differs from the request is refused. A server that
-    sends neither ETag nor Last-Modified gives no way to tell a changed
-    file from the one cached, so its values are cached in memory only.
+class RangeSource:
+    """Byte ranges of one object, a local file or an http(s) URL, with
+    the checks, timeouts and retries described in RVQParquetReader.
+    `stats` and `lock` can be shared between sources, so that several
+    objects count into one reader's statistics. `size`, when known in
+    advance, is checked against every response; with `adopt_tag` set,
+    the ETag or Last-Modified of the first range response is too."""
 
-    One reader can be shared by threads."""
+    adopt_tag = False
 
-    def __init__(self, path_or_url, first_read=FIRST_READ, gap=GAP,
-                 concurrency=CONCURRENCY, cache=None, cache_bytes=CACHE_BYTES,
-                 cache_dir=None, trace=None, timeout=TIMEOUT, retries=RETRIES,
-                 backoff=BACKOFF):
-        self.source = os.fspath(path_or_url)
+    def __init__(self, source, trace=None, timeout=TIMEOUT, retries=RETRIES,
+                 backoff=BACKOFF, concurrency=CONCURRENCY, stats=None,
+                 lock=None, size=None):
+        self.source = os.fspath(source)
         self.trace = trace
-        self.gap = int(gap)
         self.concurrency = max(1, int(concurrency))
         self.timeout = None if timeout is None else float(timeout)
         self.retries = max(0, int(retries))
         self.backoff = float(backoff)
         self._url = self.source.startswith(("http://", "https://"))
-        self._lock = threading.Lock()
-        self._parse_lock = threading.Lock()
-        self.stats = {"requests": 0, "bytes": 0, "retries": 0,
-                      "cache_hits": 0, "cache_bytes": 0}
+        self._lock = lock if lock is not None else threading.Lock()
+        self.stats = stats if stats is not None else {
+            "requests": 0, "bytes": 0, "retries": 0, "cache_hits": 0,
+            "cache_bytes": 0}
         self.version_tag = None
-        self.size = None
-        self._fd = None if self._url else os.open(self.source, os.O_RDONLY)
-        try:
-            self._open(int(first_read), cache, cache_bytes, cache_dir)
-        except BaseException:
-            self.close()
-            raise
-
-    def _open(self, first_read, cache, cache_bytes, cache_dir):
-        trace = self.trace
-        tail, size = self._suffix(first_read)
         self.size = size
-        if len(tail) < 12 or tail[-4:] != b"PAR1":
-            raise ValueError(f"{self.source}: not a Parquet file")
-        need = struct.unpack("<I", tail[-8:-4])[0] + 8
-        if need > size:
-            raise ValueError(f"{self.source}: footer of {need} bytes in a "
-                             f"file of {size}")
-        if need > len(tail):
-            more = self._read((size - need, need - len(tail)))
-            tail = more + tail
-        self._buf = _Sparse(size, size - len(tail), tail)
-        # The footer is parsed from the fetched bytes alone: pyarrow's own
-        # open reads a fixed-size suffix that may extend past them.
-        footer = tail[len(tail) - need:]
-        with span(trace, "cpu", "parse footer"):
-            md = pq.read_metadata(pa.BufferReader(b"PAR1" + footer))
-            self._pf = pq.ParquetFile(self._buf, metadata=md)
-        self.metadata = md
-        kv = md.metadata or {}
-        if HEADER_KEY.encode() not in kv:
-            raise ValueError(f"{self.source}: no {HEADER_KEY!r} metadata")
-        self.header = json.loads(kv[HEADER_KEY.encode()])
-        if self.header.get("format") != FORMAT:
-            raise ValueError(f"{self.source}: format {self.header.get('format')!r}")
-        major = int(str(self.header["version"]).split(".")[0])
-        if major != MAJOR:
-            raise ValueError(f"{self.source}: {FORMAT} major version {major}, "
-                             f"this reader handles {MAJOR}")
-        self.geo = json.loads(kv[GEO_KEY.encode()]) if GEO_KEY.encode() in kv else None
-        aux = kv.get(AUX_KEY.encode())
-        self.aux = None if aux is None else aux.decode("utf-8")
-        lay = self.header["layout"]
-        self.layout = Layout.from_json(lay)
-        self.window_grid = tuple(int(v) for v in lay["window_grid"])
-        self.chunk_grids, self._first, self.empty = {}, {}, {}
-        for g in lay["groups"]:
-            self.chunk_grids[g["kind"]] = tuple(int(v) for v in g["chunk_grid"])
-            self._first[g["kind"]] = int(g["row_groups"][0])
-            self.empty[g["kind"]] = {tuple(c) for c in g.get("empty_chunks", [])}
-        # windows of empty chunks have no valid pixel, whatever their kind
-        self.dead = np.zeros(self.window_grid, bool)
-        for kind, chunks in self.empty.items():
-            n = self.layout.groups[kind].chunk_windows
-            for i, j in chunks:
-                self.dead[i * n:(i + 1) * n, j * n:(j + 1) * n] = True
-        self.masked = {tuple(c) for c in lay["mask"].get("chunks", [])}
-        self.height, self.width = (int(v) for v in lay["product_px"])
-        n_rg = sum(a * b for a, b in self.chunk_grids.values())
-        if md.num_row_groups != n_rg:
-            raise ValueError(f"{self.source}: {md.num_row_groups} row groups, "
-                             f"the layout has {n_rg}")
-        self._col = {md.schema.column(k).path: k for k in range(md.num_columns)}
-        bid = (self.header.get("codec") or {}).get("bitstream_id", "")
-        self.file_key = (str(bid), hashlib.sha1(json.dumps(
-            self.identity, default=str).encode()).hexdigest()[:20])
-        self.cache = cache if cache is not None else RecordCache(cache_bytes,
-                                                                 cache_dir)
-        self._disk = not (self._url and self.version_tag is None)
-        if not self._disk and self.cache.dir is not None:
-            warnings.warn(f"{self.source}: the server sends no ETag or "
-                          f"Last-Modified, so values are cached in memory "
-                          f"only, not under {self.cache.dir}", stacklevel=3)
+        self._fd = None if self._url else os.open(self.source, os.O_RDONLY)
 
-    # ---- io ----
 
     @property
     def identity(self) -> list:
@@ -1003,6 +923,8 @@ class RVQParquetReader:
                     raise OSError(f"{self.source}: bytes {offset}-{last} were "
                                   f"requested and bytes {a}-{b} answered")
                 tag = self._tag(resp)
+                if self.version_tag is None and self.adopt_tag:
+                    self.version_tag = tag
                 if size != self.size or (
                         tag is not None and self.version_tag is not None
                         and tag != self.version_tag):
@@ -1036,6 +958,118 @@ class RVQParquetReader:
         if self._fd is not None:
             os.close(self._fd)
             self._fd = None
+
+
+class RVQParquetReader(RangeSource):
+    """Reads a georvq GeoParquet file from a local path or an http(s)
+    URL (HTTP Range requests).
+
+    Opening costs one suffix read of `first_read` bytes, and a second
+    when the footer is longer. A read plans the column chunks it needs,
+    leaves out those in `cache` or in the fetched tail, merges ranges
+    whose gap is at most `gap` bytes, and fetches them, up to
+    `concurrency` at a time over HTTP and in turn from a local file.
+    `cache` defaults to a RecordCache of `cache_bytes`, on disk under
+    `cache_dir` when one is given. `stats` counts requests, bytes,
+    retried requests, values served from the cache and their bytes.
+    `trace`, a Trace, records each byte request and the parsing work
+    when given.
+
+    Over HTTP each request times out after `timeout` seconds (None for
+    no limit). A request that fails with a 5xx or 429 answer, a timeout
+    or a broken connection is repeated up to `retries` times, waiting
+    `backoff` seconds and doubling the wait each time; any other 4xx
+    answer fails at once. The server must honour Range: a response whose
+    Content-Range differs from the request is refused. A server that
+    sends neither ETag nor Last-Modified gives no way to tell a changed
+    file from the one cached, so its values are cached in memory only.
+
+    One reader can be shared by threads."""
+
+    def __init__(self, path_or_url, first_read=FIRST_READ, gap=GAP,
+                 concurrency=CONCURRENCY, cache=None, cache_bytes=CACHE_BYTES,
+                 cache_dir=None, trace=None, timeout=TIMEOUT, retries=RETRIES,
+                 backoff=BACKOFF):
+        super().__init__(path_or_url, trace, timeout, retries, backoff,
+                         concurrency)
+        self.gap = int(gap)
+        self._parse_lock = threading.Lock()
+        try:
+            self._open(int(first_read), cache, cache_bytes, cache_dir)
+        except BaseException:
+            self.close()
+            raise
+
+    def _open(self, first_read, cache, cache_bytes, cache_dir):
+        trace = self.trace
+        tail, size = self._suffix(first_read)
+        self.size = size
+        if len(tail) < 12 or tail[-4:] != b"PAR1":
+            raise ValueError(f"{self.source}: not a Parquet file")
+        need = struct.unpack("<I", tail[-8:-4])[0] + 8
+        if need > size:
+            raise ValueError(f"{self.source}: footer of {need} bytes in a "
+                             f"file of {size}")
+        if need > len(tail):
+            more = self._read((size - need, need - len(tail)))
+            tail = more + tail
+        self._buf = _Sparse(size, size - len(tail), tail)
+        # The footer is parsed from the fetched bytes alone: pyarrow's own
+        # open reads a fixed-size suffix that may extend past them.
+        footer = tail[len(tail) - need:]
+        with span(trace, "cpu", "parse footer"):
+            md = pq.read_metadata(pa.BufferReader(b"PAR1" + footer))
+            self._pf = pq.ParquetFile(self._buf, metadata=md)
+        self.metadata = md
+        kv = md.metadata or {}
+        if HEADER_KEY.encode() not in kv:
+            raise ValueError(f"{self.source}: no {HEADER_KEY!r} metadata")
+        self.header = json.loads(kv[HEADER_KEY.encode()])
+        check_header(self.header, self.source)
+        self.geo = json.loads(kv[GEO_KEY.encode()]) if GEO_KEY.encode() in kv else None
+        aux = kv.get(AUX_KEY.encode())
+        self.aux = None if aux is None else aux.decode("utf-8")
+        self._from_header()
+        n_rg = sum(a * b for a, b in self.chunk_grids.values())
+        if md.num_row_groups != n_rg:
+            raise ValueError(f"{self.source}: {md.num_row_groups} row groups, "
+                             f"the layout has {n_rg}")
+        self._col = {md.schema.column(k).path: k for k in range(md.num_columns)}
+        self._set_cache(json.dumps(self.identity, default=str), cache,
+                        cache_bytes, cache_dir)
+
+    def _set_cache(self, identity, cache, cache_bytes, cache_dir):
+        """File key from the bitstream id and `identity`, and the cache,
+        on disk only when the source's versions can be told apart."""
+        bid = (self.header.get("codec") or {}).get("bitstream_id", "")
+        self.file_key = (str(bid), hashlib.sha1(
+            identity.encode()).hexdigest()[:20])
+        self.cache = cache if cache is not None else RecordCache(cache_bytes,
+                                                                 cache_dir)
+        self._disk = not (self._url and self.version_tag is None)
+        if not self._disk and self.cache.dir is not None:
+            warnings.warn(f"{self.source}: the server sends no ETag or "
+                          f"Last-Modified, so values are cached in memory "
+                          f"only, not under {self.cache.dir}", stacklevel=4)
+
+    def _from_header(self):
+        """Layout, grids, empty chunks and masks from `self.header`."""
+        lay = self.header["layout"]
+        self.layout = Layout.from_json(lay)
+        self.window_grid = tuple(int(v) for v in lay["window_grid"])
+        self.chunk_grids, self._first, self.empty = {}, {}, {}
+        for g in lay["groups"]:
+            self.chunk_grids[g["kind"]] = tuple(int(v) for v in g["chunk_grid"])
+            self._first[g["kind"]] = int(g["row_groups"][0])
+            self.empty[g["kind"]] = {tuple(c) for c in g.get("empty_chunks", [])}
+        # windows of empty chunks have no valid pixel, whatever their kind
+        self.dead = np.zeros(self.window_grid, bool)
+        for kind, chunks in self.empty.items():
+            n = self.layout.groups[kind].chunk_windows
+            for i, j in chunks:
+                self.dead[i * n:(i + 1) * n, j * n:(j + 1) * n] = True
+        self.masked = {tuple(c) for c in lay["mask"].get("chunks", [])}
+        self.height, self.width = (int(v) for v in lay["product_px"])
 
     def __enter__(self):
         return self
@@ -1158,6 +1192,9 @@ class RVQParquetReader:
 
     # ---- values ----
 
+    def _decode_mask(self, v, shape) -> np.ndarray:
+        return decode_mask(v, shape)
+
     def _value_error(self, need, v):
         """Why `v` cannot be the value of `need`, or None when it can: a
         code value holds chunk_windows**2 records, and a mask value
@@ -1167,7 +1204,7 @@ class RVQParquetReader:
             p = self.layout.groups[self.layout.mask_kind].chunk_px
             shape = (min(p, self.height - i * p), min(p, self.width - j * p))
             try:
-                decode_mask(v, shape)
+                self._decode_mask(v, shape)
             except (ValueError, zlib.error) as e:
                 return str(e)
             return None
@@ -1292,7 +1329,7 @@ class RVQParquetReader:
                 if self.skipped(kind, i, j, wy0, wy1, wx0, wx1):
                     continue
                 if (i, j) in self.masked:
-                    blk = decode_mask(vals[("mask", i, j)], (bh, bw))
+                    blk = self._decode_mask(vals[("mask", i, j)], (bh, bw))
                     valid[sy0 - y0:sy1 - y0, sx0 - x0:sx1 - x0] = \
                         blk[sy0 - py0:sy1 - py0, sx0 - px0:sx1 - px0]
                 else:
