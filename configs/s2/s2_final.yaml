@@ -44,8 +44,11 @@
 #
 # Stats channel: the 26 per-band means and stds go as float16 at every
 # rung (424 bits, 0.046 b/px), so stats_pca is left unset. Scored per band
-# in DN on the validation windows, the tolerance-coded PCA packing put up
-# to 35 DN of error on B10 and turned its R2 negative at every rung.
+# in DN on the 4096 validation windows with s2_d16_L96, the
+# tolerance-coded PCA packing (88.5 bits) left a 44 DN error floor on B10
+# (R2 -4.0 at every rung, against 1.5 DN at 16-16-4 with float16), and
+# float16 gave the lower RMSE in 12-13 of 13 bands at matched rate from
+# 0.6 b/px upward.
 
 data:
   source: s2
