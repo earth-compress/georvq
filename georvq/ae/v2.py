@@ -65,6 +65,7 @@ from georvq.ae.v2_resolve import (RELEASE_NAME, RELEASE_URI, BundleError,
 from georvq.inference.georvq_parquet import (Layout, RVQParquetReader,
                                              RVQParquetWriter, output_name,
                                              span, tier_names)
+from georvq.inference.georvq_zarr import ZarrReader, open_reader
 from georvq.inference.mean_codec import RVQPCAMeanChannel
 
 NODATA = -128
@@ -717,7 +718,9 @@ class AEV2Dataset(WindowMethodsMixin, TransformMethodsMixin):
     mode = "r"
 
     def __init__(self, path_or_url, codec=None, resolver=None, **reader_kw):
-        self.reader = RVQParquetReader(path_or_url, **reader_kw)
+        self.reader = open_reader(path_or_url, **reader_kw)
+        if isinstance(self.reader, ZarrReader):
+            self.driver = ZarrReader.driver
         self.name = self.reader.source
         h = self.header = self.reader.header
         p = self.product = h["product"]
@@ -1199,7 +1202,9 @@ def open_dataset(path_or_url, model=None, channel=None, bundle=None,
                  onnx_dir=None, device=None, backend=None, trust_remote=False,
                  cache_dir=None, bf16=None, codec=None, threads=None,
                  record_cache_dir=None, **reader_kw) -> "AEV2Dataset":
-    """Open an AE v2 file (a local path or an http(s) URL).
+    """Open an AE v2 file (a local path or an http(s) URL), or a
+    prototype Zarr store of one (a path or URL ending in .zarr,
+    georvq.inference.georvq_zarr).
 
     The codec that reads pixels comes from the first of
     - `codec`, an AEV2Codec or AEV2OnnxCodec;
