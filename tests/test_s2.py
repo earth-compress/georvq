@@ -527,3 +527,31 @@ def test_s2_final_preset_builds_and_keeps_its_sample_budget():
     torch.manual_seed(0)
     model = build_model(cfg)
     assert model.side_bits() == 16 * 26 + 8
+
+
+def test_s2_w36_preset_tiles_l1c_and_keeps_its_sample_budget():
+    """configs/s2/s2_w36.yaml: a 36 px window divides a 10980 px L1C tile
+    exactly and its fine cell is one 60 m pixel; both tiers keep at least
+    ~450 vectors per code at their deepest level under path sampling,
+    with the coarse tier always sent in full."""
+    from georvq.config import load_config
+    from georvq.model.codec import path_tuples
+    cfg = load_config("configs/s2/s2_w36.yaml")
+    m = cfg.model
+    assert 10980 % m.window == 0 and m.window % 6 == 0
+    assert [t.grid for t in m.tiers] == [1, 6]
+    assert m.window // m.tiers[-1].grid == 6
+    assert m.min_depths[0] == m.tiers[0].depth
+    assert m.stats_pca is None
+    assert m.vq.init_mode == "tree" and m.vq.reset_mode == "split"
+    path = path_tuples(m.tiers, m.min_depths)
+    p_full = m.full_frac / (m.full_frac + 0.70)
+    window = 1.0 / (1.0 - m.vq.ema_decay)
+    for ti, sp in enumerate(m.tiers):
+        reach = np.mean([t[ti] >= sp.depth for t in path])
+        share = p_full + (1 - p_full) * reach
+        per_code = cfg.train.batch_windows * sp.grid ** 2 * window * share
+        assert per_code / sp.codes >= 450, (ti, per_code / sp.codes)
+    torch.manual_seed(0)
+    model = build_model(cfg)
+    assert model.side_bits() == 16 * 26 + 8
