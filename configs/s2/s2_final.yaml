@@ -1,0 +1,108 @@
+# Sentinel-2 L1C, the run intended for release. 13 bands at their native
+# 10 / 20 / 60 m grids, read live from Major-TOM Core-S2L1C (clouds kept).
+#
+#   sbatch --gpus=1 --cpus-per-task=16 --mem=150G --time=6-00:00:00 \
+#          --signal=B:USR1@300 job.sbatch
+#   where job.sbatch sets PYTHONPATH to the checkout and ends with
+#   exec python scripts/train_pyramid.py -c configs/s2/s2_final.yaml --gpu 0
+#   Resume a stopped run with train.resume=<out_dir>/s2_final/model.pt.
+#
+# Geometry was fixed by the maintainer: a 96 px window with tiers on grids
+# 1 / 4 / 16, so the fine cell is 6 px (one 60 m pixel) and the mid cell
+# 24 px. Everything else below was derived from measurements on this
+# corpus (scratch/s2-final/STATUS.md has the numbers and the pilots).
+#
+# Window energy (analysis/pyramid_sizing.py, 4062 windows, W=96): the
+# window mean holds 98.6% of the energy; of the mean-removed remainder the
+# mid grid holds 42.6%, the fine grid 36.7% and structure under 6 px
+# 20.7%. The block means each tier would carry have d95 = 3 of 13 bands on
+# every tier, so the latent width is set by the bits a cell must hold, not
+# by spectral rank.
+#
+# K from the sample budget, vectors per code = batch x cells x EMA window x
+# share / K >= ~450 (lab/findings/codebook-sample-budget.md), with batch
+# 1024, EMA window 100 (decay 0.99) and `share` the fraction of rows that
+# reach a level under path sampling (0.19 for the deepest fine level, 0.49
+# for the deepest mid level, 0.78 for the deepest coarse level):
+#   coarse  1 cell:   K=128   -> 620 at the deepest level (256 gives 310)
+#   mid    16 cells:  K=1024  -> 780                     (2048 gives 390)
+#   fine  256 cells:  K=8192  -> 620                     (16384 gives 310)
+# Each tier takes the largest power of two that stays above the budget
+# at every level, since bigger K beats more levels at matched rate where a
+# tier is well sampled (lab/findings/bigger-k-beats-more-levels.md). The
+# s2_d16_L96 run had 64 / 512 / 4096.
+#
+# Depth 16 on every tier: fine levels 1-8 span the 0.7-3.2 b/px range of
+# the ring-space beta codecs, and 9-16 extend the ladder to 6.1 b/px. Fill
+# order forbids a finer tier deeper than a coarser one, so mid and coarse
+# need at least the fine depth.
+#
+# Latent widths 48 / 96 / 96, as s2_d16_L96, which trained without
+# collapse at these widths. At ~4 bits per latent dimension
+# (lab/findings/bits-per-dim-saturation.md) full depth needs at least
+# 28 / 40 / 52 dimensions (112, 160 and 208 bits per cell).
+#
+# Stats channel: the 26 per-band means and stds go as float16 at every
+# rung (424 bits, 0.046 b/px), so stats_pca is left unset. Scored per band
+# in DN on the validation windows, the tolerance-coded PCA packing put up
+# to 35 DN of error on B10 and turned its R2 negative at every rung.
+
+data:
+  source: s2
+  store_dir: /data/Major-TOM/Core-S2L1C
+  reader: live_s2
+  val_frac: 0.02
+  pool:
+    # 8192 whole scenes, 97 GiB resident; with the process the job needs
+    # about 150 GB of host memory.
+    size: 8192
+    workers: 8
+    slot_rows: 1068
+    refresh_per_s: 32.0
+    device: cpu
+    cycle: true
+    align_crops: true
+
+model:
+  window: 96
+  bands: 13
+  tiers: ["1:48:128:16", "4:96:1024:16", "16:96:8192:16"]
+  min_depths: [4, 0, 0]
+  depth_sampling: path
+  full_frac: 0.15
+  ff_ratio: 2.0
+  tokenizer: {dim: 256, depth: 9}
+  decoder: {dim: 384, depth: 12, heads: 8, head_feat: 64, cls_bridge: true}
+  vq:
+    commit_weight: 0.25
+    dead_threshold: 0.000625
+    ema_decay: 0.99
+    bf16_scores: true
+    skip_masked: true
+    warmup_steps: 500
+    warmup_truncate: true
+    kmeans_sample: 32768
+
+train:
+  # About 5.5 days on one A100: 510 windows/s measured in training, about
+  # 2.2 s per step once validation is included. No batch
+  # ramp: at batch 256 the fine codebook would sit at 155 vectors per code
+  # through the k-means init.
+  steps: 210000
+  batch_windows: 1024
+  amp: true
+  grad_ckpt: true
+  tf32: true
+  optim: {lr: 1.5e-4, wd: 0.01, warmup: 1000}
+  val_interval: 1000
+  fig_interval: 5000
+  save_interval: 2500
+
+log:
+  run_tag: s2_final
+  wandb: true
+  wandb_project: georvq
+
+eval:
+  recon_tuples: ["4-0-0", "16-0-0", "16-16-0", "16-16-1", "16-16-2",
+                 "16-16-4", "16-16-8", "16-16-16"]
