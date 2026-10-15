@@ -525,35 +525,39 @@ def lanes(events):
     return out, len(ends)
 
 
-groups = {k: {kind: lanes([e for e in r["events"] if e["kind"] == kind])
-              for kind in ("get", "decode", "cpu")} for k, r in runs.items()}
-heights = [sum(max(n, 1) for _, n in g.values()) + 1 for g in groups.values()]
-t_max = max(r["t1"] - r["t0"] for r in runs.values())
-fig, axes = plt.subplots(len(runs), 1, figsize=(11, 0.32 * sum(heights) + 1.4), sharex=True,
-                         gridspec_kw={"height_ratios": heights}, constrained_layout=True)
-for ax, (k, r) in zip(axes, runs.items()):
-    row, ticks = 0, []
-    for kind in ("get", "decode", "cpu"):
-        placed, n = groups[k][kind]
-        for lane, e in placed:
-            x0, w = e["t0"] - r["t0"], max(e["t1"] - e["t0"], 1e-3)
-            ax.barh(row + lane, w, left=x0, height=0.75, color=COLOURS[kind], lw=0)
-            if kind == "get" and w > 0.04 * t_max:
-                ax.text(x0 + w / 2, row + lane, mb(e["bytes"]).replace(" MB", ""), ha="center",
-                        va="center", fontsize=6.5, color="white")
-        ticks.append((row + (max(n, 1) - 1) / 2, {"get": "HTTP GET", "decode": "decode",
-                                                    "cpu": "other"}[kind]))
-        row += max(n, 1)
-    ax.set_yticks([t for t, _ in ticks], [l for _, l in ticks])
-    ax.invert_yaxis()
-    ax.set_title(f"{k}:  {r['t1'] - r['t0']:.2f} s,  {mb(r['bytes'])},  "
-                 f"{sum(e['kind'] == 'get' for e in r['events'])} requests", loc="left")
-    ax.axvline(r["t1"] - r["t0"], color=INK, lw=0.8, ls=":")
-axes[-1].set_xlabel("seconds since open")
-axes[0].legend(handles=[Rectangle((0, 0), 1, 1, color=c) for c in COLOURS.values()],
-               labels=["HTTP GET (MB on the bar)", "decode stage", "other local work"],
-               loc="upper right", ncol=3, fontsize=8)
-plt.show()
+def gantt(runs):
+    groups = {k: {kind: lanes([e for e in r["events"] if e["kind"] == kind])
+                  for kind in ("get", "decode", "cpu")} for k, r in runs.items()}
+    heights = [sum(max(n, 1) for _, n in g.values()) + 1 for g in groups.values()]
+    t_max = max(r["t1"] - r["t0"] for r in runs.values())
+    fig, axes = plt.subplots(len(runs), 1, figsize=(11, 0.32 * sum(heights) + 1.4), sharex=True,
+                             gridspec_kw={"height_ratios": heights}, constrained_layout=True)
+    for ax, (k, r) in zip(axes, runs.items()):
+        row, ticks = 0, []
+        for kind in ("get", "decode", "cpu"):
+            placed, n = groups[k][kind]
+            for lane, e in placed:
+                x0, w = e["t0"] - r["t0"], max(e["t1"] - e["t0"], 1e-3)
+                ax.barh(row + lane, w, left=x0, height=0.75, color=COLOURS[kind], lw=0)
+                if kind == "get" and w > 0.04 * t_max:
+                    ax.text(x0 + w / 2, row + lane, mb(e["bytes"]).replace(" MB", ""), ha="center",
+                            va="center", fontsize=6.5, color="white")
+            ticks.append((row + (max(n, 1) - 1) / 2, {"get": "HTTP GET", "decode": "decode",
+                                                        "cpu": "other"}[kind]))
+            row += max(n, 1)
+        ax.set_yticks([t for t, _ in ticks], [l for _, l in ticks])
+        ax.invert_yaxis()
+        ax.set_title(f"{k}:  {r['t1'] - r['t0']:.2f} s,  {mb(r['bytes'])},  "
+                     f"{sum(e['kind'] == 'get' for e in r['events'])} requests", loc="left")
+        ax.axvline(r["t1"] - r["t0"], color=INK, lw=0.8, ls=":")
+    axes[-1].set_xlabel("seconds since open")
+    axes[0].legend(handles=[Rectangle((0, 0), 1, 1, color=c) for c in COLOURS.values()],
+                   labels=["HTTP GET (MB on the bar)", "decode stage", "other local work"],
+                   loc="upper right", ncol=3, fontsize=8)
+    plt.show()
+
+
+gantt(runs)
 
 stages = pd.DataFrame([{**{"read": k}, **{lab: sum(e["t1"] - e["t0"] for e in r["events"]
                                                if e["label"] == lab)
@@ -561,6 +565,59 @@ stages = pd.DataFrame([{**{"read": k}, **{lab: sum(e["t1"] - e["t0"] for e in r[
                                                        "decoder forward", "requantize")}}
                        for k, r in runs.items() if k.startswith("georvq")]).set_index("read")
 (stages * 1e3).round(1).rename(columns=lambda c: c + " (ms)")
+""")
+
+md("""
+At 1024 px the four rungs take almost the same time, because the fixed
+cost of a read dominates: opening the file is one 256 KiB request for
+the footer, and each tier read is another round trip, so at about 0.7 s
+of latency the difference between 1.3 MB and 3.1 MB is hidden. Small
+random reads are limited by the number of requests rather than by their
+size, which is why the reader fetches the footer once and merges nearby
+ranges into one request.
+
+Reading a quarter of the tile (4096 px, one mid chunk and 16 fine
+chunks) shows the other side. The bytes now differ by more than ten
+times between 8-0-0 and 8-8-8, so the time spent fetching follows the
+rung. The decoder, however, runs at full resolution whatever the rung,
+so the decode time is the same at every rung and grows only with the
+area read. The rung therefore decides how many bytes are moved and
+stored, and on a GPU it changes the total time only where the link is
+slow compared with the decoder.
+""")
+
+code("""
+WIDE = Window(col_off=4096, row_off=0, width=4096, height=4096)
+
+
+def spans(events, kind):
+    \"\"\"Wall-clock time covered by events of one kind (overlaps counted once).\"\"\"
+    t, end = 0.0, -1e18
+    for e in sorted((e for e in events if e["kind"] == kind), key=lambda e: e["t0"]):
+        t0 = max(e["t0"], end)
+        if e["t1"] > t0:
+            t += e["t1"] - t0
+        end = max(end, e["t1"])
+    return t
+
+
+wide = {}
+for q in SPEED_RUNGS:
+    tr = Trace()
+    t0 = time.perf_counter()
+    with georvq.ae.open(speed_url, codec=codec, trace=tr) as d:
+        d.read(window=WIDE, quality=q)
+        nbytes = d.reader.stats["bytes"]
+    wide[f"georvq {q}, 4096 px"] = {"t0": t0, "t1": time.perf_counter(), "events": tr.events,
+                                    "bytes": nbytes}
+gantt(wide)
+pd.DataFrame([{"read": k, "MB": round(r["bytes"] / 1e6, 2),
+               "requests": sum(e["kind"] == "get" for e in r["events"]),
+               "fetch (s)": round(spans(r["events"], "get"), 2),
+               "decode (s)": round(spans(r["events"], "decode"), 2),
+               "total (s)": round(r["t1"] - r["t0"], 2)}
+              for k, r in {**{k: v for k, v in runs.items() if k.startswith("georvq")}, **wide}.items()]
+             ).set_index("read")
 """)
 
 # --------------------------------------------------------------------------
