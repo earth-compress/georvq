@@ -13,7 +13,18 @@ window grid, plus the pixel validity mask:
     <tier>  (wy, wx, levels, bytes) sharding_indexed, one shard for the
                                     array, inner chunks of one level of
                                     one tier chunk, no compression
-    quality (wy, wx, quality bytes) chunked as base
+    quality/<decoder_id>            one array per decoder, (wy, wx,
+                                    quality bytes), chunked as base
+
+Quality values measure the error of one decoder at each of its rungs, so
+each array under `quality/` is named by the `decoder_id` it was measured
+with, and its attributes (`georvq_quality`) carry that decoder's id,
+bitstream id and release, its rungs in the order of the record, the
+record fields and the definition of the error. A store written from a
+GeoParquet file has one, for the decoder its header names; a later
+decoder of the same bitstream adds its own array without changing the
+others. Readers serve the quality of the header's decoder until
+`select_quality` picks another.
 
 The chunks are those of the header's layout, so a store has the chunk
 sizes of the GeoParquet file it is written from. An inner chunk of a
@@ -47,6 +58,7 @@ numcodecs; ZarrGroupReader needs only the zarr.Group it is given.
 """
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import os
@@ -59,12 +71,14 @@ import numpy as np
 
 from georvq.inference.georvq_parquet import (
     BACKOFF, CACHE_BYTES, CONCURRENCY, FIRST_READ, GAP, RETRIES, TIMEOUT,
-    RangeSource, RVQParquetReader, check_header, merge_ranges, span)
+    Column, RangeSource, RVQParquetReader, check_header, merge_ranges, span)
 
 SUFFIX = ".georvq.zarr"
 STORE_KEY = "georvq_store"
 STORE_FORMAT = "georvq-zarr"
-STORE_MAJOR, STORE_MINOR = 0, 2
+STORE_MAJOR, STORE_MINOR = 0, 3
+QUALITY_GROUP = "quality"
+QUALITY_KEY = "georvq_quality"
 MASK_ZSTD_LEVEL = 19
 _MISSING = 2 ** 64 - 1
 _ZSTD_MAGIC = 0xFD2FB528
@@ -230,12 +244,33 @@ def _chunk_path(name, coords):
     return f"{name}/c/" + "/".join(str(int(c)) for c in coords)
 
 
-def parquet_to_zarr(src, out, consolidated=True) -> str:
+def quality_info(header, decoder_id=None) -> dict:
+    """The `georvq_quality` attributes of the quality array of a header's
+    decoder (`decoder_id` when the header names none): its ids and
+    release, its rungs in record order, the record fields and the
+    definition of the error (the header's `quality`)."""
+    codec = header.get("codec") or {}
+    did = codec.get("decoder_id") or decoder_id
+    if not did:
+        raise ValueError("the header names no codec.decoder_id to tie its "
+                         "quality values to; pass decoder_id")
+    if decoder_id is not None and did != decoder_id:
+        raise ValueError(f"decoder_id {decoder_id}, the header names {did}")
+    col = next(c for c in header["layout"]["columns"] if c["name"] == "quality")
+    q = {k: v for k, v in (header.get("quality") or {}).items() if k != "column"}
+    return {"decoder_id": did, "bitstream_id": codec.get("bitstream_id"),
+            "release": codec.get("release"), "rungs": header.get("rungs", []),
+            "fields": col["fields"], "quality": q}
+
+
+def parquet_to_zarr(src, out, consolidated=True, decoder_id=None) -> str:
     """Write the Zarr store of a georvq GeoParquet file `src` (a path or
     an open RVQParquetReader) at `out`, a directory that must not exist.
     The records are copied, not re-encoded, and the chunks are those of
-    the file. `consolidated` adds zarr-python's consolidated metadata to
-    the group zarr.json. Returns `out`."""
+    the file. The quality column goes to quality/<decoder_id>, the
+    decoder the header names, or `decoder_id` for a header that names
+    none. `consolidated` adds zarr-python's consolidated metadata to the
+    group zarr.json. Returns `out`."""
     import zarr
     from zarr.codecs import ZstdCodec
 
@@ -281,21 +316,31 @@ def parquet_to_zarr(src, out, consolidated=True) -> str:
                 vals[(col, i, j)], np.uint8).reshape(n, n, rb)
         return a
 
-    # base and quality: plain chunked arrays, empty chunks not written
+    # base and quality: plain chunked arrays, empty chunks not written;
+    # quality under quality/<decoder_id>, the decoder it was measured with
     for col in ["base"] + (["quality"] if lay.quality is not None else []):
         kind = lay.kind_of[col]
         n = lay.groups[kind].chunk_windows
         rb = lay.columns[col].record_bytes
-        arr = root.create_array(
-            col, shape=(gy, gx, rb), dtype="uint8", chunks=(n, n, rb),
+        parent, name, attrs, entry = root, col, win_attrs, {}
+        if col == "quality":
+            q = quality_info(hdr, decoder_id)
+            store_info["quality_default"] = q["decoder_id"]
+            parent = root.require_group(QUALITY_GROUP)
+            name = q["decoder_id"]
+            attrs = {**win_attrs, QUALITY_KEY: q}
+            entry = {"decoder_id": q["decoder_id"]}
+        arr = parent.create_array(
+            name, shape=(gy, gx, rb), dtype="uint8", chunks=(n, n, rb),
             compressors=None, filters=None, fill_value=0,
-            dimension_names=["wy", "wx", f"{col}_byte"], attributes=win_attrs,
+            dimension_names=["wy", "wx", f"{col}_byte"], attributes=attrs,
             config={"write_empty_chunks": True})
         a = records(col, kind)
         for i, j in chunks(kind):
             y1, x1 = min(gy, (i + 1) * n), min(gx, (j + 1) * n)
             arr[i * n:y1, j * n:x1] = a[i * n:y1, j * n:x1]
-        store_info["arrays"][col] = {"kind": kind, "columns": [col]}
+        path = name if parent is root else f"{QUALITY_GROUP}/{name}"
+        store_info["arrays"][path] = {"kind": kind, "columns": [col], **entry}
 
     # tiers outside base: one shard, one level of one chunk per inner chunk
     for t in lay.tiers:
@@ -485,6 +530,7 @@ class ZarrReader(RVQParquetReader):
                 sha.update(d)
         self.consolidated = bool(z.get("consolidated_metadata"))
         self.arrays = {n: self._check_array(n, cm[n]) for n in names}
+        self._init_quality({n: cm[n].get("attributes") or {} for n in names})
         self._meta_sha = sha.hexdigest()
         self._set_cache(json.dumps(self.identity), cache, cache_bytes, cache_dir)
 
@@ -507,6 +553,81 @@ class ZarrReader(RVQParquetReader):
         self._from_header()
         self._sizes = {str(k): int(v) for k, v in info["objects"].items()}
 
+    # ---- quality, per decoder ----
+
+    def _init_quality(self, attrs_by_name) -> None:
+        """The quality arrays by decoder, and the store's own decoder
+        (the manifest's `quality_default`) selected."""
+        self._base_header = self.header
+        codec = self.header.get("codec") or {}
+        self.quality_decoders = {}
+        for name, attrs in attrs_by_name.items():
+            entry = self.store_info["arrays"][name]
+            if entry["kind"] != "quality":
+                continue
+            q = attrs.get(QUALITY_KEY)
+            if q is None or q.get("decoder_id") != entry.get("decoder_id"):
+                raise ValueError(f"{self.source}: {name} does not name the "
+                                 f"decoder its quality was measured with")
+            if q.get("bitstream_id") != codec.get("bitstream_id"):
+                raise ValueError(f"{self.source}: {name} holds quality for "
+                                 f"bitstream {q.get('bitstream_id')}, the store "
+                                 f"is {codec.get('bitstream_id')}")
+            self.quality_decoders[q["decoder_id"]] = {"path": name, **q}
+        did = self.store_info.get("quality_default")
+        if did is not None and did not in self.quality_decoders:
+            raise ValueError(f"{self.source}: no quality array for its default "
+                             f"decoder {did}")
+        self.quality_decoder = None
+        self.select_quality(did)
+
+    def select_quality(self, decoder_id) -> None:
+        """Serve the quality values measured with `decoder_id` (None for
+        no quality column). `header` then carries that decoder's rungs
+        and quality definition, and `layout` its quality record."""
+        if decoder_id is not None and decoder_id not in self.quality_decoders:
+            raise ValueError(f"{self.source}: no quality for decoder "
+                             f"{decoder_id}; the store has quality for "
+                             f"{sorted(self.quality_decoders) or 'no decoder'}")
+        h = copy.deepcopy(self._base_header)
+        if decoder_id is not None and decoder_id == self.store_info.get(
+                "quality_default"):
+            # the stored header already describes the store's own decoder
+            self._set_quality(h, decoder_id)
+            return
+        lay = h["layout"]
+        qgroup = [g for g in lay["groups"] if g["kind"] == "quality"]
+        lay["groups"] = [g for g in lay["groups"] if g["kind"] != "quality"]
+        lay["columns"] = [c for c in lay["columns"] if c["name"] != "quality"]
+        h.pop("quality", None)
+        if decoder_id is not None:
+            q = self.quality_decoders[decoder_id]
+            fields = [(f["name"], f["count"], f["bits"]) for f in q["fields"]]
+            lay["groups"] += qgroup
+            lay["columns"].append({
+                "name": "quality", "fields": q["fields"],
+                "record_bytes": Column("quality", fields).record_bytes})
+            h["quality"] = {"column": "quality", **q["quality"]}
+            h["rungs"] = q["rungs"]
+        self._set_quality(h, decoder_id)
+
+    def _set_quality(self, header, decoder_id) -> None:
+        self.header = header
+        self._from_header()
+        self.quality_decoder = decoder_id
+        self._quality_path = (None if decoder_id is None
+                              else self.quality_decoders[decoder_id]["path"])
+
+    def _key(self, need):
+        if need[0] == "quality":
+            return (self.file_key, "quality", self.quality_decoder) + tuple(need[1:])
+        return super()._key(need)
+
+    def _quality_bytes(self, attrs) -> int:
+        q = attrs.get(QUALITY_KEY) or {}
+        return Column("quality", [(f["name"], f["count"], f["bits"])
+                                  for f in q.get("fields", [])]).record_bytes
+
     def _check_array(self, name, md) -> dict:
         """The array's chunk shape (inner chunk for a tier), checked
         against the layout and the codecs this reader decodes."""
@@ -527,9 +648,14 @@ class ZarrReader(RVQParquetReader):
             return {"chunk_shape": cs}
         if md["data_type"] != "uint8":
             raise ValueError(f"{name}: data type {md['data_type']}")
-        n = lay.groups[kind].chunk_windows
-        if name in ("base", "quality"):
-            rb = lay.columns[name].record_bytes
+        if kind == "quality":
+            n = lay.groups["base"].chunk_windows
+            rb = self._quality_bytes(md.get("attributes") or {})
+        else:
+            n = lay.groups[kind].chunk_windows
+        if kind in ("base", "quality"):
+            if kind == "base":
+                rb = lay.columns["base"].record_bytes
             if cs != [n, n, rb] or names != ["bytes"]:
                 raise ValueError(f"{name}: chunks {cs}, codecs {names}")
             return {"chunk_shape": cs}
@@ -599,7 +725,8 @@ class ZarrReader(RVQParquetReader):
             path = _chunk_path("mask", (i, j))
             return path, 0, self._sizes[path]
         if col in ("base", "quality"):
-            path = _chunk_path(col, (i, j, 0))
+            path = _chunk_path(self._quality_path if col == "quality" else col,
+                               (i, j, 0))
             return path, 0, self._sizes[path]
         kind = self.layout.kind_of[col]
         t = next(t for t in self.layout.tiers if t.name == kind)
@@ -745,6 +872,7 @@ class ZarrGroupReader(ZarrReader):
         self._from_attrs(dict(group.attrs))
         self.arrays = {n: self._check_group_array(n, group[n])
                        for n in self.store_info["arrays"]}
+        self._init_quality({n: dict(a.attrs) for n, a in self.arrays.items()})
         self._meta_sha = hashlib.sha1(json.dumps(
             self.attrs, sort_keys=True).encode()).hexdigest()
         if cache_dir is not None:
@@ -757,10 +885,13 @@ class ZarrGroupReader(ZarrReader):
     def _check_group_array(self, name, arr):
         lay = self.layout
         gy, gx = self.window_grid
+        kind = self.store_info["arrays"][name]["kind"]
         if name == "mask":
             want, dtype = (self.height, self.width), "bool"
-        elif name in ("base", "quality"):
-            want, dtype = (gy, gx, lay.columns[name].record_bytes), "uint8"
+        elif kind == "base":
+            want, dtype = (gy, gx, lay.columns["base"].record_bytes), "uint8"
+        elif kind == "quality":
+            want, dtype = (gy, gx, self._quality_bytes(dict(arr.attrs))), "uint8"
         else:
             t = next(t for t in lay.tiers if t.name == name)
             want = (gy, gx, t.levels, lay.columns[t.columns[0]].record_bytes)
@@ -779,7 +910,8 @@ class ZarrGroupReader(ZarrReader):
         lay = self.layout
         by = {}
         for n in needs:
-            name = n[0] if n[0] in ("base", "mask", "quality") else lay.kind_of[n[0]]
+            name = (self._quality_path if n[0] == "quality" else
+                    n[0] if n[0] in ("base", "mask") else lay.kind_of[n[0]])
             by.setdefault(name, []).append(n)
         out = {}
         for name, ns in by.items():
@@ -794,7 +926,7 @@ class ZarrGroupReader(ZarrReader):
                 k = lay.groups[lay.kind_of[ns[0][0]]].chunk_windows
                 sl = (slice(i0 * k, min(arr.shape[0], i1 * k)),
                       slice(j0 * k, min(arr.shape[1], j1 * k)))
-                if name not in ("base", "quality"):
+                if self.store_info["arrays"][name]["kind"] not in ("base", "quality"):
                     t = next(t for t in lay.tiers if t.name == name)
                     depth = max(t.columns.index(n[0]) for n in ns) + 1
                     sl += (slice(0, depth),)
@@ -866,7 +998,7 @@ class ZarrGroupReader(ZarrReader):
                         blk = np.zeros((k, k, rb), np.uint8)
                         sub = slab[i * k - r0:(i + 1) * k - r0,
                                    j * k - c0:(j + 1) * k - c0]
-                        if name not in ("base", "quality"):
+                        if col not in ("base", "quality"):
                             t = next(t for t in lay.tiers if t.name == name)
                             sub = sub[:, :, t.columns.index(col)]
                     blk[:sub.shape[0], :sub.shape[1]] = sub

@@ -20,6 +20,12 @@ from tests.test_georvq_parquet import FULL, H, W, _layout, _write
 
 zarr = pytest.importorskip("zarr")
 
+DID = "0123456789abcdef"           # the synthetic header names no decoder
+
+
+def _to_zarr(src, out, **kw):
+    return gz.parquet_to_zarr(src, out, decoder_id=DID, **kw)
+
 
 def _masks():
     rng = np.random.default_rng(3)
@@ -34,8 +40,8 @@ def product(request, tmp_path):
     valid = _masks()[request.param]
     src = tmp_path / "a.georvq.parquet"
     vals = _write(src, valid=valid)
-    out = gz.parquet_to_zarr(src, tmp_path / "a.georvq.zarr")
-    plain = gz.parquet_to_zarr(src, tmp_path / "plain" / "a.georvq.zarr",
+    out = _to_zarr(src, tmp_path / "a.georvq.zarr")
+    plain = _to_zarr(src, tmp_path / "plain" / "a.georvq.zarr",
                                consolidated=False)
     return {"src": src, "zarr": out, "plain": plain, "vals": vals,
             "valid": valid, "name": request.param}
@@ -80,13 +86,15 @@ def test_values_are_the_parquet_values(product):
 def test_zarr_python_reads_the_store(product, which):
     lay = _layout()
     g = zarr.open_group(str(product[which]), mode="r")
-    assert set(g.array_keys()) == {"base", "mid", "fine", "quality", "mask"}
+    assert set(g.array_keys()) == {"base", "mid", "fine", "mask"}
+    assert list(g["quality"].array_keys()) == [DID]
+    q = g["quality"][DID]
+    assert q.attrs["georvq_quality"]["decoder_id"] == DID
     with gp.RVQParquetReader(product["src"]) as p:
         assert g.attrs["georvq"] == p.header
         got = p.read(0, 10, 0, 13, quality=True)
         n_chunks = {k: len(p.empty[k]) for k in p.empty}
-    for name, col in [("base", "base"), ("quality", "quality")]:
-        rec = g[name][...]
+    for rec, col in [(g["base"][...], "base"), (q[...], "quality")]:
         assert rec.shape == (10, 13, lay.columns[col].record_bytes)
     for t in ("mid", "fine"):
         a = g[t]
@@ -139,7 +147,7 @@ def test_shards_are_zarr_pythons(product):
 def test_empty_chunks_are_not_stored_or_fetched(tmp_path):
     src = tmp_path / "a.georvq.parquet"
     _write(src, valid=_masks()["east"])
-    out = gz.parquet_to_zarr(src, tmp_path / "a.georvq.zarr")
+    out = _to_zarr(src, tmp_path / "a.georvq.zarr")
     z = gz.ZarrReader(out)
     assert z.empty["fine"] == {(i, j) for i in range(5) for j in range(3, 7)}
     before = dict(z.stats)
@@ -171,7 +179,7 @@ def test_mask_chunk_size_is_checked_before_decompressing(tmp_path):
     from numcodecs.zstd import Zstd
     src = tmp_path / "a.georvq.parquet"
     _write(src, valid=_masks()["scattered"])
-    z = gz.ZarrReader(gz.parquet_to_zarr(src, tmp_path / "a.georvq.zarr"))
+    z = gz.ZarrReader(_to_zarr(src, tmp_path / "a.georvq.zarr"))
     p = z.layout.groups[z.layout.mask_kind].chunk_px
     for n in (p * p, 1000, 10 ** 6):
         assert gz.zstd_content_size(Zstd().encode(bytes(n))) == n
@@ -212,12 +220,14 @@ def _rechunked(src, out):
     from zarr.codecs import ZstdCodec
     g = zarr.open_group(str(src), mode="r")
     dst = zarr.open_group(str(out), mode="w-", zarr_format=3)
-    for name in g.array_keys():
+    for name in g.attrs["georvq_store"]["arrays"]:
         a = g[name]
+        parent, _, leaf = name.rpartition("/")
         chunks = tuple(max(1, s // 3) for s in a.shape[:2]) + tuple(a.shape[2:])
-        b = dst.create_array(name, shape=a.shape, dtype=a.dtype, chunks=chunks,
-                             compressors=ZstdCodec(level=3),
-                             fill_value=a.fill_value, attributes=dict(a.attrs))
+        b = (dst.require_group(parent) if parent else dst).create_array(
+            leaf, shape=a.shape, dtype=a.dtype, chunks=chunks,
+            compressors=ZstdCodec(level=3), fill_value=a.fill_value,
+            attributes=dict(a.attrs))
         b[...] = a[...]
     dst.update_attributes(dict(g.attrs))
     return zarr.open_group(str(out), mode="r")
@@ -234,7 +244,7 @@ def test_group_reader_makes_one_read_per_array(product):
     plan = z.plan(0, 10, 0, 13, quality=True)
     names = [name for name, _ in plan]
     assert len(names) == len(set(names))
-    assert set(names) <= {"base", "mid", "fine", "quality", "mask"}
+    assert set(names) <= {"base", "mid", "fine", f"quality/{DID}", "mask"}
     fine = dict(plan).get("fine")
     if fine is not None:
         assert fine[2] == slice(0, 3)           # every level down to depth 3
@@ -242,13 +252,104 @@ def test_group_reader_makes_one_read_per_array(product):
     assert z.plan(0, 10, 0, 13, quality=True) == []       # all cached
 
 
+# --------------------------------------------------------------------------
+# quality per decoder
+# --------------------------------------------------------------------------
+
+OTHER = "fedcba9876543210"
+
+
+def _add_decoder(store, did=OTHER, bitstream=None):
+    """Add the quality array of another decoder of the same codes, with
+    one stat over 3 rungs (so a record of another size), as a later
+    release would; returns its (wy, wx, 3) record bytes."""
+    g = zarr.open_group(str(store), mode="r+")
+    q0 = g["quality"][DID]
+    info = dict(q0.attrs["georvq_quality"])
+    info.update(decoder_id=did, fields=[{"name": "p99", "count": 3, "bits": 8}],
+                rungs=[{"tuple": [3, 0, 0]}, {"tuple": [3, 1, 0]},
+                       {"tuple": [3, 2, 3]}])
+    if bitstream is not None:
+        info["bitstream_id"] = bitstream
+    rec = np.random.default_rng(5).integers(0, 256, q0.shape[:2] + (3,),
+                                            dtype=np.uint8)
+    a = g["quality"].create_array(did, shape=rec.shape, dtype="uint8",
+                                  chunks=q0.chunks[:2] + (3,), compressors=None,
+                                  fill_value=0,
+                                  attributes={"georvq_quality": info})
+    a[...] = rec
+    attrs = dict(g.attrs)
+    store_info = dict(attrs["georvq_store"])
+    store_info["arrays"] = dict(store_info["arrays"], **{
+        f"quality/{did}": {"kind": "quality", "columns": ["quality"],
+                           "decoder_id": did}})
+    store_info["objects"] = dict(store_info["objects"], **{
+        f"quality/{did}/c/0/0/0": os.path.getsize(
+            os.path.join(store, "quality", did, "c", "0", "0", "0"))})
+    g.update_attributes({"georvq_store": store_info})
+    zarr.consolidate_metadata(str(store))
+    return rec
+
+
+@pytest.mark.parametrize("via", ["path", "group"])
+def test_quality_is_kept_per_decoder(product, via):
+    rec = _add_decoder(product["zarr"])
+    open_ = (gz.ZarrReader if via == "path" else
+             lambda p: gz.ZarrGroupReader(zarr.open_group(str(p), mode="r")))
+    with gp.RVQParquetReader(product["src"]) as p:
+        z = open_(product["zarr"])
+        assert sorted(z.quality_decoders) == [DID, OTHER]
+        assert z.quality_decoder == DID and z.header == p.header
+        want = p.read(0, 10, 0, 13, quality=True)["quality"]
+        assert np.array_equal(z.read(0, 10, 0, 13, quality=True)["quality"], want)
+        z.select_quality(OTHER)
+        assert [r["tuple"] for r in z.header["rungs"]] == [[3, 0, 0], [3, 1, 0],
+                                                          [3, 2, 3]]
+        assert z.layout.columns["quality"].n_values == 3
+        got = z.read(0, 10, 0, 13, quality=True)["quality"]
+        assert np.array_equal(got, rec.astype(np.int64))
+        _same_reads(p, _no_quality(z, p))      # codes are those of the file
+        z.select_quality(DID)                  # cached values do not mix
+        assert np.array_equal(z.read(0, 10, 0, 13, quality=True)["quality"], want)
+        z.select_quality(None)
+        assert z.layout.quality is None and "quality" not in z.header
+        with pytest.raises(ValueError, match="no quality column"):
+            z.read(0, 1, 0, 1, quality=True)
+        with pytest.raises(ValueError, match="no quality for decoder 1111"):
+            z.select_quality("1111")
+
+
+def _no_quality(z, p):
+    """z, compared on its codes and mask only (its quality is another
+    decoder's)."""
+    class View:
+        def read(self, *a, quality=False, **k):
+            out = z.read(*a, quality=False, **k)
+            if quality:
+                out["quality"] = p.read(*a, quality=True, **k)["quality"]
+            return out
+
+        def read_mask(self, *a):
+            return z.read_mask(*a)
+    return View()
+
+
+def test_quality_of_another_bitstream_is_refused(product):
+    _add_decoder(product["zarr"], bitstream="other")
+    with pytest.raises(ValueError, match="bitstream other"):
+        gz.ZarrReader(product["zarr"])
+
+
 def test_group_reader_refuses_a_wrong_shape(product, tmp_path):
     g = zarr.open_group(str(tmp_path / "bad.zarr"), mode="w-", zarr_format=3)
     src = zarr.open_group(str(product["zarr"]), mode="r")
-    for name in src.array_keys():
+    for name in src.attrs["georvq_store"]["arrays"]:
         a = src[name]
+        parent, _, leaf = name.rpartition("/")
         shape = (a.shape[0] - 1,) + a.shape[1:] if name == "fine" else a.shape
-        g.create_array(name, shape=shape, dtype=a.dtype, chunks=shape)
+        (g.require_group(parent) if parent else g).create_array(
+            leaf, shape=shape, dtype=a.dtype, chunks=shape,
+            attributes=dict(a.attrs))
     g.update_attributes(dict(src.attrs))
     with pytest.raises(ValueError, match="fine is uint8"):
         gz.ZarrGroupReader(zarr.open_group(str(tmp_path / "bad.zarr"), mode="r"))
@@ -319,8 +420,8 @@ class _DirHandler(http.server.BaseHTTPRequestHandler):
 def served_dir(tmp_path):
     src = tmp_path / "a.georvq.parquet"
     _write(src, valid=_masks()["east"])
-    gz.parquet_to_zarr(src, tmp_path / "a.georvq.zarr")
-    gz.parquet_to_zarr(src, tmp_path / "plain" / "a.georvq.zarr",
+    _to_zarr(src, tmp_path / "a.georvq.zarr")
+    _to_zarr(src, tmp_path / "plain" / "a.georvq.zarr",
                        consolidated=False)
     log = []
     h = type("H", (_DirHandler,), {"root": str(tmp_path), "log": log})

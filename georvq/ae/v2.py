@@ -730,8 +730,6 @@ class AEV2Dataset(WindowMethodsMixin, TransformMethodsMixin):
                              f"not {KIND}")
         self._codec = None
         self._resolver = resolver
-        if codec is not None:
-            self.codec = codec
         self.height, self.width = int(p["height"]), int(p["width"])
         self.count = int(p["count"])
         self.dtypes = (p["dtype"],) * self.count
@@ -748,6 +746,10 @@ class AEV2Dataset(WindowMethodsMixin, TransformMethodsMixin):
         self._meta = None
         self._crs = None
         self._closed = False
+        self._quality_decoder = getattr(self.reader, "quality_decoder",
+                                        h["codec"].get("decoder_id"))
+        if codec is not None:
+            self.codec = codec
 
     @property
     def codec(self):
@@ -762,6 +764,26 @@ class AEV2Dataset(WindowMethodsMixin, TransformMethodsMixin):
             raise ValueError(f"{self.name}: bitstream {bid}, codec holds "
                              f"{codec.bitstream_id}")
         self._codec = codec
+        if codec is not None:
+            self._use_decoder(codec)
+
+    def _use_decoder(self, codec):
+        """Quality values and rungs of the codec's decoder. A Zarr store
+        serves its quality array for that decoder, or none when it has
+        none; then the rungs are the codec's own. A GeoParquet file holds
+        the quality of the decoder its header names only."""
+        did = getattr(codec, "decoder_id", None)
+        if did is None or did == self._quality_decoder:
+            return
+        r = self.reader
+        if hasattr(r, "select_quality"):
+            r.select_quality(did if did in r.quality_decoders else None)
+            self.header = r.header
+        if r.layout.quality is not None and hasattr(r, "select_quality"):
+            self.rungs = [tuple(x["tuple"]) for x in self.header["rungs"]]
+        else:
+            self.rungs = [tuple(x) for x in codec.rungs]
+        self._quality_decoder = did
 
     @property
     def crs(self):
@@ -894,7 +916,19 @@ class AEV2Dataset(WindowMethodsMixin, TransformMethodsMixin):
         return np.full(shape, self.rungs.index(t), np.int64)
 
     def _resolve_bound(self, stat, bound, wy0, wy1, wx0, wx1):
-        if self.reader.layout.quality is None:
+        r = self.reader
+        has = getattr(r, "quality_decoders", None)
+        if has is not None and r.quality_decoder != self._quality_decoder:
+            raise ValueError(
+                f"{self.name}: no quality for decoder {self._quality_decoder}; "
+                f"the store has quality for {sorted(has) or 'no decoder'}")
+        if has is None and self._quality_decoder != self.header["codec"].get(
+                "decoder_id"):
+            raise ValueError(
+                f"{self.name}: the quality column was measured with decoder "
+                f"{self.header['codec'].get('decoder_id')}, not "
+                f"{self._quality_decoder}")
+        if r.layout.quality is None:
             raise ValueError(f"{self.name}: no quality column to resolve a "
                              "bound against")
         stats = self.header["quality"]["stats"]

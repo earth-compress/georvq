@@ -58,6 +58,73 @@ def test_decodes_match_the_parquet_file(setup, corner, via):  # noqa: F811
         assert dz.reader.stats["requests"] == before["requests"]
 
 
+def _other_decoder(codec, did="f" * 16):
+    """The codec under another decoder id, as a later decoder release of
+    the same bitstream would be."""
+    import copy
+    c = copy.copy(codec)
+    c.decoder_id = did
+    return c
+
+
+def _add_quality(store, did):
+    """A quality array for decoder `did`: the store's own values under the
+    new id (same rungs), with the manifest and consolidated metadata."""
+    import os
+    import zarr
+    g = zarr.open_group(str(store), mode="r+")
+    own = g.attrs["georvq_store"]["quality_default"]
+    q0 = g["quality"][own]
+    info = dict(q0.attrs["georvq_quality"], decoder_id=did)
+    a = g["quality"].create_array(did, shape=q0.shape, dtype="uint8",
+                                  chunks=q0.chunks, compressors=None, fill_value=0,
+                                  attributes={"georvq_quality": info})
+    a[...] = q0[...]
+    si = dict(g.attrs["georvq_store"])
+    si["arrays"] = dict(si["arrays"], **{f"quality/{did}": {
+        "kind": "quality", "columns": ["quality"], "decoder_id": did}})
+    objects = dict(si["objects"])
+    for d, _, fs in os.walk(os.path.join(store, "quality", did)):
+        for f in fs:
+            if f != "zarr.json":
+                p = os.path.join(d, f)
+                objects[os.path.relpath(p, store)] = os.path.getsize(p)
+    si["objects"] = objects
+    g.update_attributes({"georvq_store": si})
+    zarr.consolidate_metadata(str(store))
+
+
+def test_quality_follows_the_decoder(setup, corner, tmp_path):  # noqa: F811
+    import shutil
+    codec = setup["codec"]
+    pq_file, zr = corner
+    other = _other_decoder(codec)
+    win, bound = Window(10, 20, 100, 90), "p99<=0.05"
+    with v2.open_dataset(pq_file, codec=codec) as dp:
+        want_rung = dp.read(window=win, quality=dp.rungs[0])
+        want_bound = dp.read(window=win, quality=bound)
+    # a decoder the store holds no quality for: rungs read, bounds refused
+    with v2.open_dataset(zr, codec=other) as dz:
+        assert dz.reader.quality_decoder is None
+        assert np.array_equal(dz.read(window=win, quality=dz.rungs[0]), want_rung)
+        with pytest.raises(ValueError, match="no quality for decoder ffff"):
+            dz.read(window=win, quality=bound)
+    # a GeoParquet file holds only its own decoder's quality
+    with v2.open_dataset(pq_file, codec=other) as dp:
+        with pytest.raises(ValueError, match="measured with decoder"):
+            dp.read(window=win, quality=bound)
+    # once the store holds quality for it, the decoder's own array is used
+    z2 = tmp_path / "z2.georvq.zarr"
+    shutil.copytree(zr, z2)
+    _add_quality(z2, "f" * 16)
+    with v2.open_dataset(z2, codec=other) as dz:
+        assert dz.reader.quality_decoder == "f" * 16
+        assert np.array_equal(dz.read(window=win, quality=bound), want_bound)
+    with v2.open_dataset(z2, codec=codec) as dz:
+        assert dz.reader.quality_decoder == codec.decoder_id
+        assert np.array_equal(dz.read(window=win, quality=bound), want_bound)
+
+
 @pytest.mark.parametrize("via", ["path", "group"])
 def test_golden_tile_decodes_from_zarr(tmp_path, via):
     import zarr
