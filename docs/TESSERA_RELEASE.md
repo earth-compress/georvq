@@ -238,7 +238,7 @@ the suite can currently resolve.
 ## What the release does not include
 
 - There is no container. The AlphaEarth release stores packets in one
-  GeoParquet file per source tile (`docs/GEORVQ_PARQUET.md`), mirroring
+  Zarr store per source tile (`docs/GEORVQ_ZARR.md`), mirroring
   the source's tiles so that a ranged read fetches only what a window
   and rate need. Tessera is distributed as `geotessera`
   tiles with a separate per-pixel scale sidecar. A container for it is
@@ -251,7 +251,7 @@ the suite can currently resolve.
 - There is no quality-controlled delivery. The encode-side
   self-measurement behind AE's quality bounds (`quality="p99<=0.02"`, on
   the `mean` or `p99` of per-pixel `1 - cos`) could be applied here, and
-  the GeoParquet container has a column for it, but it has not been
+  the Zarr store has an array for it, but it has not been
   applied because no user has asked for it.
 - The release does not use `use_std`, and a model trained with it
   should not be shipped, because matching the reconstructed standard deviation

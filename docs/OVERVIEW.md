@@ -63,8 +63,8 @@ checkpoint exactly.
 | `georvq/sources/` | `Source` interface + registry; `ae.py` (minimal reference), `tessera.py` (dense embeddings with a per-pixel scale), `s2.py` (multi-resolution example), `dem.py` (one band with a mean/std side channel), `era5.py` (gridded physical variables); `prep.py` fitted model-space transforms; `report.py` the per-source reporting surface (metrics, baselines, figures, previews) |
 | `georvq/train/` | `loop.py` the one trainer (it also owns the dead-code reset schedule, `mark_resets`); `stage1.py` σ-conditioned pretrain; `grow.py` grown training; `dist.py` data parallelism for frozen codebooks; `signals.py` the SIGUSR1/SIGTERM stop flag; `validate.py`, `figures.py`, `report.py`, `warmstart.py` |
 | `georvq/eval/` | Held-out extraction, probes, benchmark registry, codec A/B helpers |
-| `georvq/inference/` | Source-agnostic deployment code: `api.py` Codec/Packet, `stats_codec.py`, `refine.py` additive residual refinements, `mean_codec.py` the `stats_cond` channel on the wire, `release.py` bundles + bitstream/decoder ids, `georvq_parquet.py` the GeoParquet release container (layout, writer, range reader, record cache), `bitpack.py` fixed-width records, `onnx_stats.py` ONNX for transmitted-mean models |
-| `georvq/ae/` | The AlphaEarth release codec: `v2.py` (codec, `georvq.ae.open`, CLI), `v2_bundle.py`, `v2_resolve.py` (finding the bundle a file names), `index.py`. See `docs/AE_RELEASE.md` |
+| `georvq/inference/` | Source-agnostic deployment code: `api.py` Codec/Packet, `stats_codec.py`, `refine.py` additive residual refinements, `mean_codec.py` the `stats_cond` channel on the wire, `release.py` bundles + bitstream/decoder ids, `records.py` the release container (record layout, Zarr writer, zarr-python reader, record cache), `bitpack.py` fixed-width records, `onnx_stats.py` ONNX for transmitted-mean models |
+| `georvq/ae/` | The AlphaEarth release codec: `v2.py` (codec, `georvq.ae.open`, CLI), `v2_bundle.py`, `v2_resolve.py` (finding the bundle a store names), `index.py`. See `docs/AE_RELEASE.md` |
 | `georvq/tessera/` | The Tessera release codec, holding Tessera-specific policy (transmitted mean, rate ladder, fine-tier refinement). See `docs/TESSERA_RELEASE.md` |
 | `scripts/` | Thin drivers over the above (train, store builders, eval, release builds); `scripts/viz/` panel/GIF styling and builders |
 | `analysis/` | Source-characterisation and codec-diagnostic probes (`analysis/README.md`) |
@@ -103,8 +103,8 @@ checkpoint exactly.
    ignoring one always gives a valid decode at a lower rate.
 4. A released quantiser's payload is frozen. Shipped files must stay
    readable even when the code behind them is generalised.
-   `tests/test_ae_v2_bundle.py` reads back a golden GeoParquet tile
-   (`tests/golden/ae_v2_tile.georvq.parquet`), and
+   `tests/test_ae_v2_bundle.py` reads back a golden Zarr tile
+   (`tests/golden/ae_v2_tile.georvq.zarr`), and
    `tests/test_tessera_bundle.py` pins the bytes of the packed Tessera
    refinement. Any other shipped container should be treated the same
    way.
@@ -140,8 +140,8 @@ python scripts/eval_rate_sweep.py --dataset <ds> --ckpt <ckpt>   # Pareto-front 
 
 
 # AlphaEarth release codec (georvq/ae — see docs/AE_RELEASE.md)
-python -m georvq.ae.v2 encode src.tif out_dir/ --bundle <bundle>   # -> {stem}.georvq.parquet
-python -m georvq.ae.v2 decode tile.georvq.parquet out.npy --quality 8-8-2
+python -m georvq.ae.v2 encode src.tif out_dir/ --bundle <bundle>   # -> {stem}.georvq.zarr
+python -m georvq.ae.v2 decode tile.georvq.zarr out.npy --quality 8-8-2
 python -m georvq.ae.v2 export-onnx <onnx-dir> --bundle <bundle>   # torch-free decode
 
 # Tessera release codec (georvq/tessera — see docs/TESSERA_RELEASE.md)
@@ -173,7 +173,7 @@ opt-in). Each of these differences was measured, and the measurements
 are in `docs/AE_RELEASE.md` and `docs/TESSERA_RELEASE.md`.
 
 A data end user, decoding compressed data, needs `georvq.ae.open` and
-the `{stem}.georvq.parquet` files for AlphaEarth, with
+the `{stem}.georvq.zarr` stores for AlphaEarth, with
 `docs/AE_RELEASE.md` as the complete contract, or `georvq.tessera` and
 `docs/TESSERA_RELEASE.md` for Tessera. None of the training code is
 needed for this.

@@ -189,7 +189,7 @@ quickest way to see which decisions are policy rather than architecture:
 
 | | AlphaEarth (`georvq/ae/`) | Tessera (`georvq/tessera/`) |
 |---|---|---|
-| container | one GeoParquet file per source tile | packets; no container yet, none required |
+| container | one Zarr store per source tile | packets; no container yet, none required |
 | stats channel | the window mean, 440 bits/window (RVQ + PCA), charged | the patch mean, 768 bits/window, charged |
 | refinement | none | fine tier, 1-bit rotated Lloyd, opt-in (+150% rate) |
 | quality control | encode-time measured error ladder | not built, since no user has asked for it |

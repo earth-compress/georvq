@@ -63,9 +63,9 @@ Nominal cost: `sum_tiers cells * depth_used * log2(codes)` bits
 
 `Packet` is an abstract unit, and each release decides how packets are
 stored on disk and where the ids are recorded. The AlphaEarth release
-stores them in one GeoParquet file per source tile, with a column per
-RVQ level (`docs/GEORVQ_PARQUET.md`, `docs/AE_RELEASE.md`), and records
-`bitstream_id` in the file header so that a mismatched model is refused.
+stores them in one Zarr store per source tile, with an inner chunk per
+RVQ level (`docs/GEORVQ_ZARR.md`, `docs/AE_RELEASE.md`), and records
+`bitstream_id` in the store's header so that a mismatched model is refused.
 
 ## Entropy coding (not shipped)
 

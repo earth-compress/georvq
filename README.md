@@ -97,19 +97,19 @@ takes five steps. For more detailed information about the release, see `docs/AE_
 git clone <this repo> && cd georvq
 pip install -e .
 
-# 2. use it; the weights a file needs are fetched on first read  [pending: hosting]
-python -m georvq.ae.v2 info   tile.georvq.parquet
-python -m georvq.ae.v2 decode tile.georvq.parquet out.npy --quality 8-8-2
+# 2. use it; the weights a store needs are fetched on first read  [pending: hosting]
+python -m georvq.ae.v2 info   tile.georvq.zarr
+python -m georvq.ae.v2 decode tile.georvq.zarr out.npy --quality 8-8-2
 python -m georvq.ae.v2 encode src.tif out_dir/ --bundle <bundle dir> --device cuda
 ```
 
 ```python
 import georvq.ae
-ds = georvq.ae.open("<url or path>/annual/2021/44N/<stem>.georvq.parquet")
+ds = georvq.ae.open("<url or path>/annual/2021/44N/<stem>.georvq.zarr")
 a = ds.read(window=((0, 1024), (0, 1024)), quality="p99<=0.02")
 ```
 
-The file names the release that decodes it, so when you first `open` a file that uses the codec, the
+The store names the release that decodes it, so when you first `open` a store that uses the codec, the
 bundle will be automatically downloaded from Hugging Face. Decoding runs
 on torch, or on ONNX Runtime when asked for (`backend="onnx"`).
 
@@ -180,9 +180,9 @@ and each of those choices was measured on its source.
 
 The AlphaEarth release (`georvq/ae/v2.py`, `docs/AE_RELEASE.md`) codes
 each source tile with a model that transmits each window's mean (440
-bits per window), and writes one GeoParquet file per tile
-(`docs/GEORVQ_PARQUET.md`). The reader stands in for the source tile's
-rasterio dataset and fetches only the byte ranges that a window and rate
+bits per window), and writes one Zarr store per tile
+(`docs/GEORVQ_ZARR.md`). The reader stands in for the source tile's
+rasterio dataset and fetches only the chunks that a window and rate
 need. The rate is picked from 23 rungs (0.11-7.5 b/px), or from a bound
 on the error measured at encode time:
 
@@ -214,8 +214,8 @@ recon = R.decode(R.encode(x, valid=v), depths=[20, 20, 5], valid=v)
   new dataset.
 - `docs/SOURCE_ONBOARDING.md` describes the measurements of a new source
   that inform its architecture.
-- `docs/GEORVQ_PARQUET.md` specifies the GeoParquet file the AE codec
-  writes, for anyone reading the files without the georvq reader.
+- `docs/GEORVQ_ZARR.md` specifies the Zarr store the AE codec
+  writes, for anyone reading the stores without the georvq reader.
 - `docs/BITSTREAM.md` defines what a bitstream depends on, and why
   decoders can be upgraded without re-encoding.
 - `docs/DESIGN.md` explains how the method works and why it is built
