@@ -84,8 +84,8 @@ pip install -e ".[train,eval,viz,onnx,era5,dev]"   # everything
 
 The extras are `train`, `tessera`, `baseline`, `eval`, `viz`, `onnx`,
 `era5`, `notebooks` and `dev`. The oldest tested versions are Python
-3.10, torch 2.10, numpy 2.0, rasterio 1.4 and, in `[onnx]`, onnxruntime
-1.19; `[era5]` needs Python 3.11 for zarr 3.
+3.12 (zarr-python 3.3 needs it), torch 2.10, numpy 2.0, rasterio 1.4
+and, in `[onnx]`, onnxruntime 1.19.
 
 ## Quickstart: the AlphaEarth release codec
 

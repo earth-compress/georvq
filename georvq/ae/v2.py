@@ -1,25 +1,25 @@
-"""AlphaEarth v2 release layer: annual tiles as georvq GeoParquet files.
+"""AlphaEarth v2 release layer: annual tiles as georvq Zarr stores.
 
-An AE v2 file holds one AlphaEarth annual tile (64-band int8, nodata
+An AE v2 store holds one AlphaEarth annual tile (64-band int8, nodata
 -128) coded by a `stats_cond` model whose per-window mean travels through
-an `RVQPCAMeanChannel`. The layout is the "AE v2 instance" of
-docs/GEORVQ_PARQUET.md: one row and one row group per chunk, with a
-chunk size per kind, in this file order:
+an `RVQPCAMeanChannel`, as the arrays of georvq.inference.records, with
+a chunk size per kind:
 
-- `base`, one 8192 px chunk (the whole tile): `base`, per window the
-  mean channel's fields and every level of the coarsest tier, then
-  `mask`, the tile's pixel validity (north-up), empty when fully valid;
-- `mid`, 4096 px chunks: `mid_1..mid_8`, per level the chunk's windows'
-  codes, so a depth prefix of a chunk is one contiguous byte range;
-- `fine`, 1024 px chunks: `fine_1..fine_8`;
-- `quality`, optional, chunked as base: per window and per rung, the
-  mean and p99 of per-pixel `1 - cos` measured at encode time.
+- `base`, one 8192 px chunk (the whole tile): per window the mean
+  channel's fields and every level of the coarsest tier; `mask`, the
+  tile's pixel validity (north-up), is chunked as base;
+- `mid`, 8192 px chunks: levels 1 to 8, one inner chunk per level of a
+  chunk;
+- `fine`, 2048 px chunks: levels 1 to 8;
+- `quality/<decoder_id>`, optional, chunked as base: per window and per
+  rung, the mean and p99 of per-pixel `1 - cos` measured at encode time
+  with that decoder.
 
 A codec with other than three tiers names them `tier0` and up, the
 finest taking the fine chunk size and the others the mid one.
 
-The source's profile, tags and orientation are JSON in the file's
-`georvq_aux` metadata. Coded data is north-up. A bottom-up source
+The source's profile, tags and orientation are JSON in the store's
+`georvq_aux` attribute. Coded data is north-up. A bottom-up source
 (transform.e > 0, as the AEF tiles are stored) is flipped on encode, and
 `AEV2Dataset.read` returns rows in the source's own order, so it can
 stand in for the rasterio dataset of the source tile.
@@ -35,7 +35,7 @@ graphs, codebooks and mean channel to a directory, and
 `AEV2OnnxCodec` with onnxruntime and numpy. This module imports torch
 only when the torch codec is used.
 
-The header names the release a file was coded with (`codec.release`),
+The header names the release a store was coded with (`codec.release`),
 so `open_dataset(path)` with no codec arguments finds the bundle that
 decodes it, in the environment, the local cache, or by downloading it
 from a trusted release (georvq.ae.v2_resolve). The bundle is located
@@ -62,16 +62,14 @@ from rasterio.windows import WindowMethodsMixin
 from georvq.ae.v2_resolve import (RELEASE_NAME, RELEASE_URI, BundleError,
                                   default_device, release_record,
                                   resolve_codec)
-from georvq.inference.georvq_parquet import (Layout, RVQParquetReader,
-                                             RVQParquetWriter, output_name,
-                                             span, tier_names)
-from georvq.inference.georvq_zarr import ZarrReader, open_reader
 from georvq.inference.mean_codec import RVQPCAMeanChannel
+from georvq.inference.records import (Layout, RecordReader, RecordWriter,
+                                      output_name, span, tier_names)
 
 NODATA = -128
 KIND = "aef-annual-tile"
 FORMAT = "georvq-ae/v2"
-BASE_CHUNK_PX, MID_CHUNK_PX, FINE_CHUNK_PX = 8192, 4096, 1024
+BASE_CHUNK_PX, MID_CHUNK_PX, FINE_CHUNK_PX = 8192, 8192, 2048
 STRIP_PX = 1024
 QUALITY_STATS = ("mean", "p99")
 # quality code = round(Q_SCALE * (log10(e) + Q_OFFSET)), clipped to 0..255
@@ -129,7 +127,7 @@ def mean_fields(channel) -> list:
 
 
 def chunk_sizes(n_tiers: int) -> dict:
-    """Chunk side in pixels per kind of an AE v2 file."""
+    """Chunk side in pixels per kind of an AE v2 store."""
     names = tier_names(n_tiers)
     out = {"base": BASE_CHUNK_PX}
     out.update({n: MID_CHUNK_PX for n in names[1:-1]})
@@ -140,7 +138,7 @@ def chunk_sizes(n_tiers: int) -> dict:
 
 def layout(specs, window: int, channel, n_rungs: int = 0,
            chunk_px=None) -> Layout:
-    """Columns of an AE v2 file. `n_rungs` 0 leaves out the quality
+    """Columns of an AE v2 store. `n_rungs` 0 leaves out the quality
     column. The coarsest tier's levels follow the mean in `base`.
     chunk_px: per-kind chunk sizes, `chunk_sizes` by default."""
     names = tier_names(len(specs))
@@ -229,7 +227,7 @@ class BlockRecords:
         return out
 
     def add_to(self, writer, window_row=0, window_col=0):
-        """Add the region's windows to an RVQParquetWriter, its top-left
+        """Add the region's windows to a RecordWriter, its top-left
         window at (window_row, window_col) of the product's grid."""
         writer.add_windows(window_row, window_col, self.dense(), self.valid)
 
@@ -405,7 +403,7 @@ class AEV2Codec:
         """base: (n, n_values) base records; tiers: per finer tier (n,
         levels_read, cells) codes, or None at depth 0; depths: the tuple; valid: (n, W, W)
         bool. -> (n, C, W, W) int8 with invalid pixels at -128. `trace`,
-        a georvq_parquet.Trace, records the decode stages; on CUDA each
+        a georvq.inference.records.Trace, records the decode stages; on CUDA each
         stage then waits for the device before it ends."""
         out, v = self.decode_field(base, tiers, depths, valid, trace)
         with span(trace, "decode", "requantize", sync=self._sync(trace)):
@@ -617,8 +615,9 @@ def encode_tile(src_path, out_path, codec: AEV2Codec, stats=True,
                 chunk_px=None, strip_px=STRIP_PX, batch=256,
                 release=RELEASE_NAME, uri=RELEASE_URI, revision=None,
                 source=None, log=None) -> dict:
-    """Encode one AE tile (GeoTIFF) to `out_path`, conventionally
-    `output_name(src_path)`. Strips of `strip_px` rows are encoded in
+    """Encode one AE tile (GeoTIFF) to the Zarr store `out_path`,
+    conventionally `output_name(src_path)`, replacing a store already
+    there once the new one is written. Strips of `strip_px` rows are encoded in
     turn. chunk_px: per-kind chunk sizes, `chunk_sizes` by default.
     `release`, `uri` and `revision` are written to the header's
     `codec.release` (see georvq.ae.v2_resolve); `release=None` writes
@@ -664,9 +663,9 @@ def encode_tile(src_path, out_path, codec: AEV2Codec, stats=True,
             header["quality"] = codec.header_quality()
         lay = codec.layout(quality=stats, chunk_px=chunk_px)
         t_read = t_enc = t_write = 0.0
-        w = RVQParquetWriter(out_path, header, lay, pid, list(north)[:6], H, Wd,
-                             crs=_projjson(ds.crs),
-                             aux=json.dumps(meta, default=str))
+        w = RecordWriter(out_path, header, lay, pid, list(north)[:6], H, Wd,
+                         crs=_projjson(ds.crs),
+                         aux=json.dumps(meta, default=str))
         for y0 in range(0, H, strip_px):
             y1 = min(H, y0 + strip_px)
             s0, s1 = (H - y1, H - y0) if bottom_up else (y0, y1)
@@ -695,7 +694,7 @@ def encode_tile(src_path, out_path, codec: AEV2Codec, stats=True,
 # --------------------------------------------------------------------------
 
 class AEV2Dataset(WindowMethodsMixin, TransformMethodsMixin):
-    """Read-only view of an AE v2 file that reads like the rasterio
+    """Read-only view of an AE v2 store that reads like the rasterio
     DatasetReader of the SOURCE tile.
 
     Georeferencing, shape and the read methods follow the source tile,
@@ -704,24 +703,23 @@ class AEV2Dataset(WindowMethodsMixin, TransformMethodsMixin):
     `dataset_mask`, `bounds`, `res`, `index`, `xy`, `window` and the
     other window helpers give the answers rasterio gives for the source
     tile, with decoded pixels in place of the source's. `read` takes a
-    `quality` beyond rasterio's arguments. `driver` is "GeoRVQParquet"
-    ("GeoRVQZarr" for a Zarr store);
+    `quality` beyond rasterio's arguments. `driver` is "GeoRVQZarr";
     `profile` and `meta` carry the source's driver, so either can be
-    passed to `rasterio.open(..., "w")` to write a GeoTIFF. The file has
+    passed to `rasterio.open(..., "w")` to write a GeoTIFF. The store has
     no overviews, so a decimated read samples the full-resolution
     decode, where rasterio would read the source's overviews.
 
-    `read` needs a codec; the metadata and masks do not. Without a
-    codec, `resolver(header)` is called for one the first time `codec`
-    is used."""
+    `store` is an open zarr.Group or a path or URL; `reader_kw` go to
+    georvq.inference.records.RecordReader (`cache`, `cache_bytes`,
+    `trace`, `storage_options`). `read` needs a codec; the metadata and
+    masks do not. Without a codec, `resolver(header)` is called for one
+    the first time `codec` is used."""
 
-    driver = "GeoRVQParquet"
+    driver = "GeoRVQZarr"
     mode = "r"
 
-    def __init__(self, path_or_url, codec=None, resolver=None, **reader_kw):
-        self.reader = open_reader(path_or_url, **reader_kw)
-        if isinstance(self.reader, ZarrReader):
-            self.driver = ZarrReader.driver
+    def __init__(self, store, codec=None, resolver=None, **reader_kw):
+        self.reader = RecordReader(store, **reader_kw)
         self.name = self.reader.source
         h = self.header = self.reader.header
         p = self.product = h["product"]
@@ -746,8 +744,8 @@ class AEV2Dataset(WindowMethodsMixin, TransformMethodsMixin):
         self._meta = None
         self._crs = None
         self._closed = False
-        self._quality_decoder = getattr(self.reader, "quality_decoder",
-                                        h["codec"].get("decoder_id"))
+        self._quality_decoder = self.reader.quality_decoder or h["codec"].get(
+            "decoder_id")
         if codec is not None:
             self.codec = codec
 
@@ -768,18 +766,16 @@ class AEV2Dataset(WindowMethodsMixin, TransformMethodsMixin):
             self._use_decoder(codec)
 
     def _use_decoder(self, codec):
-        """Quality values and rungs of the codec's decoder. A Zarr store
-        serves its quality array for that decoder, or none when it has
-        none; then the rungs are the codec's own. A GeoParquet file holds
-        the quality of the decoder its header names only."""
+        """Quality values and rungs of the codec's decoder: the store's
+        quality array for that decoder, or none when it has none, and
+        then the codec's own rungs."""
         did = getattr(codec, "decoder_id", None)
         if did is None or did == self._quality_decoder:
             return
         r = self.reader
-        if hasattr(r, "select_quality"):
-            r.select_quality(did if did in r.quality_decoders else None)
-            self.header = r.header
-        if r.layout.quality is not None and hasattr(r, "select_quality"):
+        r.select_quality(did if did in r.quality_decoders else None)
+        self.header = r.header
+        if r.layout.quality is not None:
             self.rungs = [tuple(x["tuple"]) for x in self.header["rungs"]]
         else:
             self.rungs = [tuple(x) for x in codec.rungs]
@@ -917,17 +913,11 @@ class AEV2Dataset(WindowMethodsMixin, TransformMethodsMixin):
 
     def _resolve_bound(self, stat, bound, wy0, wy1, wx0, wx1):
         r = self.reader
-        has = getattr(r, "quality_decoders", None)
-        if has is not None and r.quality_decoder != self._quality_decoder:
+        if r.quality_decoder != self._quality_decoder:
             raise ValueError(
                 f"{self.name}: no quality for decoder {self._quality_decoder}; "
-                f"the store has quality for {sorted(has) or 'no decoder'}")
-        if has is None and self._quality_decoder != self.header["codec"].get(
-                "decoder_id"):
-            raise ValueError(
-                f"{self.name}: the quality column was measured with decoder "
-                f"{self.header['codec'].get('decoder_id')}, not "
-                f"{self._quality_decoder}")
+                f"the store has quality for "
+                f"{sorted(r.quality_decoders) or 'no decoder'}")
         if r.layout.quality is None:
             raise ValueError(f"{self.name}: no quality column to resolve a "
                              "bound against")
@@ -1233,14 +1223,15 @@ class AEV2Dataset(WindowMethodsMixin, TransformMethodsMixin):
         return m[0].astype(np.uint8) * np.uint8(255)
 
 
-def open_dataset(path_or_url, model=None, channel=None, bundle=None,
+def open_dataset(store, model=None, channel=None, bundle=None,
                  onnx_dir=None, device=None, backend=None, trust_remote=False,
                  cache_dir=None, bf16=None, codec=None, threads=None,
-                 record_cache_dir=None, **reader_kw) -> "AEV2Dataset":
-    """Open an AE v2 file (a local path or an http(s) URL), or a
-    prototype Zarr store of one (a path or URL ending in .zarr, or an
-    open zarr.Group read through zarr-python; see
-    georvq.inference.georvq_zarr).
+                 **reader_kw) -> "AEV2Dataset":
+    """Open an AE v2 store: an open zarr.Group, or a local path or a URL
+    that zarr-python opens through fsspec (https://, s3://, hf://, ...),
+    with `storage_options` for fsspec, for example {"headers":
+    {"Authorization": "Bearer <token>"}} for a private repository over
+    https.
 
     The codec that reads pixels comes from the first of
     - `codec`, an AEV2Codec or AEV2OnnxCodec;
@@ -1259,12 +1250,10 @@ def open_dataset(path_or_url, model=None, channel=None, bundle=None,
 
     backend: "torch" or "onnx"; default torch when it imports (onnx
     when `onnx_dir` is given). device: default cuda when the torch
-    backend sees a GPU, else cpu. `record_cache_dir` is the
-    RVQParquetReader's on-disk record cache; `reader_kw` go to it too
-    (`first_read`, `gap`, `concurrency`, `cache`, `cache_bytes`, and
-    `trace`, a georvq_parquet.Trace that also records the decode stages)."""
-    if record_cache_dir is not None:
-        reader_kw["cache_dir"] = record_cache_dir
+    backend sees a GPU, else cpu. `reader_kw` go to
+    georvq.inference.records.RecordReader (`storage_options`, `cache`,
+    `cache_bytes`, and `trace`, a records.Trace that also records the
+    decode stages)."""
     explicit = codec is not None
     if codec is None and (model is not None or channel is not None):
         if backend not in (None, "torch"):
@@ -1289,7 +1278,7 @@ def open_dataset(path_or_url, model=None, channel=None, bundle=None,
                                  cache_dir=cache_dir,
                                  trust_remote=trust_remote)
 
-    ds = AEV2Dataset(path_or_url, codec, None if explicit else resolver,
+    ds = AEV2Dataset(store, codec, None if explicit else resolver,
                      **reader_kw)
     if bundle is not None and not explicit:
         try:
@@ -1304,7 +1293,7 @@ open = open_dataset
 
 
 def reconstruct(src, out_path, quality=None, rows=1024, creation_options=None):
-    """Decode a whole file into a GeoTIFF with the source's profile,
+    """Decode a whole store into a GeoTIFF with the source's profile,
     tags and band descriptions. `src` is an open AEV2Dataset."""
     import rasterio
     from rasterio.windows import Window
@@ -1323,22 +1312,6 @@ def reconstruct(src, out_path, quality=None, rows=1024, creation_options=None):
             dst.write(src.read(window=win, quality=quality), window=win)
 
 
-def column_bytes(reader: RVQParquetReader) -> dict:
-    """Bytes per column group: the chunk metadata columns, `base`,
-    `mask`, each tier outside base, `quality`, and the footer."""
-    out = {}
-    tier_of = {c: t.name for t in reader.layout.tiers for c in t.columns
-               if not t.in_base}
-    for name, b in reader.column_bytes().items():
-        key = tier_of.get(name, name)
-        if key in ("kind", "product_id", "chunk_row", "chunk_col", "geometry",
-                   "bbox"):
-            key = "chunk_meta"
-        out[key] = out.get(key, 0) + b
-    out["footer"] = reader.metadata.serialized_size + 8
-    return out
-
-
 # --------------------------------------------------------------------------
 # CLI
 # --------------------------------------------------------------------------
@@ -1351,13 +1324,12 @@ def _window_arg(s):
 
 
 def _fetch_header(target, uri, revision) -> dict:
-    """Header of the file `target`, or a stand-in naming a bitstream id
+    """Header of the store `target`, or a stand-in naming a bitstream id
     and the release to download it from."""
-    if os.path.exists(target) or target.startswith(("http://", "https://")):
-        with RVQParquetReader(target) as rd:
-            return rd.header
-    if target.endswith(".parquet") or os.sep in target:
-        raise FileNotFoundError(f"{target}: no such file")
+    if os.path.exists(target) or "://" in target:
+        return RecordReader(target).header
+    if target.rstrip("/").endswith(".zarr") or os.sep in target:
+        raise FileNotFoundError(f"{target}: no such store")
     return {"codec": {"bitstream_id": target,
                       "release": {"uri": uri, "revision": revision}}}
 
@@ -1367,7 +1339,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser(
         prog="python -m georvq.ae.v2",
         description="AlphaEarth v2 codec: one annual tile <-> one "
-                    "georvq GeoParquet file.")
+                    "georvq Zarr store.")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     def cache_args(p):
@@ -1400,11 +1372,12 @@ def main(argv=None):
                                 "this process may use)")
             cache_args(p)
 
-    e = sub.add_parser("encode", help="GeoTIFF tile -> .georvq.parquet")
+    e = sub.add_parser("encode", help="GeoTIFF tile -> .georvq.zarr")
     e.add_argument("src")
     e.add_argument("out", nargs="?", default=None,
-                   help="output file or directory (default: "
-                        "{source stem}.georvq.parquet in the current directory)")
+                   help="output store, or a directory to write it in "
+                        "(default: {source stem}.georvq.zarr in the current "
+                        "directory)")
     model_args(e)
     e.add_argument("--no-quality", action="store_true",
                    help="skip the per-rung quality column (one decode per rung)")
@@ -1427,7 +1400,7 @@ def main(argv=None):
     d.add_argument("--window", default=None, help="row,col,height,width")
     d.add_argument("--quality", default=None, help="e.g. 8-8-2 or p99<=0.02")
 
-    r = sub.add_parser("reconstruct", help="file -> GeoTIFF with source profile")
+    r = sub.add_parser("reconstruct", help="store -> GeoTIFF with source profile")
     r.add_argument("src")
     r.add_argument("out")
     model_args(r, onnx=True)
@@ -1439,21 +1412,21 @@ def main(argv=None):
     model_args(x)
     x.add_argument("--opset", type=int, default=18)
 
-    f = sub.add_parser("fetch", help="find or download the bundle of a file "
+    f = sub.add_parser("fetch", help="find or download the bundle of a store "
                                      "or bitstream id; prints its directory")
-    f.add_argument("target", help="a v2 file (path or URL) or a bitstream id")
+    f.add_argument("target", help="a v2 store (path or URL) or a bitstream id")
     f.add_argument("--uri", default=RELEASE_URI,
                    help="release to download a bitstream id from")
     f.add_argument("--revision", default=None)
     cache_args(f)
 
-    i = sub.add_parser("info", help="header summary and column sizes")
+    i = sub.add_parser("info", help="header summary and array sizes")
     i.add_argument("src")
     i.add_argument("--cache-dir", default=None)
     args = ap.parse_args(argv)
 
     if args.cmd == "info":
-        with RVQParquetReader(args.src) as rd:
+        with RecordReader(args.src) as rd:
             h = rd.header
             print(json.dumps({k: h[k] for k in ("format", "version", "status",
                                                 "codec", "product")}, indent=1))
@@ -1464,11 +1437,15 @@ def main(argv=None):
             for rr in h["rungs"]:
                 print(f"  {'-'.join(map(str, rr['tuple'])):>8}  "
                       f"{rr['bits_window']:>7} b/window  {rr['bits_px']:.4f} b/px")
-            for n, b in column_bytes(rd).items():
-                print(f"  {n:<10} {b:>12,} B")
-            for n, b in rd.kind_bytes().items():
-                print(f"  {n + ' rows':<10} {b:>12,} B")
-            print(f"  {'file':<10} {rd.size:>12,} B")
+            print(f"  quality for decoders {sorted(rd.quality_decoders)}")
+            try:
+                sizes = rd.stored_bytes()
+            except Exception as err:
+                print(f"  stored bytes unavailable ({type(err).__name__})")
+            else:
+                for n, b in sizes.items():
+                    print(f"  {n:<26} {b:>12,} B")
+                print(f"  {'store':<26} {sum(sizes.values()):>12,} B")
             try:
                 where = locate_bundle(h, args.cache_dir, download=False)
             except BundleError as err:
@@ -1508,8 +1485,7 @@ def main(argv=None):
                             quality=args.quality, batch=args.batch)
                 np.save(args.out, a)
                 print(f"{a.shape} in {time.time() - t0:.1f}s, "
-                      f"{ds.reader.stats['requests']} requests, "
-                      f"{ds.reader.stats['bytes']:,} B")
+                      f"{ds.reader.stats['bytes']:,} B of records")
             else:
                 reconstruct(ds, args.out, quality=args.quality)
                 print(f"{args.out} in {time.time() - t0:.1f}s")
@@ -1539,7 +1515,8 @@ def main(argv=None):
                                                "decoder_id")}))
         return 0
     out = args.out
-    if out is None or os.path.isdir(out):
+    if out is None or (os.path.isdir(out)
+                       and not out.rstrip("/").endswith(".zarr")):
         out = os.path.join(out or ".", output_name(args.src))
     t = encode_tile(args.src, out, codec, stats=not args.no_quality,
                     batch=args.batch, release=args.release or None,

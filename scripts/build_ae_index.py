@@ -1,4 +1,4 @@
-"""Build `aef_georvq_index.parquet` for a tree of AE v2 files.
+"""Build `aef_georvq_index.parquet` for a tree of AE v2 stores.
 
 Usage:
   python scripts/build_ae_index.py <dir> --source-index aef_index.parquet \
@@ -17,7 +17,7 @@ from georvq.ae.index import INDEX_NAME, build_index
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("root", help="directory of *.georvq.parquet files")
+    ap.add_argument("root", help="directory of *.georvq.zarr stores")
     ap.add_argument("--source-index", required=True,
                     help="the source aef_index.parquet")
     ap.add_argument("--url-prefix", default=None,

@@ -8,8 +8,8 @@ bundle_path`, ~/.cache/georvq/bundles/<bitstream_id> by default). Its inputs are
 golden/divfull_val_tokens.npz. golden/ae_v2_golden.npz holds the codes
 the bundle's encoder produced for them on CPU, and sha256 hashes of the
 float32 field and the int8 tile decoded from those codes at three rungs.
-golden/ae_v2_tile.georvq.parquet is those windows written as one v2
-file with small chunks, read back through the container reader.
+golden/ae_v2_tile.georvq.zarr is those windows written as one v2
+store with small chunks, read back through the store reader.
 
 Everything is compared exactly. The hashes were recorded on CPU in fp32
 (cirrus, x86-64); a CPU with other vector kernels could produce
@@ -68,7 +68,7 @@ CKPT = os.environ.get(
 MEAN_NPZ = os.environ.get(
     "GEORVQ_AE_V2_MEAN",
     "/home/ali/projects/georvq/scratch/ae-v2/meanrvq/mean_channel_v2.npz")
-TILE = os.path.join(HERE, "golden/ae_v2_tile.georvq.parquet")
+TILE = os.path.join(HERE, "golden/ae_v2_tile.georvq.zarr")
 GOLDEN_RUNGS = ((2, 0, 0), (8, 8, 2), (8, 8, 8))
 TILE_GRID = (2, 4)           # the eight windows as a 2 x 4 window tile
 # Records are dense over a chunk, so the default 8192 px base chunk would

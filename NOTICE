@@ -29,7 +29,7 @@ AlphaEarth Foundations Satellite Embedding dataset -- CC-BY 4.0
     tests/golden/ae_v2_golden.npz
         codes and decode hashes of those windows under the georvq AE v2
         codec.
-    tests/golden/ae_v2_tile.georvq.parquet
+    tests/golden/ae_v2_tile.georvq.zarr
         a small tile built from those windows and encoded with the
         georvq AE v2 codec (lossy).
     notebooks/demo_ae.ipynb (cell outputs)

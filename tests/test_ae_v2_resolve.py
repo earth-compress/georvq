@@ -20,8 +20,8 @@ from georvq.ae.v2_bundle import build_bundle, load_bundle  # noqa: E402
 from georvq.ae.v2_resolve import BundleError  # noqa: E402
 from georvq.config import load_config  # noqa: E402
 from georvq.factory import build_model  # noqa: E402
-from georvq.inference.georvq_parquet import RVQParquetReader  # noqa: E402
 from georvq.inference.mean_codec import RVQPCAMeanChannel  # noqa: E402
+from georvq.inference.records import RecordReader  # noqa: E402
 from georvq.repro import save_checkpoint  # noqa: E402
 
 H, WD = 40, 48
@@ -90,7 +90,7 @@ def tiny(tmp_path_factory):
                        strip_px=16, **kw)
         return out
 
-    released = encode("released.georvq.parquet", revision="abc123")
+    released = encode("released.georvq.zarr", revision="abc123")
     with v2.open_dataset(released, codec=codec) as ds:
         want = ds.read(quality=RUNG)
     return {"tmp": tmp, "ckpt": ckpt, "npz": npz, "bundle": bundle,
@@ -122,7 +122,7 @@ def _fake_hub(source, calls):
 
 
 def test_header_names_the_release(tiny):
-    with RVQParquetReader(tiny["released"]) as rd:
+    with RecordReader(tiny["released"]) as rd:
         rel = rd.header["codec"]["release"]
     assert rel == {"name": "ae-v2", "bitstream_id": tiny["bid"],
                    "decoder_id": tiny["codec"].decoder_id,
@@ -190,7 +190,7 @@ def test_bundle_for_another_bitstream_is_refused(tiny, tmp_path,
 
 
 def test_untrusted_release_needs_trust_remote(tiny, tmp_path, monkeypatch):
-    f = tiny["encode"]("untrusted.georvq.parquet",
+    f = tiny["encode"]("untrusted.georvq.zarr",
                        uri="hf://someone-else/georvq-ae-v2")
     root = tmp_path / "cache"
     with georvq.ae.open(f, cache_dir=root) as ds:
@@ -228,7 +228,7 @@ def test_trusted_release_is_downloaded_into_the_cache(tiny, tmp_path,
 
 
 def test_release_below_the_repository_root(tiny, tmp_path, monkeypatch):
-    f = tiny["encode"]("subdir.georvq.parquet",
+    f = tiny["encode"]("subdir.georvq.zarr",
                        uri="hf://earth-compress/bundles/ae/v2")
     calls = []
     monkeypatch.setattr(huggingface_hub, "snapshot_download",
@@ -254,8 +254,8 @@ def test_tampered_download_is_not_cached(tiny, tmp_path, monkeypatch):
 
 
 def test_file_without_a_release(tiny, tmp_path):
-    f = tiny["encode"]("legacy.georvq.parquet", release=None)
-    with RVQParquetReader(f) as rd:
+    f = tiny["encode"]("legacy.georvq.zarr", release=None)
+    with RecordReader(f) as rd:
         assert rd.header["codec"]["release"] is None
     with georvq.ae.open(f, model=str(tiny["ckpt"]), channel=str(tiny["npz"]),
                         device="cpu") as ds:
@@ -323,7 +323,7 @@ def test_cli_fetch_and_decode_without_model(tiny, tmp_path, monkeypatch,
 
 
 def test_cli_reports_a_missing_bundle(tiny, tmp_path, capsys):
-    f = tiny["encode"]("legacy_cli.georvq.parquet", release=None)
+    f = tiny["encode"]("legacy_cli.georvq.zarr", release=None)
     assert v2.main(["decode", str(f), str(tmp_path / "a.npy"),
                     "--cache-dir", str(tmp_path / "none")]) == 1
     assert "names no release" in capsys.readouterr().err
@@ -374,7 +374,7 @@ def test_cli_encode_writes_what_the_api_writes(tiny, tmp_path):
     the fixture's `encode_tile` output, with the same release record."""
     import subprocess
     src = tiny["tmp"] / "tile.tif"
-    out = tmp_path / "cli.georvq.parquet"
+    out = tmp_path / "cli.georvq.zarr"
     r = subprocess.run(
         [sys.executable, "-m", "georvq.ae.v2", "encode", str(src), str(out),
          "--bundle", str(tiny["bundle"]), "--device", "cpu", "--fp32",
@@ -456,9 +456,9 @@ def test_cli_reports_an_explicit_bundle_for_another_bitstream(tiny, tmp_path,
     assert "cannot decode this file" in capsys.readouterr().err
 
 
-def test_cli_fetch_of_a_missing_file(tmp_path, capsys):
-    assert v2.main(["fetch", str(tmp_path / "missing.georvq.parquet")]) == 1
-    assert "no such file" in capsys.readouterr().err
+def test_cli_fetch_of_a_missing_store(tmp_path, capsys):
+    assert v2.main(["fetch", str(tmp_path / "missing.georvq.zarr")]) == 1
+    assert "no such store" in capsys.readouterr().err
 
 
 def test_malformed_quality_names_the_accepted_forms(tiny):
@@ -472,11 +472,11 @@ def test_malformed_quality_names_the_accepted_forms(tiny):
 
 def test_encode_warns_on_a_local_source_path(tiny):
     with pytest.warns(UserWarning, match="product.source records the local"):
-        tiny["encode"]("local.georvq.parquet")
+        tiny["encode"]("local.georvq.zarr")
     import warnings
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        tiny["encode"]("given.georvq.parquet",
+        tiny["encode"]("given.georvq.zarr",
                        source="https://example.org/tile.tiff")
 
 

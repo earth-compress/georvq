@@ -271,7 +271,7 @@ def _write_readme(out_dir, meta):
         f.write(f"""# georvq AE v2 bundle
 
 Decoder and encoder for AlphaEarth annual tiles stored as georvq
-GeoParquet files (`{meta['codec_format']}`, see docs/GEORVQ_PARQUET.md).
+Zarr stores (`{meta['codec_format']}`, see docs/GEORVQ_ZARR.md).
 
 - bitstream_id `{meta['bitstream_id']}`, decoder_id `{meta['decoder_id']}`
 - window {meta['window']} px, {meta['bands']} bands
@@ -298,8 +298,8 @@ q * scale, with q = -128 standing for -0.0), `mean_channel.npz`,
 from georvq.ae.v2_bundle import load_bundle
 from georvq.ae import v2
 codec = load_bundle("bundle_v2", device="cuda")
-v2.encode_tile("tile.tif", "tile.georvq.parquet", codec)
-with v2.open_dataset("tile.georvq.parquet", codec=codec) as ds:
+v2.encode_tile("tile.tif", "tile.georvq.zarr", codec)
+with v2.open_dataset("tile.georvq.zarr", codec=codec) as ds:
     a = ds.read(quality="8-8-2")
 ```
 
