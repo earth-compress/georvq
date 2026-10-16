@@ -1,0 +1,27 @@
+{
+ "label": "beta_v4 (ring-space, no deblock)",
+ "quality_key": "r2",
+ "quality_by_tuple": {
+  "8-1": 0.8295969834580319,
+  "8-2": 0.8890331839211285,
+  "8-3": 0.9144228960067267,
+  "8-4": 0.9280849306087475,
+  "8-5": 0.9359380818350473,
+  "8-6": 0.9405117362912279,
+  "8-7": 0.9431612142070662,
+  "8-8": 0.9447470754821552
+ },
+ "scalars": {
+  "r2_ceiling": 0.9470169832929969,
+  "rmse_ceiling": 0.3110767259131535,
+  "sam_ceiling": 0.3585382735473104
+ },
+ "meta": {
+  "checkpoint": "ring-space releases/beta_v4 converted by scratch/s2-final/beta_rerun/convert_beta.py",
+  "deblocker": false,
+  "stats": "float16, 424 bits/tile",
+  "val": "4096 windows of 42 px, LiveS2Store.split(0.02, seed=0)",
+  "harness": "georvq.train.validate.validate",
+  "git": "792a216"
+ }
+}

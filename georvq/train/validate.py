@@ -254,3 +254,42 @@ def load_rd_ref(spec_str):
         if c > best:
             front.append((b, c)); best = c
     return label, front
+
+
+def _slug(label):
+    import re
+    return re.sub(r"[^a-z0-9]+", "_", label.lower()).strip("_")
+
+
+def write_ref_curve(path, label, quality_key, quality_by_tuple, scalars=None,
+                    bpp_by_tuple=None, meta=None):
+    """Write a reference curve for `eval.ref_curves`: a reference codec's
+    quality per depth tuple, scored by `validate` on a run's validation
+    windows. `bpp_by_tuple` gives its rate per tuple; without it the run's
+    own rate for that tuple is used, which is right when the reference
+    has the run's tier geometry and side channel."""
+    blob = {"label": label, "quality_key": quality_key,
+            "quality_by_tuple": dict(quality_by_tuple),
+            "scalars": dict(scalars or {}),
+            "meta": dict(meta or {})}
+    if bpp_by_tuple is not None:
+        blob["bpp_by_tuple"] = dict(bpp_by_tuple)
+    with open(path, "w") as f:
+        json.dump(blob, f, indent=1)
+
+
+def load_ref_curve(path, label=None):
+    """Read a `write_ref_curve` JSON (a run's final_val.json also reads,
+    without a label of its own)."""
+    from pathlib import Path
+    p = Path(path)
+    if not p.is_absolute() and not p.exists():
+        # presets name artifacts relative to the repository root
+        p = Path(__file__).resolve().parents[2] / p
+    blob = json.load(open(p))
+    lab = label or blob.get("label") or str(path)
+    return {"path": str(path), "label": lab, "slug": _slug(lab),
+            "quality_key": blob["quality_key"],
+            "quality_by_tuple": blob["quality_by_tuple"],
+            "scalars": blob.get("scalars", {}),
+            "bpp_by_tuple": blob.get("bpp_by_tuple")}

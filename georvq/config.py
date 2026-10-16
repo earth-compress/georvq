@@ -58,6 +58,14 @@ def parse_tier(v):
 
 
 class TokenizerConfig(StrictModel):
+    # "vit": the shared ViT tokenizer over the source stem's plane.
+    # "source": the source adapter builds the whole encoder
+    # (`Source.build_encoder`), which reads the prepped batch directly and
+    # returns one latent stream per tier. It exists for encoders whose
+    # layout depends on the source's band geometry, such as the ring-space
+    # beta_v2 conv encoder that joins the S2 grids at 21 and 7 px. Its
+    # width is `dim` and `depth` is unused.
+    kind: Literal["vit", "source"] = "vit"
     dim: int = 256
     depth: int = 9
     # One conv pyramid instead of an independent patch embed per tier and
@@ -608,9 +616,28 @@ class TrainConfig(StrictModel):
     val_tuples: int = 16
 
 
+class RefCurveConfig(StrictModel):
+    """A reference codec scored through this run's own validation.
+
+    `path` is a JSON written by `georvq.train.validate.write_ref_curve`:
+    the reference's quality per depth tuple, on the same validation
+    windows and with the same metric as the run. Validation then always
+    scores those tuples, the R-D figure draws the reference as a dotted
+    curve, and a history figure (`val_vs_ref.png` in the run directory,
+    `val_figs/ref_history` in wandb) draws it as a dotted line over the
+    run's validation history at each tuple and at the ceiling. The run
+    also logs its difference from the reference at each tuple
+    (`val/<metric>_<tuple>_vs_<label>`). `label` overrides the label in
+    the file.
+    """
+    path: Path
+    label: Optional[str] = None
+
+
 class EvalConfig(StrictModel):
     recon_tuples: Optional[list[str]] = None   # e.g. ["8-1-0", "8-8-8"]
     rd_refs: list[str] = Field(default_factory=list)
+    ref_curves: list[RefCurveConfig] = Field(default_factory=list)
 
 
 class ReportConfig(StrictModel):

@@ -32,9 +32,11 @@ from georvq.repro import (load_checkpoint, run_metadata, save_checkpoint,
 from georvq.train.figures import (codebook_figure, cosdist_figure,
                                   error_hist_harvest, error_hist_render,
                                   rd_err_harvest, rd_err_render, rd_figure,
-                                  recon_harvest, recon_render, reset_figure)
+                                  recon_harvest, recon_render,
+                                  ref_history_figure, reset_figure)
 from georvq.sources.report import resolve_report
-from georvq.train.validate import canonical_tuples, load_rd_ref, tname, validate
+from georvq.train.validate import (canonical_tuples, load_ref_curve,
+                                   load_rd_ref, tname, validate)
 from georvq.train import dist as D
 from georvq.train.signals import stop_on_signals
 from georvq.train.warmstart import (check_warm_start, freeze_books,
@@ -266,6 +268,13 @@ def _train(cfg: Config, gpu, stop):
                   if all(L >= m for L, m in zip(t, mins))]
     canon = canonical_tuples(specs, mins, cfg.model.depth_sampling)
     ref_fronts = [load_rd_ref(s) for s in cfg.eval.rd_refs]
+    ref_curves = [load_ref_curve(rc.path, rc.label)
+                  for rc in cfg.eval.ref_curves]
+    # tuples a reference scored, which every validation then scores too
+    ref_ts = [t for t in tuples
+              if any(tname(t) in rc["quality_by_tuple"] for rc in ref_curves)]
+    ref_hist = {"step": [], "ceiling": [],
+                **{tname(t): [] for t in ref_ts}}
     run_dir = os.path.join(cfg.log.out_dir, cfg.log.run_tag)
     os.makedirs(run_dir, exist_ok=True)
     write_resolved_config(run_dir, cfg)
@@ -283,6 +292,11 @@ def _train(cfg: Config, gpu, stop):
     # fail in the first second, not at the first val_interval.
     report = resolve_report(source, cfg)
     qm = report.quality
+    for rc in ref_curves:
+        if rc["quality_key"] != qm.key:
+            raise ValueError(
+                f"eval.ref_curves: {rc['path']} scores {rc['quality_key']!r} "
+                f"but this run's quality metric is {qm.key!r}")
     if D.is_main():
         print(f"report: quality={qm.key} "
               f"extra={[m.key for m in report.extra]} "
@@ -841,7 +855,8 @@ def _train(cfg: Config, gpu, stop):
 
         if (step % cfg.train.val_interval == 0
                 or step == cfg.train.steps) and D.is_main():
-            canon_ts = list(canon.values())
+            canon_ts = list(canon.values()) + [t for t in ref_ts
+                                               if t not in canon.values()]
             if step == cfg.train.steps and len(tuples) <= 64:
                 val_ts = tuples           # full enumeration at the end
             else:
@@ -867,6 +882,16 @@ def _train(cfg: Config, gpu, stop):
                 model.eval()
             if v.freeze_books:            # validate() leaves the model in
                 freeze_books(model)       # train() -- re-assert the freeze
+            if ref_curves:
+                ref_hist["step"].append(step + step0)
+                ref_hist["ceiling"].append(vs[f"{qm.key}_ceiling"])
+                for t in ref_ts:
+                    ref_hist[tname(t)].append(cbt.get(tname(t), float("nan")))
+                ref_fig = ref_history_figure(ref_hist, ref_curves, qm)
+                ref_fig.savefig(os.path.join(run_dir, "val_vs_ref.png"),
+                                dpi=90)
+                ref_img = wandb.Image(ref_fig) if use_wandb else None
+                plt.close(ref_fig)
             ebt = vs.pop("_extra", {})
             extra_str = "".join(
                 f" {m.key}_ceil={vs[f'{m.key}_ceiling']:.4f}"
@@ -932,6 +957,18 @@ def _train(cfg: Config, gpu, stop):
                     bk = f"{qm.key}_{b.key}"
                     if bk in vs:
                         scalars[f"val/{bk}"] = vs[bk]
+                # run minus reference at each tuple both scored
+                for rc in ref_curves:
+                    for tn, rv in rc["quality_by_tuple"].items():
+                        if tn in cbt:
+                            scalars[f"val/{qm.key}_{tn}_vs_{rc['slug']}"] = \
+                                cbt[tn] - rv
+                    rce = rc["scalars"].get(f"{qm.key}_ceiling")
+                    if rce is not None:
+                        scalars[f"val/{qm.key}_ceiling_vs_{rc['slug']}"] = \
+                            vs[f"{qm.key}_ceiling"] - rce
+                if ref_curves:
+                    scalars["val_figs/ref_history"] = ref_img
                 # Every figure below is a view of QUANTIZED behaviour --
                 # the R-D front, per-level codebook health, reconstructions
                 # at depth tuples. During the VQ-free warmup they would all
@@ -1001,12 +1038,12 @@ def _train(cfg: Config, gpu, stop):
                         if report.has_figure("rd"):
                             add("figs/rd", rd_figure(
                                 cbt, vs, specs, val_ts, step, report,
-                                ref_fronts=ref_fronts,
+                                ref_fronts=ref_fronts, ref_curves=ref_curves,
                                 px=cfg.model.window ** 2, side_bits=sb))
                         if report.has_figure("rd_log"):
                             add("figs/rd_log", rd_figure(
                                 cbt, vs, specs, val_ts, step, report,
-                                ref_fronts=ref_fronts,
+                                ref_fronts=ref_fronts, ref_curves=ref_curves,
                                 px=cfg.model.window ** 2, dist_log=True,
                                 side_bits=sb))
                         if report.has_figure("codebook"):

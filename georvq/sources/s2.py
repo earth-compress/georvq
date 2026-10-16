@@ -96,6 +96,76 @@ class _PatchHead(nn.Module):
         return self.conv(x)
 
 
+def _cbg(cin, cout, k, stride=1, pad=0):
+    """Conv, BatchNorm, GELU."""
+    return [nn.Conv2d(cin, cout, k, stride, pad), nn.BatchNorm2d(cout),
+            nn.GELU()]
+
+
+class _ResBlock(nn.Module):
+    """3x3 conv and 1x1 channel mix with a skip, BatchNorm after each."""
+
+    def __init__(self, ch):
+        super().__init__()
+        self.conv1 = nn.Conv2d(ch, ch, 3, 1, 1)
+        self.bn1 = nn.BatchNorm2d(ch)
+        self.conv2 = nn.Conv2d(ch, ch, 1)
+        self.bn2 = nn.BatchNorm2d(ch)
+
+    def forward(self, x):
+        return x + self.bn2(F.gelu(self.conv2(F.gelu(self.bn1(self.conv1(x))))))
+
+
+class S2ConvTileEncoder(nn.Module):
+    """The ring-space beta_v2 encoder: a conv stack that reads the 10 m
+    bands, halves to the 20 m grid and joins the 20 m bands, divides by
+    three to the 60 m grid and joins the 60 m bands. Each 60 m pixel
+    becomes one fine-tier cell (6 px at 10 m) and a pooled branch gives
+    the single coarse-tier vector.
+
+    Module names follow beta_v2's `TileVQAutoencoder` so its weights load
+    by prefix. `width` is beta's stem width (128 in beta_v2).
+    """
+
+    def __init__(self, coarse_dim, fine_dim, width=128):
+        super().__init__()
+        w, w2, w4 = width, 2 * width, 4 * width
+        n10, n20, n60 = (GROUPS[g][0] for g in ("10m", "20m", "60m"))
+        self.enc_10m = nn.Sequential(*_cbg(n10, w, 3, 1, 1),
+                                     *_cbg(w, w, 3, 1, 1),
+                                     *_cbg(w, w, 3, 2, 1))
+        self.enc_fuse_20m = nn.Sequential(*_cbg(w + n20, w2, 1))
+        self.enc_20m = nn.Sequential(*_cbg(w2, w2, 3, 1, 1),
+                                     *_cbg(w2, w2, 3, 3, 0))
+        self.enc_fuse_60m = nn.Sequential(*_cbg(w2 + n60, w4, 1))
+        self.enc_res = _ResBlock(w4)
+        self.hq_proj = nn.Conv2d(w4, fine_dim, 1)
+        self.cls_res = _ResBlock(w4)
+        self.cls_pool = nn.AdaptiveAvgPool2d(1)
+        self.cls_proj = nn.Linear(w4, coarse_dim)
+
+    def forward(self, x, stats_bias=None):
+        if stats_bias is not None:
+            raise ValueError("S2ConvTileEncoder takes no stats conditioning")
+        h = self.enc_10m(x["10m"])
+        h = self.enc_fuse_20m(torch.cat([h, x["20m"]], 1))
+        h = self.enc_20m(h)
+        h = self.enc_res(self.enc_fuse_60m(torch.cat([h, x["60m"]], 1)))
+        fine = self.hq_proj(h).flatten(2).transpose(1, 2)    # (B, g*g, D)
+        coarse = self.cls_proj(self.cls_pool(self.cls_res(h)).flatten(1))
+        return [coarse.unsqueeze(1), fine]
+
+
+def _check_tile_layout(model_cfg, what):
+    """The beta_v2 conv encoder needs two tiers, a whole-window coarse cell
+    and a fine cell of one 60 m pixel."""
+    t = model_cfg.tiers
+    if len(t) != 2 or t[0].grid != 1 or t[1].grid * 6 != model_cfg.window:
+        raise ValueError(
+            f"{what} needs tiers [1:..., window/6:...]; got "
+            f"{[str(s) for s in t]} on window {model_cfg.window}")
+
+
 class S2Normalizer:
     """Per-tile per-band mean/std side channel: normalize before encode,
     restore after decode. `stats_vector` orders [means..., stds...] over
@@ -228,6 +298,12 @@ class S2Source(Source):
         grid, p = self.head_geom(model_cfg, n_tiers, out_px)
         return S2MultiResHead(in_dim, grid=grid, p=p,
                               head_feat=model_cfg.decoder.head_feat)
+
+    def build_encoder(self, model_cfg) -> nn.Module:
+        _check_tile_layout(model_cfg, "tokenizer.kind=source")
+        t = model_cfg.tiers
+        return S2ConvTileEncoder(t[0].dim, t[1].dim,
+                                 width=model_cfg.tokenizer.dim)
 
     def normalizer(self, model_cfg):
         return self._norm
