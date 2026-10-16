@@ -6,7 +6,7 @@ window grid, plus the pixel validity mask:
 
     zarr.json           group: the georvq header, the aux metadata,
                         GeoZarr proj: and spatial: attributes, the store
-                        manifest, and consolidated metadata of the arrays
+                        manifest, and (by default) consolidated metadata
     mask    (H, W) bool             one chunk per mask-kind chunk, zstd;
                                     chunks with every pixel valid omitted
     base    (wy, wx, base bytes)    one chunk per base chunk
@@ -15,26 +15,27 @@ window grid, plus the pixel validity mask:
                                     one tier chunk, no compression
     quality (wy, wx, quality bytes) chunked as base
 
-An inner chunk of a tier holds the same bytes as the GeoParquet value of
-that level column and chunk, edge chunks included (zarr pads them with
-the fill value 0, as the GeoParquet writer pads with zero records), so
-the two containers decode to the same values. Chunks that the header
-lists as empty are absent from the shard index and read as zeros.
+The chunks are those of the header's layout, so a store has the chunk
+sizes of the GeoParquet file it is written from. An inner chunk of a
+tier holds the same bytes as the GeoParquet value of that level column
+and chunk, edge chunks included (zarr pads them with the fill value 0,
+as the GeoParquet writer pads with zero records), so the two containers
+decode to the same values. zarr-python writes the shards: inner chunks
+in its Morton order, the index at the end with the default index codecs
+(bytes, crc32c), and inner chunks of zeros, among them the chunks the
+header lists as empty, left out and read as zeros.
 
-zarr-python orders the inner chunks of a shard in Morton order, which
-interleaves levels with the spatial chunk coordinates. The writer
-rewrites each shard in C order over (chunk row, chunk col, level), so a
-tier read to depth L of one chunk is one byte range. The sharding
-specification leaves the order of inner chunks to the writer, so any
-Zarr v3 reader still reads the store.
+Consolidated metadata is a zarr-python convention rather than part of
+the v3 specification. `parquet_to_zarr(..., consolidated=False)` leaves
+it out, and the reader then fetches the zarr.json of each array.
 
 `ZarrReader` reads a store from a directory or an http(s) URL with the
 range machinery of georvq_parquet (RangeSource): it fetches the group
-zarr.json, then the shard index of each tier a read needs (one parallel
-round), then the merged data ranges. When the group attributes carry
-the shard offsets (`offsets_in_attrs=True` at write time), the index
-round is skipped. It reuses RVQParquetReader's planning, cache and
-unpacking, so its `read` returns what RVQParquetReader.read returns.
+zarr.json (and the array zarr.json files in one parallel round when the
+metadata is not consolidated), then the shard index of each tier a read
+needs and has not seen (one parallel round), then the merged data
+ranges. It reuses RVQParquetReader's planning, cache and unpacking, so
+its `read` returns what RVQParquetReader.read returns.
 
 The writer needs zarr-python; the reader needs numpy and, for masks,
 numcodecs.
@@ -58,9 +59,10 @@ from georvq.inference.georvq_parquet import (
 SUFFIX = ".georvq.zarr"
 STORE_KEY = "georvq_store"
 STORE_FORMAT = "georvq-zarr"
-STORE_MAJOR, STORE_MINOR = 0, 1
+STORE_MAJOR, STORE_MINOR = 0, 2
 MASK_ZSTD_LEVEL = 19
 _MISSING = 2 ** 64 - 1
+_ZSTD_MAGIC = 0xFD2FB528
 
 PROJ_CONVENTION = {
     "schema_url": "https://raw.githubusercontent.com/zarr-conventions/proj/"
@@ -147,6 +149,23 @@ def decode_index(buf: bytes, chunks_per_shard) -> np.ndarray:
     return np.frombuffer(raw, "<u8").reshape(tuple(chunks_per_shard) + (2,))
 
 
+def zstd_content_size(buf: bytes):
+    """Frame_Content_Size from the header of the zstd frame at the start
+    of `buf`, or None when the header does not declare it."""
+    if len(buf) < 5 or struct.unpack("<I", buf[:4])[0] != _ZSTD_MAGIC:
+        raise ValueError("not a zstd frame")
+    fhd = buf[4]
+    fcs_flag, single, did_flag = fhd >> 6, (fhd >> 5) & 1, fhd & 3
+    at = 5 + (0 if single else 1) + (0, 1, 2, 4)[did_flag]
+    n = (1 if single else 0, 2, 4, 8)[fcs_flag]
+    if n == 0:
+        return None
+    if len(buf) < at + n:
+        raise ValueError("truncated zstd frame header")
+    v = int.from_bytes(buf[at:at + n], "little")
+    return v + 256 if n == 2 else v
+
+
 # --------------------------------------------------------------------------
 # writer
 # --------------------------------------------------------------------------
@@ -206,43 +225,12 @@ def _chunk_path(name, coords):
     return f"{name}/c/" + "/".join(str(int(c)) for c in coords)
 
 
-def _repack_shard(path, chunks_per_shard, chunk_bytes, keep):
-    """Rewrite a zarr-python shard (index at the end) with its inner
-    chunks in C order, keeping those for which keep(coords) is true.
-    Returns the (..., 2) index written."""
-    with open(path, "rb") as f:
-        buf = f.read()
-    n = int(np.prod(chunks_per_shard))
-    old = decode_index(buf[-index_bytes(n):], chunks_per_shard)
-    new = np.full(old.shape, _MISSING, np.uint64)
-    parts, at = [], 0
-    for coords in np.ndindex(*chunks_per_shard):
-        o, ln = (int(v) for v in old[coords])
-        if not keep(coords):
-            continue
-        if o == _MISSING:
-            raise ValueError(f"{path}: chunk {coords} was not written")
-        if ln != chunk_bytes:
-            raise ValueError(f"{path}: chunk {coords} holds {ln} bytes, "
-                             f"expected {chunk_bytes}")
-        parts.append(buf[o:o + ln])
-        new[coords] = (at, ln)
-        at += ln
-    tmp = f"{path}.{os.getpid()}.tmp"
-    with open(tmp, "wb") as f:
-        for p in parts:
-            f.write(p)
-        f.write(encode_index(new))
-    os.replace(tmp, path)
-    return new
-
-
-def parquet_to_zarr(src, out, offsets_in_attrs=False) -> str:
+def parquet_to_zarr(src, out, consolidated=True) -> str:
     """Write the Zarr store of a georvq GeoParquet file `src` (a path or
     an open RVQParquetReader) at `out`, a directory that must not exist.
-    The records are copied, not re-encoded. `offsets_in_attrs` also
-    records each shard's inner-chunk offsets in the group attributes, so
-    a reader needs no shard-index request. Returns `out`."""
+    The records are copied, not re-encoded, and the chunks are those of
+    the file. `consolidated` adds zarr-python's consolidated metadata to
+    the group zarr.json. Returns `out`."""
     import zarr
     from zarr.codecs import ZstdCodec
 
@@ -276,8 +264,7 @@ def parquet_to_zarr(src, out, offsets_in_attrs=False) -> str:
                             None if north is None else _window_transform(north, W))}
     store_info = {"format": STORE_FORMAT,
                   "version": f"{STORE_MAJOR}.{STORE_MINOR}",
-                  "status": "prototype", "shard_order": "C", "arrays": {},
-                  "objects": {}}
+                  "status": "prototype", "arrays": {}, "objects": {}}
 
     def records(col, kind):
         g = lay.groups[kind]
@@ -306,7 +293,6 @@ def parquet_to_zarr(src, out, offsets_in_attrs=False) -> str:
         store_info["arrays"][col] = {"kind": kind, "columns": [col]}
 
     # tiers outside base: one shard, one level of one chunk per inner chunk
-    shard_index = {}
     for t in lay.tiers:
         if t.in_base:
             continue
@@ -319,17 +305,9 @@ def parquet_to_zarr(src, out, offsets_in_attrs=False) -> str:
             chunks=(n, n, 1, rb), shards=(ny * n, nx * n, t.levels, rb),
             compressors=None, filters=None, fill_value=0,
             dimension_names=["wy", "wx", f"{t.name}_level", f"{t.name}_byte"],
-            attributes=win_attrs, config={"write_empty_chunks": True})
+            attributes=win_attrs, config={"write_empty_chunks": False})
         full = np.stack([records(c, t.name) for c in t.columns], 2)
         arr[...] = full[:gy, :gx]
-        path = _chunk_path(t.name, (0, 0, 0, 0))
-        empty = rd.empty[t.name]
-        idx = _repack_shard(os.path.join(out, path), (ny, nx, t.levels, 1),
-                            n * n * rb, lambda c, e=empty: (c[0], c[1]) not in e)
-        shard_index[t.name] = {
-            "object": path, "chunk_bytes": n * n * rb,
-            "offsets": [-1 if int(o) == _MISSING else int(o)
-                        for o in idx[..., 0, 0].ravel()]}
         store_info["arrays"][t.name] = {"kind": t.name,
                                         "columns": list(t.columns)}
 
@@ -364,8 +342,6 @@ def parquet_to_zarr(src, out, offsets_in_attrs=False) -> str:
                 store_info["objects"][os.path.relpath(full, out)] = \
                     os.path.getsize(full)
     store_info["objects"] = dict(sorted(store_info["objects"].items()))
-    if offsets_in_attrs:
-        store_info["shard_index"] = shard_index
 
     attrs = {"georvq": hdr,
              "georvq_aux": None if rd.aux is None else json.loads(rd.aux),
@@ -373,11 +349,12 @@ def parquet_to_zarr(src, out, offsets_in_attrs=False) -> str:
              **crs, **_spatial(("y", "x"), (H, Wd), north),
              STORE_KEY: store_info}
     root.update_attributes(attrs)
-    # Consolidated metadata is a zarr-python convention, not part of the
-    # v3 specification; zarr-python warns about it on every write.
-    with warnings.catch_warnings():
-        warnings.filterwarnings("ignore", message="Consolidated metadata")
-        zarr.consolidate_metadata(out)
+    if consolidated:
+        # zarr-python warns on every write that consolidated metadata is
+        # not part of the v3 specification
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message="Consolidated metadata")
+            zarr.consolidate_metadata(out)
     return out
 
 
@@ -391,28 +368,28 @@ class ZarrReader(RVQParquetReader):
     `values`, `needs`, `stats`, `trace`, `header`, `aux`, `layout`).
 
     Opening fetches the group zarr.json (one suffix read of
-    `first_read` bytes, a second when it is longer). A read lists the
-    (column, chunk) values it needs exactly as RVQParquetReader does,
-    leaves out the cached ones, fetches the shard index of each tier it
-    needs and has not seen (all in one parallel round, skipped when
-    `shard_index` is "attrs", or "auto" and the attributes hold the
-    offsets), maps each value to a byte range of its object, merges
-    ranges per object whose gap is at most `gap` bytes, and fetches them
-    in parallel. Each object's size is checked against the store
-    manifest, and its ETag or Last-Modified against the first one seen.
-    The cache key of the store is its URL or path and the hash of its
-    zarr.json."""
+    `first_read` bytes, a second when it is longer) and, when it holds
+    no consolidated metadata, the zarr.json of each array in one
+    parallel round. A read lists the (column, chunk) values it needs
+    exactly as RVQParquetReader does, leaves out the cached ones,
+    fetches the shard index of each tier it needs and has not seen (all
+    in one parallel round), maps each value to a byte range of its
+    object, merges ranges per object whose gap is at most `gap` bytes,
+    and fetches them in parallel. Each object's size is checked against
+    the store manifest, and its ETag or Last-Modified against the first
+    one seen. The cache key of the store is its URL or path and the
+    hash of its metadata. `headers` go with every request, as in
+    RVQParquetReader."""
 
     driver = "GeoRVQZarr"
 
     def __init__(self, path_or_url, first_read=FIRST_READ, gap=GAP,
                  concurrency=CONCURRENCY, cache=None, cache_bytes=CACHE_BYTES,
                  cache_dir=None, trace=None, timeout=TIMEOUT, retries=RETRIES,
-                 backoff=BACKOFF, shard_index="auto"):
-        if shard_index not in ("auto", "attrs", "shard"):
-            raise ValueError(f"shard_index {shard_index!r}: auto, attrs or shard")
+                 backoff=BACKOFF, headers=None):
         self.source = os.fspath(path_or_url).rstrip("/")
         self.trace = trace
+        self.headers = dict(headers or {})
         self.gap = int(gap)
         self.concurrency = max(1, int(concurrency))
         self.timeout = None if timeout is None else float(timeout)
@@ -427,7 +404,6 @@ class ZarrReader(RVQParquetReader):
         self._fd = None
         self._objects = {}
         self._index = {}
-        self._index_mode = shard_index
         try:
             self._open_store(int(first_read), cache, cache_bytes, cache_dir)
         except BaseException:
@@ -445,7 +421,8 @@ class ZarrReader(RVQParquetReader):
                else os.path.join(self.source, *path.split("/")))
         o = RangeSource(src, self.trace, self.timeout, self.retries,
                         self.backoff, self.concurrency, stats=self.stats,
-                        lock=self._lock, size=self._sizes.get(path))
+                        lock=self._lock, size=self._sizes.get(path),
+                        headers=self.headers)
         o.adopt_tag = True
         with self._lock:
             o = self._objects.setdefault(path, o)
@@ -462,12 +439,18 @@ class ZarrReader(RVQParquetReader):
 
     # ---- open ----
 
+    def _json(self, path, first_read):
+        """Bytes of a whole metadata object, by one suffix read (two
+        when it is longer than `first_read`)."""
+        o = self._object(path)
+        data, size = o._suffix(first_read)
+        if size > len(data):
+            data = o._read((0, size - len(data))) + data
+        return o, data
+
     def _open_store(self, first_read, cache, cache_bytes, cache_dir):
         self._sizes = {}
-        meta = self._object("zarr.json")
-        data, size = meta._suffix(first_read)
-        if size > len(data):
-            data = meta._read((0, size - len(data))) + data
+        meta, data = self._json("zarr.json", first_read)
         self.version_tag = meta.version_tag
         with span(self.trace, "cpu", "parse zarr.json"):
             z = json.loads(data)
@@ -489,19 +472,28 @@ class ZarrReader(RVQParquetReader):
         self.geo = None
         self._from_header()
         self._sizes = {str(k): int(v) for k, v in info["objects"].items()}
+        names = list(info["arrays"])
         cm = (z.get("consolidated_metadata") or {}).get("metadata") or {}
-        self.arrays = {}
-        for name in info["arrays"]:
-            if name not in cm:
-                raise ValueError(f"{self.source}: no consolidated metadata "
-                                 f"for {name}")
-            self.arrays[name] = self._check_array(name, cm[name])
-        self._meta_sha = hashlib.sha1(data).hexdigest()
-        if self._index_mode != "shard" and "shard_index" in info:
-            for kind, d in info["shard_index"].items():
-                self._index[kind] = self._index_from_attrs(kind, d)
-        elif self._index_mode == "attrs":
-            raise ValueError(f"{self.source}: no shard offsets in the attributes")
+        sha = hashlib.sha1(data)
+        if not all(n in cm for n in names):
+            def one(name):
+                return self._json(f"{name}/zarr.json", first_read)[1]
+            if self._url and len(names) > 1:
+                with ThreadPoolExecutor(min(self.concurrency, len(names))) as ex:
+                    raw = list(ex.map(one, names))
+            else:
+                raw = [one(n) for n in names]
+            cm = {}
+            for name, d in zip(names, raw):
+                md = json.loads(d)
+                if md.get("zarr_format") != 3 or md.get("node_type") != "array":
+                    raise ValueError(f"{self.source}: {name} is not a Zarr v3 "
+                                     f"array")
+                cm[name] = md
+                sha.update(d)
+        self.consolidated = bool(z.get("consolidated_metadata"))
+        self.arrays = {n: self._check_array(n, cm[n]) for n in names}
+        self._meta_sha = sha.hexdigest()
         self._set_cache(json.dumps(self.identity), cache, cache_bytes, cache_dir)
 
     def _check_array(self, name, md) -> dict:
@@ -548,18 +540,6 @@ class ZarrReader(RVQParquetReader):
                 "chunks_per_shard": (ny, nx, t.levels, 1),
                 "chunk_bytes": n * n * rb,
                 "object": _chunk_path(name, (0, 0, 0, 0))}
-
-    def _index_from_attrs(self, kind, d) -> np.ndarray:
-        a = self.arrays[kind]
-        offs = np.asarray(d["offsets"], np.int64)
-        if (d["object"] != a["object"] or int(d["chunk_bytes"]) != a["chunk_bytes"]
-                or offs.size != int(np.prod(a["chunks_per_shard"]))):
-            raise ValueError(f"{kind}: shard offsets disagree with the array")
-        idx = np.full(a["chunks_per_shard"] + (2,), _MISSING, np.uint64)
-        have = (offs >= 0).reshape(a["chunks_per_shard"])
-        idx[..., 0][have] = offs[offs >= 0].astype(np.uint64)
-        idx[..., 1][have] = a["chunk_bytes"]
-        return self._check_index(kind, idx)
 
     def _check_index(self, kind, idx) -> np.ndarray:
         a = self.arrays[kind]
@@ -648,6 +628,11 @@ class ZarrReader(RVQParquetReader):
             return np.ones(shape, bool)
         from numcodecs.zstd import Zstd
         p = self.layout.groups[self.layout.mask_kind].chunk_px
+        # refuse before decompressing a chunk that declares another size
+        declared = zstd_content_size(v)
+        if declared != p * p:
+            raise ValueError(f"mask chunk declares {declared} bytes, expected "
+                             f"{p * p}")
         raw = Zstd().decode(v)
         if len(raw) != p * p:
             raise ValueError(f"mask chunk of {len(raw)} bytes, expected {p * p}")
@@ -719,5 +704,4 @@ def open_reader(path_or_url, **kw):
     """ZarrReader for a .zarr path or URL, RVQParquetReader otherwise."""
     if is_zarr(path_or_url):
         return ZarrReader(path_or_url, **kw)
-    kw.pop("shard_index", None)
     return RVQParquetReader(path_or_url, **kw)

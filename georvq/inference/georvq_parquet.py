@@ -787,9 +787,10 @@ class RangeSource:
 
     def __init__(self, source, trace=None, timeout=TIMEOUT, retries=RETRIES,
                  backoff=BACKOFF, concurrency=CONCURRENCY, stats=None,
-                 lock=None, size=None):
+                 lock=None, size=None, headers=None):
         self.source = os.fspath(source)
         self.trace = trace
+        self.headers = dict(headers or {})
         self.concurrency = max(1, int(concurrency))
         self.timeout = None if timeout is None else float(timeout)
         self.retries = max(0, int(retries))
@@ -836,6 +837,10 @@ class RangeSource:
         """GET with `Range: rng`, passing the response to `handle`, with
         the timeout and the retries of transient failures."""
         req = urllib.request.Request(self.source, headers={"Range": rng})
+        # not repeated on a redirect, so a token does not reach the host
+        # of a signed URL the request is redirected to
+        for k, v in self.headers.items():
+            req.add_unredirected_header(k, v)
         for attempt in range(self.retries + 1):
             try:
                 with urllib.request.urlopen(req, timeout=self.timeout) as resp:
@@ -983,15 +988,18 @@ class RVQParquetReader(RangeSource):
     Content-Range differs from the request is refused. A server that
     sends neither ETag nor Last-Modified gives no way to tell a changed
     file from the one cached, so its values are cached in memory only.
+    `headers` go with every request to the URL and are not repeated
+    when it redirects, for example {"Authorization": "Bearer ..."} for a
+    private repository whose URLs redirect to signed ones.
 
     One reader can be shared by threads."""
 
     def __init__(self, path_or_url, first_read=FIRST_READ, gap=GAP,
                  concurrency=CONCURRENCY, cache=None, cache_bytes=CACHE_BYTES,
                  cache_dir=None, trace=None, timeout=TIMEOUT, retries=RETRIES,
-                 backoff=BACKOFF):
+                 backoff=BACKOFF, headers=None):
         super().__init__(path_or_url, trace, timeout, retries, backoff,
-                         concurrency)
+                         concurrency, headers=headers)
         self.gap = int(gap)
         self._parse_lock = threading.Lock()
         try:

@@ -1,7 +1,8 @@
 """Prototype Zarr store of a georvq GeoParquet file: the conversion keeps
-every record, zarr-python reads the store, the levels of a tier chunk
-are one byte range, and ZarrReader reads what RVQParquetReader reads,
-locally and over HTTP. tests/test_ae_v2_zarr.py checks AE v2 decodes."""
+every record, zarr-python reads the store, the shards are zarr-python's
+own, and ZarrReader reads what RVQParquetReader reads, with and without
+consolidated metadata, locally and over HTTP. tests/test_ae_v2_zarr.py
+checks AE v2 decodes."""
 import http.server
 import json
 import os
@@ -34,9 +35,9 @@ def product(request, tmp_path):
     src = tmp_path / "a.georvq.parquet"
     vals = _write(src, valid=valid)
     out = gz.parquet_to_zarr(src, tmp_path / "a.georvq.zarr")
-    attrs = gz.parquet_to_zarr(src, tmp_path / "attrs" / "a.georvq.zarr",
-                               offsets_in_attrs=True)
-    return {"src": src, "zarr": out, "attrs": attrs, "vals": vals,
+    plain = gz.parquet_to_zarr(src, tmp_path / "plain" / "a.georvq.zarr",
+                               consolidated=False)
+    return {"src": src, "zarr": out, "plain": plain, "vals": vals,
             "valid": valid, "name": request.param}
 
 
@@ -56,10 +57,11 @@ def _same_reads(a, b):
     assert np.array_equal(a.read_mask(5, 30, 17, 41), b.read_mask(5, 30, 17, 41))
 
 
-@pytest.mark.parametrize("which", ["zarr", "attrs"])
+@pytest.mark.parametrize("which", ["zarr", "plain"])
 def test_reader_reads_what_the_parquet_reader_reads(product, which):
     with gp.RVQParquetReader(product["src"]) as p, \
             gz.ZarrReader(product[which]) as z:
+        assert z.consolidated == (which == "zarr")
         assert z.header == p.header and json.loads(z.aux or "null") == (
             json.loads(p.aux) if p.aux else None)
         assert z.empty == p.empty and z.masked == p.masked
@@ -74,9 +76,10 @@ def test_values_are_the_parquet_values(product):
         assert p.values(needs) == z.values(needs)
 
 
-def test_zarr_python_reads_the_store(product):
+@pytest.mark.parametrize("which", ["zarr", "plain"])
+def test_zarr_python_reads_the_store(product, which):
     lay = _layout()
-    g = zarr.open_group(str(product["zarr"]), mode="r")
+    g = zarr.open_group(str(product[which]), mode="r")
     assert set(g.array_keys()) == {"base", "mid", "fine", "quality", "mask"}
     with gp.RVQParquetReader(product["src"]) as p:
         assert g.attrs["georvq"] == p.header
@@ -106,24 +109,21 @@ def test_zarr_python_reads_the_store(product):
         assert not g["fine"][:, 6:].any()
 
 
-def test_levels_are_one_range_per_chunk(product):
-    z = gz.ZarrReader(product["zarr"])
+def test_shards_are_zarr_pythons(product):
+    """Inner chunks hold one value each, do not overlap, and a read of one
+    chunk to depth L fetches L values in at most L ranges, whatever order
+    zarr-python wrote them in. With gap=0 no range takes in a neighbour."""
+    z = gz.ZarrReader(product["zarr"], gap=0)
     z._load_indices(["mid", "fine"])
     for kind in ("mid", "fine"):
         a, idx = z.arrays[kind], z._index[kind]
         ny, nx, L, _ = a["chunks_per_shard"]
-        at = 0
-        for i in range(ny):
-            for j in range(nx):
-                o = idx[i, j, :, 0, 0]
-                if (i, j) in z.empty[kind]:
-                    assert (o == gz._MISSING).all()
-                    continue
-                # C order: levels 1..L of a chunk follow one another
-                assert list(o.astype(np.int64)) == [at + l * a["chunk_bytes"]
-                                                    for l in range(L)]
-                at += L * a["chunk_bytes"]
-        # the planned read of one chunk to any depth is one range
+        have = idx[..., 0] != gz._MISSING
+        offs = np.sort(idx[..., 0][have].astype(np.int64))
+        assert (idx[..., 1][have] == a["chunk_bytes"]).all()
+        assert (np.diff(offs) >= a["chunk_bytes"]).all()
+        for i, j in z.empty[kind]:
+            assert not have[i, j].any()
         n = z.layout.groups[kind].chunk_windows
         live = [(i, j) for i in range(ny) for j in range(nx)
                 if (i, j) not in z.empty[kind]]
@@ -132,17 +132,8 @@ def test_levels_are_one_range_per_chunk(product):
             d = {"mid": (3, L_, 0), "fine": (3, 0, L_)}[kind]
             plan = z.plan(i * n, i * n + 1, j * n, j * n + 1, depths=d,
                           base=False, mask=False)
-            assert len(plan) == 1 and plan[0][2] == L_ * a["chunk_bytes"]
-
-
-def test_offsets_in_attrs_match_the_shard_index(product):
-    z = gz.ZarrReader(product["zarr"], shard_index="shard")
-    z._load_indices(["mid", "fine"])
-    a = gz.ZarrReader(product["attrs"], shard_index="attrs")
-    for kind in ("mid", "fine"):
-        assert np.array_equal(z._index[kind], a._index[kind])
-    with pytest.raises(ValueError, match="no shard offsets"):
-        gz.ZarrReader(product["zarr"], shard_index="attrs")
+            assert 1 <= len(plan) <= L_
+            assert sum(p[2] for p in plan) == L_ * a["chunk_bytes"]
 
 
 def test_empty_chunks_are_not_stored_or_fetched(tmp_path):
@@ -176,6 +167,21 @@ def test_index_crc_is_checked():
     assert c ^ 0xFFFFFFFF == 0xE3069283 == gz.crc32c(b"123456789")
 
 
+def test_mask_chunk_size_is_checked_before_decompressing(tmp_path):
+    from numcodecs.zstd import Zstd
+    src = tmp_path / "a.georvq.parquet"
+    _write(src, valid=_masks()["scattered"])
+    z = gz.ZarrReader(gz.parquet_to_zarr(src, tmp_path / "a.georvq.zarr"))
+    p = z.layout.groups[z.layout.mask_kind].chunk_px
+    for n in (p * p, 1000, 10 ** 6):
+        assert gz.zstd_content_size(Zstd().encode(bytes(n))) == n
+    assert z._decode_mask(Zstd().encode(bytes(p * p)), (2, 3)).shape == (2, 3)
+    with pytest.raises(ValueError, match="declares"):
+        z._decode_mask(Zstd().encode(bytes(p * p + 1)), (2, 3))
+    with pytest.raises(ValueError, match="zstd"):
+        gz.zstd_content_size(b"\x00" * 8)
+
+
 def test_names_and_dispatch(product):
     assert gz.zarr_name("x/a.georvq.parquet") == "a.georvq.zarr"
     assert gz.zarr_name("x/a.tiff") == "a.georvq.zarr"
@@ -199,11 +205,21 @@ _RANGE = re.compile(r"^bytes=(\d*)-(\d*)$")
 
 
 class _DirHandler(http.server.BaseHTTPRequestHandler):
+    """Range server of a directory; /redirect/<path> answers 302 to
+    /<path>. Logs (path, Range, Authorization) of every request."""
     protocol_version = "HTTP/1.1"
     root = None
     log = None
 
     def do_GET(self):
+        self.log.append((self.path, self.headers.get("Range"),
+                         self.headers.get("Authorization")))
+        if self.path.startswith("/redirect/"):
+            self.send_response(302)
+            self.send_header("Location", self.path[len("/redirect"):])
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         path = os.path.join(self.root, self.path.lstrip("/"))
         if not os.path.isfile(path):
             self.send_response(404)
@@ -211,9 +227,7 @@ class _DirHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             return
         data = open(path, "rb").read()
-        rng = self.headers.get("Range")
-        self.log.append((self.path, rng))
-        m = _RANGE.match(rng or "")
+        m = _RANGE.match(self.headers.get("Range") or "")
         if m.group(1) == "":
             a, b = max(0, len(data) - int(m.group(2))), len(data) - 1
         else:
@@ -234,8 +248,8 @@ def served_dir(tmp_path):
     src = tmp_path / "a.georvq.parquet"
     _write(src, valid=_masks()["east"])
     gz.parquet_to_zarr(src, tmp_path / "a.georvq.zarr")
-    gz.parquet_to_zarr(src, tmp_path / "attrs" / "a.georvq.zarr",
-                       offsets_in_attrs=True)
+    gz.parquet_to_zarr(src, tmp_path / "plain" / "a.georvq.zarr",
+                       consolidated=False)
     log = []
     h = type("H", (_DirHandler,), {"root": str(tmp_path), "log": log})
     srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), h)
@@ -251,17 +265,36 @@ def served_dir(tmp_path):
 def test_http_reads_and_round_trips(served_dir):
     base, tmp, log = served_dir
     with gp.RVQParquetReader(tmp / "a.georvq.parquet") as p:
-        for sub, extra in (("a.georvq.zarr", 2), ("attrs/a.georvq.zarr", 0)):
+        # the plain store's open adds the zarr.json of its 5 arrays
+        for sub, n_open in (("a.georvq.zarr", 1), ("plain/a.georvq.zarr", 6)):
             log.clear()
             z = gz.ZarrReader(f"{base}/{sub}/")
-            assert z.stats["requests"] == 1 and log[0][0].endswith("zarr.json")
-            # a point at full depth: (shard indices of mid and fine), then
-            # base with the mask, one mid range and one fine range
+            assert z.stats["requests"] == n_open
+            assert all(path.endswith("zarr.json") for path, _, _ in log)
+            # a point at full depth: the shard indices of mid and fine, then
+            # the planned ranges of base, mask, mid and fine
+            plan = gz.ZarrReader(tmp / sub).plan(0, 1, 0, 1, depths=FULL)
             z.read(0, 1, 0, 1, depths=FULL)
-            assert z.stats["requests"] == 1 + extra + 4, log
-            assert sum(1 for path, _ in log if "fine" in path) == 1 + extra // 2
+            assert z.stats["requests"] == n_open + 2 + len(plan), log
             _same_reads(p, z)
             assert z._disk and z.version_tag is not None
+
+
+def test_http_headers_do_not_follow_a_redirect(served_dir):
+    base, tmp, log = served_dir
+    auth = {"Authorization": "Bearer t"}
+    z = gz.ZarrReader(f"{base}/redirect/a.georvq.zarr", headers=auth)
+    z.read(0, 1, 0, 1, depths=FULL)
+    first = [a for path, _, a in log if path.startswith("/redirect/")]
+    after = [a for path, _, a in log if not path.startswith("/redirect/")]
+    assert first and all(a == "Bearer t" for a in first)
+    assert after and all(a is None for a in after)
+    log.clear()
+    with gp.RVQParquetReader(f"{base}/redirect/a.georvq.parquet",
+                             headers=auth) as p:
+        p.read(0, 1, 0, 1, depths=FULL)
+    assert {a for path, _, a in log if path.startswith("/redirect/")} == {"Bearer t"}
+    assert {a for path, _, a in log if not path.startswith("/redirect/")} == {None}
 
 
 def test_http_object_change_is_refused(served_dir):
