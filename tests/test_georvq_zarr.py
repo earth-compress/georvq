@@ -187,6 +187,71 @@ def test_names_and_dispatch(product):
     assert gz.zarr_name("x/a.tiff") == "a.georvq.zarr"
     assert isinstance(gz.open_reader(product["zarr"]), gz.ZarrReader)
     assert isinstance(gz.open_reader(product["src"]), gp.RVQParquetReader)
+    g = zarr.open_group(str(product["zarr"]), mode="r")
+    assert isinstance(gz.open_reader(g), gz.ZarrGroupReader)
+
+
+# --------------------------------------------------------------------------
+# zarr-python reads
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize("which", ["zarr", "plain"])
+def test_group_reader_reads_what_the_parquet_reader_reads(product, which):
+    g = zarr.open_group(str(product[which]), mode="r")
+    with gp.RVQParquetReader(product["src"]) as p, gz.ZarrGroupReader(g) as z:
+        assert z.header == p.header and z.empty == p.empty
+        _same_reads(p, z)
+        needs = [n for n in p.needs(0, 10, 0, 13, p.columns_for(quality=True))
+                 if n[0] != "mask"]
+        assert p.values(needs) == z.values(needs)
+
+
+def _rechunked(src, out):
+    """A copy of the store at `src` with other chunks, no sharding and
+    zstd on every array, as Zarr tools might write it."""
+    from zarr.codecs import ZstdCodec
+    g = zarr.open_group(str(src), mode="r")
+    dst = zarr.open_group(str(out), mode="w-", zarr_format=3)
+    for name in g.array_keys():
+        a = g[name]
+        chunks = tuple(max(1, s // 3) for s in a.shape[:2]) + tuple(a.shape[2:])
+        b = dst.create_array(name, shape=a.shape, dtype=a.dtype, chunks=chunks,
+                             compressors=ZstdCodec(level=3),
+                             fill_value=a.fill_value, attributes=dict(a.attrs))
+        b[...] = a[...]
+    dst.update_attributes(dict(g.attrs))
+    return zarr.open_group(str(out), mode="r")
+
+
+def test_group_reader_reads_a_rechunked_copy(product, tmp_path):
+    g = _rechunked(product["zarr"], tmp_path / "copy.zarr")
+    with gp.RVQParquetReader(product["src"]) as p, gz.ZarrGroupReader(g) as z:
+        _same_reads(p, z)
+
+
+def test_group_reader_makes_one_read_per_array(product):
+    z = gz.ZarrGroupReader(zarr.open_group(str(product["zarr"]), mode="r"))
+    plan = z.plan(0, 10, 0, 13, quality=True)
+    names = [name for name, _ in plan]
+    assert len(names) == len(set(names))
+    assert set(names) <= {"base", "mid", "fine", "quality", "mask"}
+    fine = dict(plan).get("fine")
+    if fine is not None:
+        assert fine[2] == slice(0, 3)           # every level down to depth 3
+    z.read(0, 10, 0, 13, quality=True)
+    assert z.plan(0, 10, 0, 13, quality=True) == []       # all cached
+
+
+def test_group_reader_refuses_a_wrong_shape(product, tmp_path):
+    g = zarr.open_group(str(tmp_path / "bad.zarr"), mode="w-", zarr_format=3)
+    src = zarr.open_group(str(product["zarr"]), mode="r")
+    for name in src.array_keys():
+        a = src[name]
+        shape = (a.shape[0] - 1,) + a.shape[1:] if name == "fine" else a.shape
+        g.create_array(name, shape=shape, dtype=a.dtype, chunks=shape)
+    g.update_attributes(dict(src.attrs))
+    with pytest.raises(ValueError, match="fine is uint8"):
+        gz.ZarrGroupReader(zarr.open_group(str(tmp_path / "bad.zarr"), mode="r"))
 
 
 def test_module_does_not_import_torch_or_zarr():

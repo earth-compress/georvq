@@ -32,11 +32,14 @@ def corner(setup):  # noqa: F811
     return pq_file, gz.parquet_to_zarr(pq_file, tmp / "zcorner.georvq.zarr")
 
 
-def test_decodes_match_the_parquet_file(setup, corner):  # noqa: F811
+@pytest.mark.parametrize("via", ["path", "group"])
+def test_decodes_match_the_parquet_file(setup, corner, via):  # noqa: F811
+    import zarr
     codec = setup["codec"]
     pq_file, zr = corner
+    src = zr if via == "path" else zarr.open_group(str(zr), mode="r")
     with v2.open_dataset(pq_file, codec=codec) as dp, \
-            v2.open_dataset(zr, codec=codec) as dz:
+            v2.open_dataset(src, codec=codec) as dz:
         assert dz.driver == "GeoRVQZarr" and dz.reader.empty["fine"] == {(0, 0)}
         assert dz.profile == dp.profile and dz.tags() == dp.tags()
         assert dz.descriptions == dp.descriptions
@@ -55,13 +58,16 @@ def test_decodes_match_the_parquet_file(setup, corner):  # noqa: F811
         assert dz.reader.stats["requests"] == before["requests"]
 
 
-def test_golden_tile_decodes_from_zarr(tmp_path):
+@pytest.mark.parametrize("via", ["path", "group"])
+def test_golden_tile_decodes_from_zarr(tmp_path, via):
+    import zarr
     codec = _bundle_codec()
     out = gz.parquet_to_zarr(TILE, tmp_path / "golden.georvq.zarr")
+    src = out if via == "path" else zarr.open_group(str(out), mode="r")
     g = np.load(GOLDEN)
     gh, gw = TILE_GRID
     W = codec.window
-    with v2.open_dataset(out, codec=codec) as ds:
+    with v2.open_dataset(src, codec=codec) as ds:
         for i, r in enumerate(GOLDEN_RUNGS):
             a = ds.read(quality=r)[:, ::-1]            # stored bottom-up
             tiles = a.reshape(64, gh, W, gw, W).transpose(1, 3, 0, 2, 4) \

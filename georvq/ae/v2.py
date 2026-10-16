@@ -704,7 +704,8 @@ class AEV2Dataset(WindowMethodsMixin, TransformMethodsMixin):
     `dataset_mask`, `bounds`, `res`, `index`, `xy`, `window` and the
     other window helpers give the answers rasterio gives for the source
     tile, with decoded pixels in place of the source's. `read` takes a
-    `quality` beyond rasterio's arguments. `driver` is "GeoRVQParquet";
+    `quality` beyond rasterio's arguments. `driver` is "GeoRVQParquet"
+    ("GeoRVQZarr" for a Zarr store);
     `profile` and `meta` carry the source's driver, so either can be
     passed to `rasterio.open(..., "w")` to write a GeoTIFF. The file has
     no overviews, so a decimated read samples the full-resolution
@@ -1203,7 +1204,8 @@ def open_dataset(path_or_url, model=None, channel=None, bundle=None,
                  cache_dir=None, bf16=None, codec=None, threads=None,
                  record_cache_dir=None, **reader_kw) -> "AEV2Dataset":
     """Open an AE v2 file (a local path or an http(s) URL), or a
-    prototype Zarr store of one (a path or URL ending in .zarr,
+    prototype Zarr store of one (a path or URL ending in .zarr, or an
+    open zarr.Group read through zarr-python; see
     georvq.inference.georvq_zarr).
 
     The codec that reads pixels comes from the first of

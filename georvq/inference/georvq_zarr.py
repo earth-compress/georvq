@@ -37,8 +37,13 @@ needs and has not seen (one parallel round), then the merged data
 ranges. It reuses RVQParquetReader's planning, cache and unpacking, so
 its `read` returns what RVQParquetReader.read returns.
 
-The writer needs zarr-python; the reader needs numpy and, for masks,
-numcodecs.
+`ZarrGroupReader` reads the same records from an open zarr.Group, with
+zarr-python doing the reads, so it reaches any store zarr-python does
+and copies of a store rechunked or recompressed with Zarr tools.
+`open_reader` and georvq.ae.open take a zarr.Group in place of a path.
+
+The writer needs zarr-python; ZarrReader needs numpy and, for masks,
+numcodecs; ZarrGroupReader needs only the zarr.Group it is given.
 """
 from __future__ import annotations
 
@@ -457,22 +462,8 @@ class ZarrReader(RVQParquetReader):
             z = json.loads(data)
         if z.get("zarr_format") != 3 or z.get("node_type") != "group":
             raise ValueError(f"{self.source}: not a Zarr v3 group")
-        attrs = z.get("attributes") or {}
-        if "georvq" not in attrs or STORE_KEY not in attrs:
-            raise ValueError(f"{self.source}: no georvq header or store manifest")
-        info = self.store_info = attrs[STORE_KEY]
-        if info.get("format") != STORE_FORMAT or int(
-                str(info.get("version", "")).split(".")[0]) != STORE_MAJOR:
-            raise ValueError(f"{self.source}: store {info.get('format')!r} "
-                             f"version {info.get('version')!r}")
-        self.attrs = attrs
-        self.header = attrs["georvq"]
-        check_header(self.header, self.source)
-        aux = attrs.get("georvq_aux")
-        self.aux = None if aux is None else json.dumps(aux)
-        self.geo = None
-        self._from_header()
-        self._sizes = {str(k): int(v) for k, v in info["objects"].items()}
+        self._from_attrs(z.get("attributes") or {})
+        info = self.store_info
         names = list(info["arrays"])
         cm = (z.get("consolidated_metadata") or {}).get("metadata") or {}
         sha = hashlib.sha1(data)
@@ -496,6 +487,25 @@ class ZarrReader(RVQParquetReader):
         self.arrays = {n: self._check_array(n, cm[n]) for n in names}
         self._meta_sha = sha.hexdigest()
         self._set_cache(json.dumps(self.identity), cache, cache_bytes, cache_dir)
+
+    def _from_attrs(self, attrs) -> None:
+        """Header, aux metadata, layout and store manifest from the
+        group attributes."""
+        if "georvq" not in attrs or STORE_KEY not in attrs:
+            raise ValueError(f"{self.source}: no georvq header or store manifest")
+        info = self.store_info = attrs[STORE_KEY]
+        if info.get("format") != STORE_FORMAT or int(
+                str(info.get("version", "")).split(".")[0]) != STORE_MAJOR:
+            raise ValueError(f"{self.source}: store {info.get('format')!r} "
+                             f"version {info.get('version')!r}")
+        self.attrs = attrs
+        self.header = attrs["georvq"]
+        check_header(self.header, self.source)
+        aux = attrs.get("georvq_aux")
+        self.aux = None if aux is None else json.dumps(aux)
+        self.geo = None
+        self._from_header()
+        self._sizes = {str(k): int(v) for k, v in info["objects"].items()}
 
     def _check_array(self, name, md) -> dict:
         """The array's chunk shape (inner chunk for a tier), checked
@@ -701,8 +711,181 @@ class ZarrReader(RVQParquetReader):
         return out
 
 
+class ZarrGroupReader(ZarrReader):
+    """Reads a georvq Zarr store through zarr-python: `group` is an open
+    zarr.Group (zarr.open_group(...)) on any store zarr-python reaches,
+    including copies rechunked or recompressed with Zarr tools. It has
+    the interface of ZarrReader. Only the shape and data type of each
+    array are checked, since zarr-python decodes the chunks.
+
+    A read of a tier makes one zarr-python read, over the bounding box of
+    the needed chunks and every level down to the deepest asked for, and
+    the reads of the different arrays run in parallel. zarr-python does
+    the requests, so `stats` counts no requests. Values are cached in
+    memory only, because a store reached this way gives no version to
+    tell a changed store from the one cached."""
+
+    def __init__(self, group, cache=None, cache_bytes=CACHE_BYTES,
+                 cache_dir=None, trace=None):
+        self.group = group
+        path = getattr(group, "path", "") or ""
+        self.source = f"{group.store}" + (f"/{path}" if path else "")
+        self.trace = trace
+        self.headers = {}
+        self._url = False
+        self._lock = threading.Lock()
+        self.stats = {"requests": 0, "bytes": 0, "retries": 0,
+                      "cache_hits": 0, "cache_bytes": 0}
+        self.version_tag = None
+        self.size = None
+        self._fd = None
+        self._objects = {}
+        self._index = {}
+        self.consolidated = None
+        self._from_attrs(dict(group.attrs))
+        self.arrays = {n: self._check_group_array(n, group[n])
+                       for n in self.store_info["arrays"]}
+        self._meta_sha = hashlib.sha1(json.dumps(
+            self.attrs, sort_keys=True).encode()).hexdigest()
+        if cache_dir is not None:
+            warnings.warn(f"{self.source}: values read through zarr-python are "
+                          f"cached in memory only, not under {cache_dir}",
+                          stacklevel=3)
+        self._set_cache(json.dumps(self.identity), cache, cache_bytes, None)
+        self._disk = False
+
+    def _check_group_array(self, name, arr):
+        lay = self.layout
+        gy, gx = self.window_grid
+        if name == "mask":
+            want, dtype = (self.height, self.width), "bool"
+        elif name in ("base", "quality"):
+            want, dtype = (gy, gx, lay.columns[name].record_bytes), "uint8"
+        else:
+            t = next(t for t in lay.tiers if t.name == name)
+            want = (gy, gx, t.levels, lay.columns[t.columns[0]].record_bytes)
+            dtype = "uint8"
+        if tuple(arr.shape) != want or str(arr.dtype) != dtype:
+            raise ValueError(f"{self.source}: {name} is {arr.dtype} "
+                             f"{tuple(arr.shape)}, the header needs {dtype} {want}")
+        return arr
+
+    def close(self) -> None:
+        pass
+
+    def _regions(self, needs) -> dict:
+        """{array name: (slices, needs)} of one zarr-python read per array,
+        over the bounding box of its needed chunks."""
+        lay = self.layout
+        by = {}
+        for n in needs:
+            name = n[0] if n[0] in ("base", "mask", "quality") else lay.kind_of[n[0]]
+            by.setdefault(name, []).append(n)
+        out = {}
+        for name, ns in by.items():
+            i0, i1 = min(n[1] for n in ns), max(n[1] for n in ns) + 1
+            j0, j1 = min(n[2] for n in ns), max(n[2] for n in ns) + 1
+            arr = self.arrays[name]
+            if name == "mask":
+                p = lay.groups[lay.mask_kind].chunk_px
+                sl = (slice(i0 * p, min(arr.shape[0], i1 * p)),
+                      slice(j0 * p, min(arr.shape[1], j1 * p)))
+            else:
+                k = lay.groups[lay.kind_of[ns[0][0]]].chunk_windows
+                sl = (slice(i0 * k, min(arr.shape[0], i1 * k)),
+                      slice(j0 * k, min(arr.shape[1], j1 * k)))
+                if name not in ("base", "quality"):
+                    t = next(t for t in lay.tiers if t.name == name)
+                    depth = max(t.columns.index(n[0]) for n in ns) + 1
+                    sl += (slice(0, depth),)
+            out[name] = (sl, ns)
+        return out
+
+    def plan(self, wy0, wy1, wx0, wx1, depths=None, base=True, mask=True,
+             quality=False) -> list:
+        """(array name, slices) of the zarr-python reads a read would
+        make now."""
+        cols = self.columns_for(depths, base, mask, quality)
+        needs = [n for n in self.needs(wy0, wy1, wx0, wx1, cols)
+                 if not self.cache.has(self._key(n), self._disk)]
+        return [(name, sl) for name, (sl, _) in self._regions(needs).items()]
+
+    def _decode_mask(self, v, shape) -> np.ndarray:
+        if len(v) == 0:
+            return np.ones(shape, bool)
+        p = self.layout.groups[self.layout.mask_kind].chunk_px
+        if len(v) != p * p:
+            raise ValueError(f"mask value of {len(v)} bytes, expected {p * p}")
+        return np.frombuffer(v, np.uint8).reshape(p, p)[
+            :shape[0], :shape[1]].astype(bool)
+
+    def values(self, needs) -> dict:
+        """{(column, chunk_row, chunk_col): value bytes} for `needs`, from
+        the cache where held and otherwise from zarr-python reads. A value
+        has the bytes of the matching GeoParquet value; a mask value is
+        the chunk's pixels, one byte each, padded to the full chunk."""
+        out, missing, hits, hit_bytes = {}, [], 0, 0
+        for n in needs:
+            v = self.cache.get(self._key(n), self._disk)
+            if v is None:
+                missing.append(n)
+            else:
+                out[n] = v
+                hits += 1
+                hit_bytes += len(v)
+        with self._lock:
+            self.stats["cache_hits"] += hits
+            self.stats["cache_bytes"] += hit_bytes
+        if not missing:
+            return out
+        lay = self.layout
+        regions = self._regions(missing)
+
+        def get(name):
+            return name, np.asarray(self.arrays[name][regions[name][0]])
+        with span(self.trace, "get", "zarr-python reads"):
+            if len(regions) > 1:
+                with ThreadPoolExecutor(len(regions)) as ex:
+                    slabs = dict(ex.map(get, regions))
+            else:
+                slabs = dict(map(get, regions))
+        with span(self.trace, "cpu", "slice values"):
+            for name, (sl, ns) in regions.items():
+                slab = slabs[name]
+                r0, c0 = sl[0].start, sl[1].start
+                for n in ns:
+                    col, i, j = n
+                    if name == "mask":
+                        p = lay.groups[lay.mask_kind].chunk_px
+                        blk = np.zeros((p, p), np.uint8)
+                        sub = slab[i * p - r0:(i + 1) * p - r0,
+                                   j * p - c0:(j + 1) * p - c0]
+                    else:
+                        k = lay.groups[lay.kind_of[col]].chunk_windows
+                        rb = lay.columns[col].record_bytes
+                        blk = np.zeros((k, k, rb), np.uint8)
+                        sub = slab[i * k - r0:(i + 1) * k - r0,
+                                   j * k - c0:(j + 1) * k - c0]
+                        if name not in ("base", "quality"):
+                            t = next(t for t in lay.tiers if t.name == name)
+                            sub = sub[:, :, t.columns.index(col)]
+                    blk[:sub.shape[0], :sub.shape[1]] = sub
+                    v = blk.tobytes()
+                    out[n] = v
+                    self.cache.put(self._key(n), v, self._disk)
+        return out
+
+
+def _is_group(obj) -> bool:
+    return not isinstance(obj, (str, bytes, os.PathLike)) and all(
+        hasattr(obj, a) for a in ("attrs", "array_keys", "store"))
+
+
 def open_reader(path_or_url, **kw):
-    """ZarrReader for a .zarr path or URL, RVQParquetReader otherwise."""
+    """ZarrGroupReader for a zarr.Group, ZarrReader for a .zarr path or
+    URL, RVQParquetReader otherwise."""
+    if _is_group(path_or_url):
+        return ZarrGroupReader(path_or_url, **kw)
     if is_zarr(path_or_url):
         return ZarrReader(path_or_url, **kw)
     return RVQParquetReader(path_or_url, **kw)
