@@ -890,13 +890,64 @@ class RangeSource:
                     return data, len(data), tag
                 raise OSError(f"{self.source}: suffix request answered "
                               f"{resp.status}")
-            data, size, self.version_tag = self._http(f"bytes=-{n}", handle)
+            try:
+                data, size, self.version_tag = self._http(f"bytes=-{n}", handle)
+            except urllib.error.HTTPError as e:
+                # Some servers (Hugging Face for files kept in git) answer
+                # a suffix longer than the file with 416 and its size,
+                # where RFC 9110 serves the whole file; ask for it by range.
+                m = re.fullmatch(r"bytes \*/(\d+)",
+                                 (e.headers.get("Content-Range") or "").strip())
+                if e.code != 416 or m is None or not 0 < int(m.group(1)) <= n:
+                    raise
+                e.close()
+                data, size, self.version_tag = self._http(
+                    f"bytes=0-{int(m.group(1)) - 1}", handle)
         else:
             size = os.fstat(self._fd).st_size
             data = self._pread(max(0, size - n), min(n, size))
         self._count(len(data))
         if self.trace is not None:
             self.trace.add("get", "suffix", t0, time.perf_counter(), len(data))
+        return data, size
+
+    def _prefix(self, n):
+        """(first min(n, size) bytes, size): one request for a whole
+        small object, whose size need not be known."""
+        t0 = time.perf_counter()
+        if self._url:
+            def handle(resp):
+                tag = self._tag(resp)
+                if resp.status == 206:
+                    a, b, size = self._content_range(resp)
+                    if a != 0 or b != min(n, size) - 1:
+                        raise OSError(
+                            f"{self.source}: a request for the first {n} bytes "
+                            f"was answered with bytes {a}-{b}/{size}")
+                    length = b + 1
+                elif resp.status == 200:
+                    cl = resp.headers.get("Content-Length")
+                    if cl is None or int(cl) > n:
+                        raise OSError(
+                            f"{self.source}: the server ignored the Range "
+                            f"header (200 instead of 206); reading by URL "
+                            f"needs HTTP Range support")
+                    length = size = int(cl)
+                else:
+                    raise OSError(f"{self.source}: prefix request answered "
+                                  f"{resp.status}")
+                data = resp.read()
+                if len(data) != length:
+                    raise _Truncated(f"{self.source}: {len(data)} of "
+                                     f"{length} bytes received")
+                return data, size, tag
+            data, size, self.version_tag = self._http(f"bytes=0-{n - 1}", handle)
+        else:
+            size = os.fstat(self._fd).st_size
+            data = self._pread(0, min(n, size))
+        self._count(len(data))
+        if self.trace is not None:
+            self.trace.add("get", "prefix", t0, time.perf_counter(), len(data))
         return data, size
 
     def _pread(self, offset, length):

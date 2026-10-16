@@ -210,6 +210,7 @@ class _DirHandler(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     root = None
     log = None
+    strict_suffix = False      # 416 for a suffix longer than the file
 
     def do_GET(self):
         self.log.append((self.path, self.headers.get("Range"),
@@ -228,6 +229,12 @@ class _DirHandler(http.server.BaseHTTPRequestHandler):
             return
         data = open(path, "rb").read()
         m = _RANGE.match(self.headers.get("Range") or "")
+        if self.strict_suffix and m.group(1) == "" and int(m.group(2)) > len(data):
+            self.send_response(416)
+            self.send_header("Content-Range", f"bytes */{len(data)}")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         if m.group(1) == "":
             a, b = max(0, len(data) - int(m.group(2))), len(data) - 1
         else:
@@ -256,14 +263,14 @@ def served_dir(tmp_path):
     srv.daemon_threads = True
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     try:
-        yield f"http://127.0.0.1:{srv.server_address[1]}", tmp_path, log
+        yield f"http://127.0.0.1:{srv.server_address[1]}", tmp_path, log, h
     finally:
         srv.shutdown()
         srv.server_close()
 
 
 def test_http_reads_and_round_trips(served_dir):
-    base, tmp, log = served_dir
+    base, tmp, log, _ = served_dir
     with gp.RVQParquetReader(tmp / "a.georvq.parquet") as p:
         # the plain store's open adds the zarr.json of its 5 arrays
         for sub, n_open in (("a.georvq.zarr", 1), ("plain/a.georvq.zarr", 6)):
@@ -281,7 +288,7 @@ def test_http_reads_and_round_trips(served_dir):
 
 
 def test_http_headers_do_not_follow_a_redirect(served_dir):
-    base, tmp, log = served_dir
+    base, tmp, log, _ = served_dir
     auth = {"Authorization": "Bearer t"}
     z = gz.ZarrReader(f"{base}/redirect/a.georvq.zarr", headers=auth)
     z.read(0, 1, 0, 1, depths=FULL)
@@ -297,8 +304,28 @@ def test_http_headers_do_not_follow_a_redirect(served_dir):
     assert {a for path, _, a in log if not path.startswith("/redirect/")} == {None}
 
 
+def test_http_416_for_a_long_suffix(served_dir):
+    """A server that answers a suffix longer than the file with 416 (as
+    Hugging Face does for files kept in git): the Zarr open is still one
+    request, and a suffix read retries by range."""
+    base, tmp, log, handler = served_dir
+    handler.strict_suffix = True
+    log.clear()
+    z = gz.ZarrReader(f"{base}/a.georvq.zarr")
+    assert z.stats["requests"] == 1 and len(log) == 1
+    with gp.RVQParquetReader(tmp / "a.georvq.parquet") as p:
+        _same_reads(p, z)
+    small = tmp / "small.bin"
+    small.write_bytes(b"0123456789")
+    o = gp.RangeSource(f"{base}/small.bin")
+    log.clear()
+    assert o._suffix(100) == (b"0123456789", 10)
+    assert [r for _, r, _ in log] == ["bytes=-100", "bytes=0-9"]
+    assert o._prefix(4) == (b"0123", 10) and o._prefix(100) == (b"0123456789", 10)
+
+
 def test_http_object_change_is_refused(served_dir):
-    base, tmp, _ = served_dir
+    base, tmp, _, _ = served_dir
     z = gz.ZarrReader(f"{base}/a.georvq.zarr")
     p = tmp / "a.georvq.zarr" / "base" / "c" / "0" / "0" / "0"
     with open(p, "ab") as f:

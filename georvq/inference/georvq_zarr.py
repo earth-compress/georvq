@@ -367,7 +367,7 @@ class ZarrReader(RVQParquetReader):
     with the interface of RVQParquetReader (`read`, `read_mask`,
     `values`, `needs`, `stats`, `trace`, `header`, `aux`, `layout`).
 
-    Opening fetches the group zarr.json (one suffix read of
+    Opening fetches the group zarr.json (one read of its first
     `first_read` bytes, a second when it is longer) and, when it holds
     no consolidated metadata, the zarr.json of each array in one
     parallel round. A read lists the (column, chunk) values it needs
@@ -440,12 +440,13 @@ class ZarrReader(RVQParquetReader):
     # ---- open ----
 
     def _json(self, path, first_read):
-        """Bytes of a whole metadata object, by one suffix read (two
+        """Bytes of a whole metadata object, by one prefix read (two
         when it is longer than `first_read`)."""
         o = self._object(path)
-        data, size = o._suffix(first_read)
+        data, size = o._prefix(first_read)
+        o.size = size
         if size > len(data):
-            data = o._read((0, size - len(data))) + data
+            data += o._read((len(data), size - len(data)))
         return o, data
 
     def _open_store(self, first_read, cache, cache_bytes, cache_dir):
