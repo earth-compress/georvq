@@ -32,29 +32,31 @@ md("""
 
 The AlphaEarth Foundations annual embeddings come as 8192 x 8192 pixel
 tiles of 64 int8 bands at 10 m, about 1 to 3 GB each. The ae-v2 release
-codes each tile as one GeoParquet file of about 61 MB that can be read
-at 23 rates, from 0.11 to 7.5 bits per pixel, by window, over HTTP. The
+codes each tile as one Zarr store of about 61 MB that can be read at 23
+rates, from 0.11 to 7.5 bits per pixel, by window, over HTTP. The
 reader returns int8 arrays in the source's layout, so code written for
-the source tiles can read these files instead.
+the source tiles can read these stores instead.
 
 This notebook opens a coded tile, compares its reconstructions with the
 source at several rates, measures what reads cost in bytes, requests
 and time, and repeats two common analyses (similarity search and
 clustering) on source and reconstruction. Release details are in
-`docs/AE_RELEASE.md`, and the file layout in `docs/GEORVQ_PARQUET.md`.
+`docs/AE_RELEASE.md`, and the store layout in `docs/GEORVQ_ZARR.md`.
 """)
 
 md("""
 ## Configuration
 
-`DATA_ROOT` holds the coded files (`annual/{year}/{zone}/{stem}.georvq.parquet`)
+`DATA_ROOT` holds the coded stores (`annual/{year}/{zone}/{stem}.georvq.zarr`)
 and their index. It can be a local directory or an HTTP URL, and points
-at the published sample on Hugging Face. `SOURCE_ROOT`
+at the published sample on Hugging Face. `STORAGE_OPTIONS` go to fsspec
+when the stores are read by URL, for example a token for a private
+repository. `SOURCE_ROOT`
 holds the source tiles, used here only for comparison; Source
 Cooperative serves them publicly over HTTPS.
 
-The codec weights are not in the files. On the first pixel read,
-`georvq.ae.open` finds the bundle the file's header names: in
+The codec weights are not in the stores. On the first pixel read,
+`georvq.ae.open` finds the bundle the store's header names: in
 `$GEORVQ_AE_BUNDLE`, in the cache at `~/.cache/georvq/bundles/<bitstream_id>/`,
 or by downloading it from the Hugging Face release
 (`earth-compress/georvq-ae-v2`, about 420 MB). On a machine with a GPU
@@ -66,6 +68,7 @@ code("""
 from rasterio.windows import Window
 
 DATA_ROOT = "https://huggingface.co/datasets/earth-compress/georvq-ae-v2-sample/resolve/main"
+STORAGE_OPTIONS = None    # e.g. {"headers": {"Authorization": "Bearer <token>"}}
 SOURCE_ROOT = "https://data.source.coop/tge-labs/aef/v1/annual"
 # local copies work the same way, e.g.
 # DATA_ROOT = "path/to/georvq-ae-v2-sample"
@@ -77,9 +80,9 @@ COAST_TILE = "2024/25S/xny2ld0nqj92sstbu-0000000000-0000000000"   # coast of Ala
 # one 1024 px block of TILE, in the source's row order (the AEF tiles are stored bottom-up)
 WINDOW = Window(col_off=5120, row_off=4096, width=1024, height=1024)
 
-# Speed section: with a local DATA_ROOT, the file is served through a
+# Speed section: with a local DATA_ROOT, the store is served through a
 # range server that adds the latency and throughput measured to Source
-# Cooperative; with a URL, the hosted file is read as it is.
+# Cooperative; with a URL, the hosted store is read as it is.
 SIMULATE_REMOTE = not DATA_ROOT.startswith(("http://", "https://"))
 """)
 
@@ -94,10 +97,12 @@ from rasterio.warp import transform_bounds
 import rasterio.windows
 from rasterio.enums import Resampling
 
+import io
+import pyarrow.parquet as pq
 import georvq.ae
 from georvq.ae.v2 import quality_value
-from georvq.ae.index import rung_bytes
-from georvq.inference.georvq_parquet import Trace
+from georvq.inference.records import Trace
+import ae_demo_http
 
 plt.rcParams.update({
     "figure.dpi": 110, "font.size": 9, "axes.titlesize": 9.5,
@@ -110,12 +115,51 @@ GREY, INK = "#8a8984", "#52514e"
 NODATA_RGB = (0.86, 0.86, 0.84)
 
 
+REMOTE = DATA_ROOT.startswith(("http://", "https://"))
+
+
 def data_url(tile):
-    return f"{DATA_ROOT}/annual/{tile}.georvq.parquet"
+    return f"{DATA_ROOT}/annual/{tile}.georvq.zarr"
+
+
+def open_tile(tile, **kw):
+    return georvq.ae.open(data_url(tile), storage_options=STORAGE_OPTIONS if REMOTE else None, **kw)
 
 
 def source_url(tile):
     return f"{SOURCE_ROOT}/{tile}.tiff"
+
+
+# the tile index, read once: store sizes and the bytes of whole-tile reads
+idx_path = f"{DATA_ROOT}/aef_georvq_index.parquet"
+if REMOTE:
+    req = urllib.request.Request(idx_path, headers=(STORAGE_OPTIONS or {}).get("headers", {}))
+    index = pq.read_table(io.BytesIO(urllib.request.urlopen(req).read()))
+else:
+    index = pq.read_table(idx_path)
+
+
+def tile_row(tile):
+    return next(r for r in index.to_pylist() if r["path"].endswith(f"{tile}.georvq.zarr"))
+
+
+def store_size(tile):
+    r = tile_row(tile)
+    return r["store_bytes"] + r["metadata_bytes"]
+
+
+# zarr-python makes the requests, so they are counted by a local server
+# between it and DATA_ROOT, which forwards each one and records it
+if REMOTE:
+    METER, meter, _ = ae_demo_http.serve(upstream=DATA_ROOT,
+                                         headers=(STORAGE_OPTIONS or {}).get("headers"))
+else:
+    METER, meter, _ = ae_demo_http.serve(root=DATA_ROOT)
+
+
+def metered(tile):
+    \"\"\"The store's URL through the recording server.\"\"\"
+    return f"{METER}/annual/{tile}.georvq.zarr"
 
 
 def size_of(p):
@@ -194,11 +238,11 @@ def mb(n):
 # --------------------------------------------------------------------------
 
 md("""
-## Opening a file
+## Opening a store
 
-`georvq.ae.open` reads the file's footer with one request: the
-georeferencing, the codec header and the byte offset of every stored
-value. The dataset it returns has the attributes of a rasterio dataset
+`georvq.ae.open` opens the store with zarr-python, which reads the
+group's zarr.json with one request: the georeferencing, the codec
+header and the metadata of every array. The dataset it returns has the attributes of a rasterio dataset
 for the source tile (`crs`, `transform`, `width`, `height`, `count`,
 `dtypes`, `nodata`, `profile`, `tags()`, `block_windows()`), and its
 `read` takes the same `window` argument, plus `quality`, the rate to
@@ -207,20 +251,23 @@ decode at.
 
 code("""
 path = data_url(TILE)
-ds = georvq.ae.open(path)
+ds = open_tile(TILE)
+meter.clear()
+georvq.ae.open(metered(TILE))
+open_req, open_bytes = len(meter.events), sum(e["bytes"] for e in meter.events)
 
-print(f"{'file':<12}{path}")
+print(f"{'store':<12}{path}")
 print(f"{'crs':<12}{ds.crs.to_string()}")
 print(f"{'size':<12}{ds.width} x {ds.height} px, {ds.count} bands of {ds.dtypes[0]}, nodata {ds.nodata}")
 print(f"{'transform':<12}{tuple(ds.transform)[:6]}")
 print(f"{'row order':<12}{'bottom-up, as the source' if ds.transform.e > 0 else 'north-up'}")
 print(f"{'extent':<12}{lonlat(ds.crs, ds.transform, ds.height, ds.width)}")
 print(f"{'codec':<12}bitstream {ds.header['codec']['bitstream_id']}, release {ds.header['codec']['release']['name']}")
-print(f"{'opened with':<12}{ds.reader.stats['requests']} request, {mb(ds.reader.stats['bytes'])}")
+print(f"{'opened with':<12}{open_req} request, {mb(open_bytes)}")
 """)
 
 md("""
-The header lists the rates the file supports. A rate is a depth tuple:
+The header lists the rates the store supports. A rate is a depth tuple:
 how many residual levels of each of the three tiers to decode (coarse,
 64 px cells; mid, 16 px; fine, 4 px). `bits_px` counts every bit read
 per pixel, the transmitted window mean included, and `whole-tile bytes`
@@ -230,15 +277,15 @@ is what reading the entire tile at that rate fetches.
 code("""
 import pandas as pd
 
-rb = {r["rung"]: r["bytes"] for r in rung_bytes(ds.reader)}
+rb = {r["rung"]: r["bytes"] for r in tile_row(TILE)["rungs"]}
 ladder = pd.DataFrame([{"rung": "-".join(map(str, r["tuple"])),
                         "bits/window": r["bits_window"],
                         "bits/px": round(r["bits_px"], 3),
                         "whole-tile MB": round(rb["-".join(map(str, r["tuple"]))] / 1e6, 2)}
                        for r in ds.header["rungs"]])
 src_bytes = size_of(source_url(TILE))
-print(f"coded file {mb(ds.reader.size)}, source tile {mb(src_bytes)}, "
-      f"ratio {src_bytes / ds.reader.size:.0f} to 1")
+print(f"coded store {mb(store_size(TILE))}, source tile {mb(src_bytes)}, "
+      f"ratio {src_bytes / store_size(TILE):.0f} to 1")
 ladder.set_index("rung").T
 """)
 
@@ -336,7 +383,7 @@ plt.show()
 md("""
 The curve puts the 23 rungs on one axis. The blue points are measured
 on this window here. The orange points cover the whole tile and come
-from the file's quality column, which holds, for every 64 px window and
+from the store's quality array, which holds, for every 64 px window and
 every rung, the mean and 99th percentile of `1 - cos` measured when the
 tile was encoded; they are averaged over the tile's valid pixels and
 need no decoding. Mid levels cost 208 bits per window and fine levels
@@ -355,7 +402,7 @@ tile_mean = (quality_value(qc[..., :n_r]) * count[..., None]).sum((0, 1)) / coun
 fig, ax = plt.subplots(figsize=(7.5, 4.2), constrained_layout=True)
 bpp = scores["bits_px"].values
 ax.plot(bpp, scores["mean"], "-o", color=BLUE, ms=4, lw=1.5, label="this window, decoded")
-ax.plot(bpp, tile_mean, "-o", color=ORANGE, ms=4, lw=1.5, label="whole tile, from the quality column")
+ax.plot(bpp, tile_mean, "-o", color=ORANGE, ms=4, lw=1.5, label="whole tile, from the quality array")
 for q in LADDER:
     i = list(scores.index).index(q)
     ax.annotate(q, (bpp[i], scores["mean"].iloc[i]), textcoords="offset points",
@@ -373,8 +420,9 @@ plt.show()
 md("""
 ## What reads cost
 
-Each read below opens the file afresh, so nothing is cached, and counts
-the requests and bytes fetched after the footer. The source column is
+Each read below opens the store afresh, so nothing is cached, and counts
+the requests zarr-python makes after the open and the bytes they fetch,
+as the recording server between it and `DATA_ROOT` sees them. The source column is
 the size of the GeoTIFF blocks GDAL has to fetch for the same read: the
 source is tiled in 1024 px blocks with each band stored separately, so
 any read touches whole blocks of all 64 bands. The two whole-tile rows
@@ -382,11 +430,12 @@ fetch the records without decoding them.
 """)
 
 code("""
-def cost(fn):
-    with georvq.ae.open(path, codec=ds.codec) as d:
-        s0 = dict(d.reader.stats)
+def cost(fn, tile=TILE):
+    with georvq.ae.open(metered(tile), codec=ds.codec) as d:
+        meter.clear()
         fn(d)
-        return d.reader.stats["requests"] - s0["requests"], d.reader.stats["bytes"] - s0["bytes"]
+        ev = list(meter.events)
+        return len(ev), sum(e["bytes"] for e in ev)
 
 
 def src_block_bytes(rows, cols):
@@ -408,15 +457,14 @@ for q in [(8, 0, 0), (8, 8, 0), (8, 8, 8)]:
 costs = pd.DataFrame([dict(zip(("read", "requests", "bytes"), (name,) + cost(fn)), source_bytes=sb)
                       for name, fn, sb in reads]).set_index("read")
 costs["source / georvq"] = (costs["source_bytes"] / costs["bytes"]).round(1)
-print(f"open: 1 request, {mb(ds.reader.metadata.serialized_size + 8)} of footer "
-      f"in a {mb(262144)} suffix read")
+print(f"open: {open_req} request, {mb(open_bytes)} of metadata")
 costs
 """)
 
 code("""
 fig, ax = plt.subplots(figsize=(8.5, 4.2), constrained_layout=True)
 y = np.arange(len(costs))[::-1]
-ax.barh(y + 0.2, costs["bytes"], height=0.38, color=BLUE, label="georvq file")
+ax.barh(y + 0.2, costs["bytes"], height=0.38, color=BLUE, label="georvq store")
 ax.barh(y - 0.2, costs["source_bytes"], height=0.38, color=GREY, label="source GeoTIFF blocks")
 for yy, (n, b) in zip(y, zip(costs["requests"], costs["bytes"])):
     ax.text(b * 1.15, yy + 0.2, f"{mb(b)}, {n} req", va="center", fontsize=8, color=INK)
@@ -445,15 +493,16 @@ The coded sample is not hosted next to the source, so a fair
 comparison needs a stand-in. The first cell measures the latency (time
 to first byte of small range requests) and the single-stream
 throughput (one 16 MB range request) from this machine to Source
-Cooperative. With `SIMULATE_REMOTE = True`, the coded file is then
+Cooperative. With `SIMULATE_REMOTE = True`, the coded store is then
 served from a local range server that waits that latency before each
-response and limits each response to that throughput. The georvq
-reader's own trace records its requests, which run up to 16 at a time,
-and the decode stages. The source read goes through a local forwarding
+response and limits each response to that throughput. zarr-python makes
+the requests and the server records each one; the georvq reader's own
+trace records the decode stages. The source read goes through a local forwarding
 server that times each GDAL request to Source Cooperative; GDAL's
 decompression is not separated from its requests and appears as gaps.
 With `SIMULATE_REMOTE = False` and `DATA_ROOT` set to a URL, the same
-cell reads the hosted file with no simulation.
+cell reads the hosted store through a forwarding server, with no
+simulation.
 """)
 
 code("""
@@ -472,23 +521,25 @@ SPEED_RUNGS = ["8-0-0", "8-8-0", "8-8-2", "8-8-8"]
 codec = ds.codec
 servers = []
 if SIMULATE_REMOTE:
-    local = data_url(TILE)
-    base, _, srv_sim = ae_demo_http.serve(root=os.path.dirname(local), latency=net["latency_s"],
-                                          bandwidth=net["throughput_Bps"])
-    servers.append(srv_sim)
-    speed_url = f"{base}/{os.path.basename(local)}"
+    base, rec_g, srv_g = ae_demo_http.serve(root=DATA_ROOT, latency=net["latency_s"],
+                                            bandwidth=net["throughput_Bps"])
 else:
-    speed_url = data_url(TILE)
+    base, rec_g, srv_g = ae_demo_http.serve(upstream=DATA_ROOT,
+                                            headers=(STORAGE_OPTIONS or {}).get("headers"))
+servers.append(srv_g)
+speed_url = f"{base}/annual/{TILE}.georvq.zarr"
 
 runs = {}
 for q in SPEED_RUNGS:
     tr = Trace()
+    rec_g.clear()
     t0 = time.perf_counter()
     with georvq.ae.open(speed_url, codec=codec, trace=tr) as d:
         a = d.read(window=WINDOW, quality=q)
-        nbytes = d.reader.stats["bytes"]
-    runs[f"georvq {q}"] = {"t0": t0, "t1": time.perf_counter(), "events": tr.events,
-                           "bytes": nbytes}
+    # the server's requests in place of the reader's per-array reads
+    events = [e for e in tr.events if e["kind"] != "get"] + list(rec_g.events)
+    runs[f"georvq {q}"] = {"t0": t0, "t1": time.perf_counter(), "events": events,
+                           "bytes": sum(e["bytes"] for e in rec_g.events)}
 
 base_s, rec_s, srv_up = ae_demo_http.serve(upstream=SOURCE_REMOTE)
 servers.append(srv_up)
@@ -570,7 +621,7 @@ md("""
 
 Instead of a rung, `read` accepts a bound on a quality statistic, such
 as `quality="p99<=0.02"`. The reader looks up each window's measured
-errors in the quality column and decodes every window at the cheapest
+errors in the quality array and decodes every window at the cheapest
 rung that meets the bound, or at full depth where none does. The map
 shows the rung chosen for each window of the tile. Within one read the
 reader fetches each tier at the deepest level any window in the read
@@ -686,10 +737,10 @@ md("""
 ## Nodata and partial tiles
 
 Coastal and border tiles are partly nodata (all 64 bands at -128). The
-file stores the tile's validity mask once, losslessly, and the reader
+store keeps the tile's validity mask once, losslessly, and the reader
 writes -128 back wherever it is unset, so nodata comes back exactly. A
-window with no valid pixel is not coded, and a chunk with none is
-stored empty, which makes partial tiles smaller. The block shown is the
+window with no valid pixel is not coded, and a chunk with none is not
+stored, which makes partial tiles smaller. The block shown is the
 one whose valid share is closest to one half. In the AlphaEarth tiles
 nodata starts offshore, so the valid part of such a block is open sea,
 where the embeddings are close to constant. The colours are therefore
@@ -699,8 +750,7 @@ int8 steps of the source, across the full colour range.
 """)
 
 code("""
-cpath = data_url(COAST_TILE)
-cds = georvq.ae.open(cpath, codec=ds.codec)
+cds = open_tile(COAST_TILE, codec=ds.codec)
 csrc = rasterio.open(source_url(COAST_TILE))
 cmask = cds.dataset_mask() > 0                               # source row order
 frac = cmask.reshape(8, 1024, 8, 1024).mean((1, 3))
@@ -710,13 +760,11 @@ c_ref, c_dec = csrc.read(window=CWIN), cds.read(window=CWIN, quality="8-8-2")
 nod_ref, nod_dec = (c_ref == -128).all(0), (c_dec == -128).all(0)
 empty = {g["kind"]: len(g.get("empty_chunks", [])) for g in cds.header["layout"]["groups"]}
 ei, ej = np.argwhere(frac == 0)[0]
-with georvq.ae.open(cpath, codec=ds.codec) as d:
-    s0 = dict(d.reader.stats)
-    d.read(window=Window(ej * 1024, ei * 1024, 1024, 1024), quality="8-8-8")
-    empty_read = (d.reader.stats["requests"] - s0["requests"], d.reader.stats["bytes"] - s0["bytes"])
+empty_read = cost(lambda d: d.read(window=Window(ej * 1024, ei * 1024, 1024, 1024),
+                                   quality="8-8-8"), tile=COAST_TILE)
 
-print(f"valid pixels {cmask.mean():.1%}; file {mb(cds.reader.size)} "
-      f"(the fully valid tile above: {mb(ds.reader.size)}); source {mb(size_of(source_url(COAST_TILE)))}")
+print(f"valid pixels {cmask.mean():.1%}; store {mb(store_size(COAST_TILE))} "
+      f"(the fully valid tile above: {mb(store_size(TILE))}); source {mb(size_of(source_url(COAST_TILE)))}")
 print(f"empty chunks per kind: {empty}")
 print(f"block ({ci}, {cj}), {frac[ci, cj]:.1%} valid: nodata pixels {nod_ref.sum():,} in the source, "
       f"{nod_dec.sum():,} decoded, {(nod_ref != nod_dec).sum()} disagreeing")
@@ -743,22 +791,17 @@ plt.show()
 md("""
 ## The tile index
 
-`aef_georvq_index.parquet` has one row per coded file: the source
+`aef_georvq_index.parquet` has one row per coded store: the source
 index's row for the tile (year, UTM zone, bounds in UTM and WGS84,
-footprint), the file's path, its codec ids, its size, and the bytes a
+footprint), the store's path, its codec ids, its size, and the bytes a
 whole-tile read fetches at each rung. It is GeoParquet, so pyarrow,
-GeoPandas or DuckDB can query it without opening the coded files.
+GeoPandas or DuckDB can query it without opening the coded stores.
 """)
 
 code("""
-import io
-import pyarrow.parquet as pq
 import pyarrow.compute as pc
 
-idx_path = f"{DATA_ROOT}/aef_georvq_index.parquet"
-if idx_path.startswith(("http://", "https://")):
-    idx_path = io.BytesIO(urllib.request.urlopen(idx_path).read())
-idx = pq.read_table(idx_path)
+idx = index                                  # read with the helpers above, from idx_path
 print(f"{idx.num_rows} tiles; columns: {', '.join(idx.column_names)}")
 
 def at(rungs, name):
@@ -769,7 +812,8 @@ tiles = pd.DataFrame({
     "tile": [p.rsplit("/", 1)[-1].split(".")[0] for p in idx["path"].to_pylist()],
     "lon": [(a + b) / 2 for a, b in zip(idx["wgs84_west"].to_pylist(), idx["wgs84_east"].to_pylist())],
     "lat": [(a + b) / 2 for a, b in zip(idx["wgs84_south"].to_pylist(), idx["wgs84_north"].to_pylist())],
-    "file MB": [b / 1e6 for b in idx["file_bytes"].to_pylist()],
+    "store MB": [(b + m) / 1e6 for b, m in zip(idx["store_bytes"].to_pylist(),
+                                               idx["metadata_bytes"].to_pylist())],
     "8-8-0 MB": [at(r, "8-8-0") / 1e6 for r in idx["rungs"].to_pylist()]})
 
 # tiles whose WGS84 bounds intersect a box over Europe
@@ -781,8 +825,8 @@ sel = idx.filter(pc.and_(pc.and_(pc.greater(idx["wgs84_east"], box["west"]),
 print(f"in the Europe box: {sel['path'].to_pylist()}")
 try:
     import duckdb
-    print(duckdb.sql(f"select year, utm_zone, file_bytes from read_parquet('{idx_path}') "
-                     "order by file_bytes").df())
+    print(duckdb.sql(f"select year, utm_zone, store_bytes from read_parquet('{idx_path}') "
+                     "order by store_bytes").df())
 except ImportError:
     print("duckdb is not installed; the same query works with read_parquet() in DuckDB")
 
@@ -793,16 +837,16 @@ try:
     land.plot(ax=ax, color="#e9e7e1", edgecolor="#c9c6bd", lw=0.4, zorder=0)
 except Exception as e:                       # no geopandas or no network: points only
     print(f"no basemap ({type(e).__name__})")
-ax.scatter(tiles["lon"], tiles["lat"], s=tiles["file MB"] * 1.5, color=BLUE, alpha=0.85)
+ax.scatter(tiles["lon"], tiles["lat"], s=tiles["store MB"] * 1.5, color=BLUE, alpha=0.85)
 for _, t in tiles.iterrows():
-    ax.annotate(f"{t['year']} {t['zone']}\\n{t['file MB']:.0f} MB", (t["lon"], t["lat"]),
+    ax.annotate(f"{t['year']} {t['zone']}\\n{t['store MB']:.0f} MB", (t["lon"], t["lat"]),
                 textcoords="offset points", xytext=(7, -4), fontsize=8, color=INK)
 ax.set_xlim(-180, 180); ax.set_ylim(-90, 90)
 ax.set_xticks(range(-180, 181, 60)); ax.set_yticks(range(-90, 91, 30))
 ax.grid(True, color="#e4e3df", lw=0.6, zorder=-1)
 ax.set_aspect("equal")
 ax.set_xlabel("longitude"); ax.set_ylabel("latitude")
-ax.set_title("tiles in the index (marker area by file size; land from Natural Earth)")
+ax.set_title("tiles in the index (marker area by store size; land from Natural Earth)")
 plt.show()
 tiles.round(2)
 """)
@@ -817,8 +861,8 @@ size, compression, band descriptions in `ds.descriptions`), so a
 decoded window can be written as a GeoTIFF as below. For a whole tile,
 the command line does the same in 1024-row strips:
 
-    python -m georvq.ae.v2 reconstruct FILE.georvq.parquet out.tif --quality 8-8-2
-    python -m georvq.ae.v2 decode FILE.georvq.parquet out.npy --window 4096,5120,1024,1024 --quality 8-8-2
+    python -m georvq.ae.v2 reconstruct STORE.georvq.zarr out.tif --quality 8-8-2
+    python -m georvq.ae.v2 decode STORE.georvq.zarr out.npy --window 4096,5120,1024,1024 --quality 8-8-2
 
 `backend="onnx"` decodes with onnxruntime and numpy from the ONNX
 export in the bundle, without torch. It decodes in fp32. On CUDA the
@@ -842,11 +886,11 @@ with rasterio.open(out) as chk:
           f"identical to the array: {np.array_equal(chk.read(), dec['8-8-2'])}")
 
 t = time.perf_counter()
-with georvq.ae.open(path, backend="onnx") as dx:
+with open_tile(TILE, backend="onnx") as dx:
     a_onnx = dx.read(window=WINDOW, quality="8-8-2")
 t_onnx = time.perf_counter() - t
 a_torch = dec["8-8-2"]
-with georvq.ae.open(path, bf16=False) as d32:
+with open_tile(TILE, bf16=False) as d32:
     a_fp32 = d32.read(window=WINDOW, quality="8-8-2")
 print(f"onnx backend, CPU: {t_onnx:.1f} s including loading the graphs")
 for name, a in [("torch bf16", a_torch), ("torch fp32", a_fp32)]:

@@ -696,7 +696,9 @@ def open_store(path_or_url, storage_options=None):
     example {"headers": {"Authorization": "Bearer <token>"}} over https."""
     import zarr
     kw = {} if storage_options is None else {"storage_options": storage_options}
-    return zarr.open_group(os.fspath(path_or_url), mode="r", **kw)
+    # without zarr_format, zarr-python also asks for v2 metadata, three
+    # more requests that all fail
+    return zarr.open_group(os.fspath(path_or_url), mode="r", zarr_format=3, **kw)
 
 
 def _is_group(obj) -> bool:
