@@ -53,9 +53,11 @@ def test_each_shipped_source_declares_its_own_surface():
     cfg = _cfg()
     ae = AESource(cfg.model).report(cfg.model)
     tes = TesseraSource(cfg.model).report(cfg.model)
-    assert ae.quality.key == "cos" and tes.quality.key == "cos"
-    # Tessera adds the magnitude diagnostic its non-unit-norm field needs
-    assert "vec_rel_l2" in [m.key for m in tes.extra]
+    assert ae.quality.key == "cos"
+    # Tessera's vectors are not unit-norm: relative L2 only, no cosine,
+    # and the window mean (not its unit direction) as the floor
+    assert tes.quality.key == "vec_rel_l2" and tes.extra == ()
+    assert [b.key for b in tes.baselines] == ["window_mean"]
     assert "vec_rel_l2" not in [m.key for m in ae.extra]
 
     s2cfg = Config.model_validate({
@@ -163,8 +165,8 @@ def test_an_unbounded_metric_drops_the_log_distortion_axis():
 
 
 def test_defaults_change_nothing_for_an_embedding_field():
-    """The shipped AE/Tessera surface must survive untouched, so existing
-    runs stay comparable."""
+    """The shipped embedding-field surface (AE) must survive untouched, so
+    existing runs stay comparable."""
     spec = resolve_report(_FakeSource(embedding_field_spec()), _cfg())
     assert spec.quality.key == "cos"
     assert [m.key for m in spec.extra] == ["ccos"]

@@ -113,12 +113,14 @@ def rng_state():
 
 
 def set_rng_state(st):
-    torch.set_rng_state(st["torch"])
+    # a checkpoint loaded with map_location=cuda puts these on the GPU, and
+    # torch only accepts RNG states as CPU byte tensors
+    torch.set_rng_state(st["torch"].cpu())
     if st.get("cuda") is not None and torch.cuda.is_available() \
             and len(st["cuda"]) == torch.cuda.device_count():
-        torch.cuda.set_rng_state_all(st["cuda"])
+        torch.cuda.set_rng_state_all([t.cpu() for t in st["cuda"]])
     kind, keys, pos, has_gauss, gauss = st["numpy"]
-    np.random.set_state((kind, keys.numpy().astype(np.uint32), pos,
+    np.random.set_state((kind, keys.cpu().numpy().astype(np.uint32), pos,
                          has_gauss, gauss))
     version, internal, gauss_next = st["python"]
     random.setstate((version, tuple(internal), gauss_next))
@@ -512,11 +514,19 @@ def _train(cfg: Config, gpu, stop):
     start = 1
     if resume_ck is not None:
         ts = resume_ck["train_state"]
-        best_q = ts["best_q"]
         best_is_quantized = ts["best_is_quantized"]
-        best_ceil_guard = ts["best_ceil_guard"]
         nonfinite_steps = ts["nonfinite_steps"]
-        last_full_q = ts.get("last_full_q")
+        # the trackers hold values of one quality metric; a checkpoint
+        # scored on another (or written before the key was stored)
+        # starts them afresh rather than comparing across metrics
+        if ts.get("quality_key") == qm.key:
+            best_q = ts["best_q"]
+            best_ceil_guard = ts["best_ceil_guard"]
+            last_full_q = ts.get("last_full_q")
+        else:
+            print(f"resume: quality metric is now {qm.key!r} (checkpoint: "
+                  f"{ts.get('quality_key')!r}); best and collapse-guard "
+                  "trackers restart", flush=True)
         set_level_state(model, ts["vq"])
         start = resume_ck["step"] + 1
         rng0 = ts["rng"]
@@ -524,7 +534,8 @@ def _train(cfg: Config, gpu, stop):
         set_rng_state(rng0)   # last, so the stream continues the run's
 
     def train_state():
-        return {"best_q": float(best_q),
+        return {"quality_key": qm.key,
+                "best_q": float(best_q),
                 "best_is_quantized": bool(best_is_quantized),
                 "best_ceil_guard": float(best_ceil_guard),
                 "nonfinite_steps": int(nonfinite_steps),

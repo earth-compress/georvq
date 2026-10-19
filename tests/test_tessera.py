@@ -75,17 +75,17 @@ def test_prep_rejects_missing_scales():
 
 
 def test_recon_stats_raw_space():
-    """Loss is raw-space MSE; cos is on-the-fly (scale-blind); rel_l2 is
-    not — a uniformly rescaled recon keeps cos=1 but pays in mse/rel."""
+    """Loss is raw-space MSE and the metric is relative L2, which sees
+    magnitude: a uniformly rescaled recon has the right direction but pays
+    in mse and rel."""
     from georvq.sources.tessera import TesseraSource
     src = TesseraSource(SimpleNamespace(bands=8))
     x = torch.randn(1, 8, 4, 4)
     valid = torch.ones(1, 4, 4, dtype=torch.bool)
     mse, stats = src.recon_stats(x, x, valid)
     assert mse < 1e-10 and stats["vec_rel_l2"] < 1e-5
-    assert abs(stats["cos"] - 1.0) < 1e-5
+    assert "cos" not in stats
     mse, stats = src.recon_stats(2 * x, x, valid)
-    assert abs(stats["cos"] - 1.0) < 1e-5     # direction untouched
     assert abs(stats["vec_rel_l2"] - 1.0) < 1e-5   # magnitude off by 100%
     assert mse > 0.1
 

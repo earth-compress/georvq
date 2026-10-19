@@ -1,0 +1,71 @@
+# Tessera v2: the release geometry (tokenizer 512/14, decoder 576/12) with
+# the coarse and mid tiers narrowed from 512 to 256, larger books with
+# fewer levels, and AE v2's recipe.
+#
+# Narrow tiers. The release's latents hold 95% of their variance in 51, 91
+# and 71 dimensions of 512/512/256, and widening the mid tier from 384 to
+# 512 left the ceiling where it was (0.9800 against 0.9801 cos). At 256
+# wide the books cost half as much to download. The tokenizer and decoder
+# stay at 512 and 576 so that nothing else caps the tiers' rank.
+#
+# Books, at about the release's rate per cell (160 bits):
+#   coarse  K=256  x 20 (8-bit), 160 bits; no one decodes below a full
+#           coarse tier, so its level count costs users nothing
+#   mid     K=2048 x 13 (11-bit), 143 bits
+#   fine    K=4096 x 12 (12-bit), 144 bits
+# 1.3M + 6.8M + 12.6M = 20.7M book parameters against the release's 6.6M
+# and AE v2's 25.2M; with the 61M decoder a client downloads about 82M.
+# Sample budget (codebook-sample-budget), batch x cells x 500 / K at decay
+# 0.998: coarse 2000, mid 4000, fine 32000 vectors per code.
+#
+# Recipe as AE v2: truncated unquantised warmup, tree init (1000 per
+# code), split resets, EMA decay 0.998, int8 books, path depth sampling.
+# Batch 1024, as the release: 2048 ran out of memory in the decoder's
+# forward pass on an 80 GB A100 (job 1016). The release trained at 326
+# windows/s, so 150,000 steps (about 150M windows, 2.3 times the
+# release's 66M) take about 5.5 days. The warmup is 20,000 steps, about
+# 20M windows.
+inherit: tessera_vq8.yaml
+data:
+  pool:
+    size: 19150          # 114 GiB, as the release
+model:
+  tiers: ["1:256:256:20", "4:256:2048:13", "16:256:4096:12"]
+  depth_sampling: path
+  min_depths: [4, 0, 0]
+  full_frac: 0.15
+  stats_cond:
+    subtract_mean: true
+    cond_encoder: true
+    cond_decoder: true
+    bits_per_band: 6     # rate accounting only; training uses the true mean
+  vq:
+    commit_weight: 0.25
+    dead_threshold: 0.000625
+    ema_decay: 0.998
+    bf16_scores: true
+    skip_masked: true
+    warmup_steps: 20000
+    kmeans_sample: 32768
+    init_mode: tree
+    init_per_code: 1000
+    reset_mode: split
+    book_bits: 8
+    passthrough_frac: 0.15
+    # Job 1019's grad norm sat below 0.2 through the warmup, and a step
+    # at 12.8k above that started a spike that tripped the collapse guard
+    # at 13k under the default clip of 1.0. Resumed from step 12.5k at 0.2.
+    clip_norm: 0.2
+train:
+  steps: 150000
+  batch_windows: 1024
+  batch_ramp: {until: 5000, divisor: 4}
+  optim: {lr: 1.5e-4, wd: 0.01, warmup: 1000, lr0_steps: 100}
+  save_interval: 2500
+eval:
+  recon_tuples: ["20-0-0", "20-1-0", "20-13-0", "20-13-1", "20-13-12"]
+  # the inherited tessera-vq overlays are scored in cosine; this run
+  # reports relative L2, so they would sit on the wrong axis
+  rd_refs: []
+log:
+  run_tag: tessera_v2

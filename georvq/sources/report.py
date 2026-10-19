@@ -117,9 +117,19 @@ def _blockmean_unit(x, valid):
     return mean[:, :, None, None].expand_as(x)
 
 
-BLOCKMEAN = Baseline("blockmean", "block-mean", _blockmean_unit, min_bands=2)
+def _window_mean(x, valid):
+    """Each window replaced by its valid-pixel mean vector, unnormalized:
+    the zero-rate reconstruction of a model that sends that mean as a side
+    channel, and the best constant under an L2 metric."""
+    vm = valid.unsqueeze(1).float()
+    mean = (x * vm).sum((2, 3)) / vm.sum((2, 3)).clamp_min(1)
+    return mean[:, :, None, None].expand_as(x) * vm
 
-BASELINES = {b.key: b for b in (BLOCKMEAN,)}
+
+BLOCKMEAN = Baseline("blockmean", "block-mean", _blockmean_unit, min_bands=2)
+WINDOW_MEAN = Baseline("window_mean", "window mean", _window_mean, min_bands=1)
+
+BASELINES = {b.key: b for b in (BLOCKMEAN, WINDOW_MEAN)}
 
 
 # --------------------------------------------------------------- previews
