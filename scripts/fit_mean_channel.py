@@ -1,15 +1,19 @@
-"""Fit the RVQ-PCA mean channel of the AE v2 release (`RVQPCAMeanChannel`).
+"""Fit the RVQ-PCA mean channel of a release (`RVQPCAMeanChannel`).
 
 A stats_cond model trains against the exact per-window mean; the release
 codes that mean with a channel fitted afterwards on the training split's
 window means. The channel depends only on the store and the split, not
-on the trained model. Three stages:
+on the trained model. The preset (`--config`) gives the store, the split,
+the source, the window and the band count; the defaults are those of the
+AE v2 release. Three stages:
 
-1. Per-window means. Each chip goes through `AESource.prep` (dequant,
-   per-pixel L2 normalisation, nodata zeroed) and each of its
-   non-overlapping 64 px windows gets the masked mean over valid pixels,
-   as the model's `patch_stats` computes it. Windows with no valid pixel
-   are dropped. About 80 minutes on 24 CPU workers for chips_1024.
+1. Per-window means. Each chip goes through the source's `prep` (for AE,
+   dequant, per-pixel L2 normalisation, nodata zeroed; for Tessera,
+   x = q * scale / XNORM with the scale planes read from the store's
+   sidecars) and each of its non-overlapping windows gets the masked mean
+   over valid pixels, as the model's `patch_stats` computes it. Windows
+   with no valid pixel are dropped. About 80 minutes on 24 CPU workers
+   for chips_1024.
 2. RVQ levels of K codes over all training means. Each level is seeded by
    distortion-driven splitting (`greedy_split_init`) and refined by Lloyd
    iterations, on what the previous levels leave.
@@ -19,12 +23,13 @@ on the trained model. Three stages:
 
 The release used 2 levels of 4096 (24 bits) and 440 bits in all:
 
-    python scripts/fit_ae_mean_channel.py --means means.npz \\
+    python scripts/fit_mean_channel.py --means means.npz \\
         --out mean_channel.npz
 
 `--means` caches stage 1 (2.6 GB for chips_1024): it is read when the
 file exists and written otherwise. `--books` takes RVQ books from an npz
-with arrays L0, L1, ... and skips stage 2.
+with arrays L0, L1, ... and skips stage 2, and `--books-out` writes the
+books stage 2 fits in that form.
 
 The released tables were fitted on a GPU, and a CPU run does not
 reproduce them bit for bit. Stage 1 is exact. Stage 3 run on CPU from the
@@ -57,7 +62,6 @@ from georvq.data.store import open_store
 from georvq.inference.mean_codec import RVQPCAMeanChannel
 from georvq.model.vq import _chunked_assign
 
-W = 64
 _ctx = {}
 
 
@@ -68,18 +72,22 @@ def _init(cfg_path):
     from georvq.sources import get_source
     cfg = load_config(cfg_path, [])
     _ctx["store"] = open_store(cfg.data.store_dir)
-    _ctx["src"] = get_source("ae", cfg.model)
+    _ctx["src"] = get_source(cfg.data.source, cfg.model)
+    _ctx["W"], _ctx["C"] = int(cfg.model.window), int(cfg.model.bands)
 
 
 def _chip(job):
     shard, slot, _ = job
-    s, src = _ctx["store"], _ctx["src"]
+    s, src, W, C = _ctx["store"], _ctx["src"], _ctx["W"], _ctx["C"]
     a = np.array(s.open_shard(shard)[slot])
+    if getattr(s, "aux_bands", 0):
+        # per-pixel aux planes (Tessera's scales) ride as trailing bands
+        a = np.concatenate([a, s.aux_bytes(shard, slot, 0, a.shape[-2])])
     x, v = src.prep(torch.from_numpy(a)[None], "cpu")
     g = a.shape[-1] // W
-    xs = (x[0] * v[0]).reshape(64, g, W, g, W).sum((2, 4))
+    xs = (x[0] * v[0]).reshape(C, g, W, g, W).sum((2, 4))
     n = v[0].reshape(g, W, g, W).sum((1, 3)).float()
-    m = (xs / n.clamp_min(1)).permute(1, 2, 0).reshape(g * g, 64)
+    m = (xs / n.clamp_min(1)).permute(1, 2, 0).reshape(g * g, C)
     keep = (n.reshape(-1) > 0)
     return (m[keep].numpy().astype(np.float32),
             (n.reshape(-1)[keep] / W ** 2).numpy().astype(np.float16),
@@ -87,8 +95,9 @@ def _chip(job):
 
 
 def window_means(rows, workers, cfg_path, label):
-    """Means (N, 64), valid fractions, chip ids and window positions
-    (row * 16 + col) of every window with a valid pixel in `rows`."""
+    """Means (N, bands), valid fractions, chip ids and window positions
+    (row * windows per chip row + col) of every window with a valid pixel
+    in `rows`."""
     # chip_id, not the frame label: store.split renumbers its frames from 0
     jobs = [(int(r["shard"]), int(r["slot"]), int(r["chip_id"])) for _, r in
             rows.sort_values(["shard", "slot"]).iterrows()]
@@ -275,6 +284,8 @@ def main():
     ap.add_argument("--workers", type=int, default=24)
     ap.add_argument("--books", default=None,
                     help="npz of RVQ books L0, L1, ...: skip the RVQ fit")
+    ap.add_argument("--books-out", default=None,
+                    help="write the fitted RVQ books here as L0, L1, ...")
     ap.add_argument("--levels", type=int, default=2)
     ap.add_argument("--K", type=int, default=4096)
     ap.add_argument("--iters", type=int, default=20)
@@ -309,6 +320,8 @@ def main():
         books = np.stack([bk[f"L{i}"] for i in range(a.levels)])
     else:
         books = fit_books(Mtr, a.levels, a.K, a.iters, a.split_frac, dev)
+        if a.books_out:
+            np.savez(a.books_out, **{f"L{i}": b for i, b in enumerate(books)})
     ch = fit_channel(Mtr, books, a.total_bits, a.resid_sample, dev)
     ch.save(a.out)
     rel = np.median(np.linalg.norm(ch.round_trip(Mva) - Mva, axis=1)

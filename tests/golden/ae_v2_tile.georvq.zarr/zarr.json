@@ -21,12 +21,18 @@
           "kind": "rvq-pca",
           "bits": 440
         },
-        "release": "golden"
+        "release": {
+          "name": "golden",
+          "bitstream_id": "f6ad2ff121a473df",
+          "decoder_id": "d9b0af741f66b682",
+          "uri": "hf://earth-compress/georvq-ae-v2",
+          "revision": null
+        }
       },
       "product": {
         "kind": "aef-annual-tile",
         "id": "golden_tile",
-        "source": "/tmp/tmp6vaf7625/golden_tile.tif",
+        "source": "golden_tile.tif",
         "crs_wkt": "PROJCS[\"WGS 84 / UTM zone 33N\",GEOGCS[\"WGS 84\",DATUM[\"WGS_1984\",SPHEROID[\"WGS 84\",6378137,298.257223563,AUTHORITY[\"EPSG\",\"7030\"]],AUTHORITY[\"EPSG\",\"6326\"]],PRIMEM[\"Greenwich\",0,AUTHORITY[\"EPSG\",\"8901\"]],UNIT[\"degree\",0.0174532925199433,AUTHORITY[\"EPSG\",\"9122\"]],AUTHORITY[\"EPSG\",\"4326\"]],PROJECTION[\"Transverse_Mercator\"],PARAMETER[\"latitude_of_origin\",0],PARAMETER[\"central_meridian\",15],PARAMETER[\"scale_factor\",0.9996],PARAMETER[\"false_easting\",500000],PARAMETER[\"false_northing\",0],UNIT[\"metre\",1,AUTHORITY[\"EPSG\",\"9001\"]],AXIS[\"Easting\",EAST],AXIS[\"Northing\",NORTH],AUTHORITY[\"EPSG\",\"32633\"]]",
         "epsg": 32633,
         "transform": [
@@ -1682,7 +1688,13 @@
           "georvq_quality": {
             "decoder_id": "d9b0af741f66b682",
             "bitstream_id": "f6ad2ff121a473df",
-            "release": "golden",
+            "release": {
+              "name": "golden",
+              "bitstream_id": "f6ad2ff121a473df",
+              "decoder_id": "d9b0af741f66b682",
+              "uri": "hf://earth-compress/georvq-ae-v2",
+              "revision": null
+            },
             "rungs": [
               {
                 "tuple": [

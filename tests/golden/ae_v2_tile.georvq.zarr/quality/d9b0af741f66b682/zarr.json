@@ -71,7 +71,13 @@
     "georvq_quality": {
       "decoder_id": "d9b0af741f66b682",
       "bitstream_id": "f6ad2ff121a473df",
-      "release": "golden",
+      "release": {
+        "name": "golden",
+        "bitstream_id": "f6ad2ff121a473df",
+        "decoder_id": "d9b0af741f66b682",
+        "uri": "hf://earth-compress/georvq-ae-v2",
+        "revision": null
+      },
       "rungs": [
         {
           "tuple": [

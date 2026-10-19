@@ -26,7 +26,7 @@
 #
 # MEAN. stats_cond is trained against the exact window mean; bits_per_band
 # 6 is accounting only. The release codes the mean with an RVQ-PCA channel
-# (440 bits) fitted after training by scripts/fit_ae_mean_channel.py,
+# (440 bits) fitted after training by scripts/fit_mean_channel.py,
 # which reads only the store, so the released mean_channel.npz also fits
 # a model from this run.
 #
