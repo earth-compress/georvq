@@ -11,6 +11,11 @@ The source code in this repository is licensed under the Apache License,
 Version 2.0 (see LICENSE). The model weights published on Hugging Face
 (earth-compress/georvq-ae-v2) are also licensed under Apache 2.0.
 
+TODO(maintainer): the licence of the Tessera v2 weights (to be published
+as earth-compress/georvq-tessera-v2) is undecided, between Apache 2.0
+and CC-BY-SA 4.0. The georvq stores made with them from TESSERA
+embeddings are CC-BY-SA 4.0 in either case (see below).
+
 Some files in this repository are derived from third-party datasets and
 are licensed under the terms those datasets require, not under Apache 2.0.
 The licence texts are in LICENSES/.
