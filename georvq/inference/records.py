@@ -19,6 +19,8 @@ window grid, written and read by zarr-python:
     mask   (H, W) bool              one chunk per mask-kind chunk, zstd;
                                     chunks with every pixel valid omitted
     quality/<decoder_id> (wy, wx, quality bytes)  chunked as base
+    assets/<name> (bytes,) uint8    optional named byte blobs, one chunk
+                                    each, no compression codec
 
 Code arrays have no compression codec, so each chunk holds the packed
 records of its windows. A chunk none of whose windows has a valid pixel
@@ -29,7 +31,10 @@ measured with, and its attributes (`georvq_quality`) carry that
 decoder's ids, release, rungs in record order, record fields and the
 definition of the error. The `quality` group's attributes list the
 decoders it holds; a later decoder of the same bitstream adds its array
-and its entry there.
+and its entry there. The optional `assets` group holds named files that
+belong with the product, such as source metadata, each as a 1-D uint8
+array in one chunk with attributes `georvq_asset` {media_type, filename,
+size, sha256}; the group's attributes list them under `names`.
 
 `RecordWriter` writes a store; `RecordReader` reads records and masks
 of window regions from an open zarr.Group, one zarr-python read per
@@ -59,17 +64,19 @@ from georvq.inference.bitpack import pack, record_bytes, unpack
 
 FORMAT = "georvq-zarr"
 MAJOR = 0
-MINOR = 4
+MINOR = 5
 STATUS = "prototype"
 SUFFIX = ".georvq.zarr"
 HEADER_KEY = "georvq"
 AUX_KEY = "georvq_aux"
 QUALITY_GROUP = "quality"
 QUALITY_KEY = "georvq_quality"
+ASSETS_GROUP = "assets"
+ASSET_KEY = "georvq_asset"
 CACHE_BYTES = 512 * 1024 * 1024
 MASK_ZSTD_LEVEL = 19
 _WRITER_KEYS = ("format", "version", "status", "layout")
-_RESERVED = ("base", "mask", "quality")
+_RESERVED = ("base", "mask", "quality", "assets")
 _TIER_NAME = re.compile(r"[A-Za-z0-9_]+")
 
 PROJ_CONVENTION = {
@@ -304,7 +311,7 @@ class Trace:
     codec stages), `label`, `t0` and `t1` (time.perf_counter seconds) and
     `bytes`. Reads made in parallel are recorded from their own threads,
     so their overlap is kept. Pass one as `trace=` to RecordReader (or
-    georvq.ae.open); tracing is off without one."""
+    georvq.open); tracing is off without one."""
 
     def __init__(self):
         self.events = []
@@ -443,12 +450,14 @@ class RecordWriter:
     the decoder it was measured with. transform: the north-up affine
     (a, b, c, d, e, f) of the coded pixel grid. crs: PROJJSON dict, or
     None if unknown. aux: a JSON string or JSON-able object stored under
-    `georvq_aux`. consolidated: add zarr-python's consolidated metadata,
-    which saves readers a request per array on open."""
+    `georvq_aux`. assets: {name: (bytes, media_type, filename)}, files
+    stored in the `assets` group. consolidated: add zarr-python's
+    consolidated metadata, which saves readers a request per array on
+    open."""
 
     def __init__(self, path, header: dict, layout: Layout, product_id: str,
                  transform, height: int, width: int, crs=None, aux=None,
-                 consolidated=True):
+                 consolidated=True, assets=None):
         clash = [k for k in _WRITER_KEYS if k in header]
         if clash:
             raise ValueError(f"header keys {clash} are set by the writer")
@@ -461,6 +470,12 @@ class RecordWriter:
         self.crs = crs
         self.aux = aux if aux is None or not isinstance(aux, str) else json.loads(aux)
         self.consolidated = bool(consolidated)
+        self.assets = {}
+        for name, (data, media_type, filename) in (assets or {}).items():
+            if not isinstance(name, str) or not _TIER_NAME.fullmatch(name):
+                raise ValueError(f"asset name {name!r} is not made of "
+                                 "[A-Za-z0-9_]")
+            self.assets[name] = (bytes(data), str(media_type), str(filename))
         self.window_grid = layout.window_grid(height, width)
         self.chunk_grids = {k: layout.chunk_grid(k, height, width)
                             for k in layout.groups}
@@ -640,6 +655,23 @@ class RecordWriter:
             config={"write_empty_chunks": False})
         if self._valid is not None:
             mask[...] = self._valid
+        if self.assets:
+            ag = root.create_group(ASSETS_GROUP,
+                                   attributes={"names": sorted(self.assets)})
+            for name in sorted(self.assets):
+                data, media_type, filename = self.assets[name]
+                n = len(data)
+                a = ag.create_array(
+                    name, shape=(n,), dtype="uint8", chunks=(max(n, 1),),
+                    compressors=None, filters=None, fill_value=0,
+                    dimension_names=["byte"],
+                    attributes={ASSET_KEY: {
+                        "media_type": media_type, "filename": filename,
+                        "size": n,
+                        "sha256": hashlib.sha256(data).hexdigest()}},
+                    config={"write_empty_chunks": True})
+                if n:
+                    a[...] = np.frombuffer(data, np.uint8)
         root.update_attributes({
             HEADER_KEY: header, AUX_KEY: self.aux,
             "zarr_conventions": [PROJ_CONVENTION, SPATIAL_CONVENTION],
@@ -706,6 +738,52 @@ def _is_group(obj) -> bool:
         hasattr(obj, a) for a in ("attrs", "array_keys", "store"))
 
 
+class Assets:
+    """The files of a store's `assets` group, by name: `assets[name]` is
+    the file's bytes, read with one request the first time and checked
+    against the sha256 its attributes record; `info(name)` is those
+    attributes {media_type, filename, size, sha256}. Empty for a store
+    without assets."""
+
+    def __init__(self, store, source=""):
+        self.source = source
+        self._group = store[ASSETS_GROUP] if ASSETS_GROUP in store else None
+        self._names = (list(self._group.attrs.get("names", []))
+                       if self._group is not None else [])
+        self._data = {}
+
+    def __contains__(self, name):
+        return name in self._names
+
+    def __iter__(self):
+        return iter(self._names)
+
+    def __len__(self):
+        return len(self._names)
+
+    def keys(self):
+        return list(self._names)
+
+    def info(self, name) -> dict:
+        if name not in self._names:
+            raise KeyError(f"{self.source}: no asset {name!r}; it has "
+                           f"{self._names}")
+        return dict(dict(self._group[name].attrs)[ASSET_KEY])
+
+    def __getitem__(self, name) -> bytes:
+        if name in self._data:
+            return self._data[name]
+        info = self.info(name)
+        arr = self._group[name]
+        data = np.asarray(arr[...]).tobytes() if info["size"] else b""
+        if len(data) != info["size"] or \
+                hashlib.sha256(data).hexdigest() != info["sha256"]:
+            raise ValueError(f"{self.source}: asset {name!r} does not match "
+                             "the size and sha256 its attributes record")
+        self._data[name] = data
+        return data
+
+
 class RecordReader:
     """Reads records and pixel masks of window regions from a store, given
     as an open zarr.Group or as a path or URL for `open_store` (with
@@ -756,6 +834,7 @@ class RecordReader:
             if not t.in_base:
                 self.arrays[t.name] = self._check(t.name, store[t.name])
         self._init_quality(store)
+        self.assets = Assets(store, self.source)
         bid = (self.header.get("codec") or {}).get("bitstream_id", "")
         ident = json.dumps([self.source, attrs.get(HEADER_KEY)], sort_keys=True)
         self.file_key = (str(bid), hashlib.sha1(ident.encode()).hexdigest()[:20])
@@ -1142,6 +1221,9 @@ class RecordReader:
                if name != "quality"}
         for did, q in self.quality_decoders.items():
             out[f"quality/{did}"] = int(q["array"].nbytes_stored())
+        for name in self.assets:
+            out[f"assets/{name}"] = int(
+                self.group[ASSETS_GROUP][name].nbytes_stored())
         return out
 
     def column_bytes(self) -> dict:

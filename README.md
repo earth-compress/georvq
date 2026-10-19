@@ -104,8 +104,8 @@ python -m georvq.ae.v2 encode src.tif out_dir/ --bundle <bundle dir> --device cu
 ```
 
 ```python
-import georvq.ae
-ds = georvq.ae.open("<url or path>/annual/2021/44N/<stem>.georvq.zarr")
+import georvq
+ds = georvq.open("<url or path>/annual/2021/44N/<stem>.georvq.zarr")
 a = ds.read(window=((0, 1024), (0, 1024)), quality="p99<=0.02")
 ```
 
@@ -187,8 +187,8 @@ need. The rate is picked from 23 rungs (0.11-7.5 b/px), or from a bound
 on the error measured at encode time:
 
 ```python
-import georvq.ae
-ds = georvq.ae.open(url)
+import georvq
+ds = georvq.open(url)
 a = ds.read(window=((0, 1024), (0, 1024)), quality="8-8-2")
 ```
 

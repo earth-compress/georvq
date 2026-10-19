@@ -1,4 +1,4 @@
-"""AE v2 bundle resolution: `georvq.ae.open(path)` finds the bundle a file
+"""AE v2 bundle resolution: `georvq.open(path)` finds the bundle a file
 names, through GEORVQ_AE_BUNDLE, the bundle cache, or a download from a
 trusted release, and refuses one for another bitstream. The hub is
 mocked; no test touches the network."""
@@ -14,7 +14,7 @@ import torch
 rasterio = pytest.importorskip("rasterio")
 huggingface_hub = pytest.importorskip("huggingface_hub")
 
-import georvq.ae  # noqa: E402
+import georvq  # noqa: E402
 from georvq.ae import v2, v2_resolve  # noqa: E402
 from georvq.ae.v2_bundle import build_bundle, load_bundle  # noqa: E402
 from georvq.ae.v2_resolve import BundleError  # noqa: E402
@@ -132,7 +132,7 @@ def test_header_names_the_release(tiny):
 
 def test_open_from_the_cache_with_no_codec_arguments(tiny, tmp_path):
     root, _ = _cache_with(tiny, tmp_path)
-    with georvq.ae.open(tiny["released"], cache_dir=root) as ds:
+    with georvq.open(tiny["released"], cache_dir=root) as ds:
         assert isinstance(ds.codec, v2.AEV2Codec)
         assert ds.codec.device.type == "cpu"
         assert np.array_equal(ds.read(quality=RUNG), tiny["want"])
@@ -153,18 +153,18 @@ def test_default_cache_follows_xdg_and_georvq_cache(tiny, tmp_path,
         tmp_path / "xdg" / "georvq" / "bundles" / "x")
     root, _ = _cache_with(tiny, tmp_path)
     monkeypatch.setenv(v2_resolve.ENV_CACHE, str(root))
-    with georvq.ae.open(tiny["released"], device="cpu") as ds:
+    with georvq.open(tiny["released"], device="cpu") as ds:
         assert np.array_equal(ds.read(quality=RUNG), tiny["want"])
 
 
 def test_open_from_the_environment(tiny, monkeypatch):
     monkeypatch.setenv(v2_resolve.ENV_BUNDLE, str(tiny["bundle"]))
-    with georvq.ae.open(tiny["released"], device="cpu") as ds:
+    with georvq.open(tiny["released"], device="cpu") as ds:
         assert np.array_equal(ds.read(quality=RUNG), tiny["want"])
 
 
 def test_metadata_needs_no_bundle(tiny):
-    with georvq.ae.open(tiny["released"]) as ds:
+    with georvq.open(tiny["released"]) as ds:
         assert (ds.height, ds.width, ds.count) == (H, WD, 64)
 
 
@@ -177,14 +177,14 @@ def test_bundle_for_another_bitstream_is_refused(tiny, tmp_path,
     (other / "bundle.json").write_text(json.dumps(meta))
 
     root, _ = _cache_with(tiny, tmp_path, other)
-    with georvq.ae.open(tiny["released"], cache_dir=root) as ds:
+    with georvq.open(tiny["released"], cache_dir=root) as ds:
         with pytest.raises(BundleError, match="0123456789abcdef.*cannot "
                                               "decode this file"):
             ds.read()
     with pytest.raises(BundleError, match="given as bundle="):
-        georvq.ae.open(tiny["released"], bundle=other)
+        georvq.open(tiny["released"], bundle=other)
     monkeypatch.setenv(v2_resolve.ENV_BUNDLE, str(other))
-    with georvq.ae.open(tiny["released"], cache_dir=root) as ds:
+    with georvq.open(tiny["released"], cache_dir=root) as ds:
         with pytest.raises(BundleError, match="GEORVQ_AE_BUNDLE"):
             ds.read()
 
@@ -193,15 +193,15 @@ def test_untrusted_release_needs_trust_remote(tiny, tmp_path, monkeypatch):
     f = tiny["encode"]("untrusted.georvq.zarr",
                        uri="hf://someone-else/georvq-ae-v2")
     root = tmp_path / "cache"
-    with georvq.ae.open(f, cache_dir=root) as ds:
+    with georvq.open(f, cache_dir=root) as ds:
         with pytest.raises(BundleError, match="trust_remote=True") as err:
             ds.read()
     assert "GEORVQ_AE_BUNDLE" in str(err.value)
     calls = []
     monkeypatch.setattr(huggingface_hub, "snapshot_download",
                         _fake_hub(tiny["bundle"], calls))
-    with georvq.ae.open(f, cache_dir=root, trust_remote=True,
-                        device="cpu") as ds:
+    with georvq.open(f, cache_dir=root, trust_remote=True,
+                     device="cpu") as ds:
         assert np.array_equal(ds.read(quality=RUNG), tiny["want"])
     assert calls[0]["repo_id"] == "someone-else/georvq-ae-v2"
 
@@ -212,7 +212,7 @@ def test_trusted_release_is_downloaded_into_the_cache(tiny, tmp_path,
     monkeypatch.setattr(huggingface_hub, "snapshot_download",
                         _fake_hub(tiny["bundle"], calls))
     root = tmp_path / "cache"
-    with georvq.ae.open(tiny["released"], cache_dir=root) as ds:
+    with georvq.open(tiny["released"], cache_dir=root) as ds:
         assert np.array_equal(ds.read(quality=RUNG), tiny["want"])
     assert calls == [{"repo_id": "earth-compress/georvq-ae-v2",
                       "repo_type": "model", "revision": "abc123",
@@ -222,7 +222,7 @@ def test_trusted_release_is_downloaded_into_the_cache(tiny, tmp_path,
         == tiny["bid"]
     assert sorted(p.name for p in entry.parent.iterdir()) == [tiny["bid"]]
     # the second open finds the cache entry
-    with georvq.ae.open(tiny["released"], cache_dir=root) as ds:
+    with georvq.open(tiny["released"], cache_dir=root) as ds:
         ds.read(quality=RUNG)
     assert len(calls) == 1
 
@@ -233,7 +233,7 @@ def test_release_below_the_repository_root(tiny, tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(huggingface_hub, "snapshot_download",
                         _fake_hub(tiny["bundle"], calls))
-    with georvq.ae.open(f, cache_dir=tmp_path / "c", device="cpu") as ds:
+    with georvq.open(f, cache_dir=tmp_path / "c", device="cpu") as ds:
         assert np.array_equal(ds.read(quality=RUNG), tiny["want"])
     assert calls[0]["repo_id"] == "earth-compress/bundles"
     assert calls[0]["allow_patterns"] == ["ae/v2/*"]
@@ -247,7 +247,7 @@ def test_tampered_download_is_not_cached(tiny, tmp_path, monkeypatch):
     monkeypatch.setattr(huggingface_hub, "snapshot_download",
                         _fake_hub(bad, []))
     root = tmp_path / "cache"
-    with georvq.ae.open(tiny["released"], cache_dir=root) as ds:
+    with georvq.open(tiny["released"], cache_dir=root) as ds:
         with pytest.raises(BundleError, match="sha256"):
             ds.read()
     assert list((root / "bundles").iterdir()) == []
@@ -257,23 +257,23 @@ def test_file_without_a_release(tiny, tmp_path):
     f = tiny["encode"]("legacy.georvq.zarr", release=None)
     with RecordReader(f) as rd:
         assert rd.header["codec"]["release"] is None
-    with georvq.ae.open(f, model=str(tiny["ckpt"]), channel=str(tiny["npz"]),
-                        device="cpu") as ds:
+    with v2.open_dataset(f, model=str(tiny["ckpt"]), channel=str(tiny["npz"]),
+                         device="cpu") as ds:
         assert np.array_equal(ds.read(quality=RUNG), tiny["want"])
-    with georvq.ae.open(f, bundle=tiny["bundle"], device="cpu") as ds:
+    with georvq.open(f, bundle=tiny["bundle"], device="cpu") as ds:
         assert np.array_equal(ds.read(quality=RUNG), tiny["want"])
-    with georvq.ae.open(f, cache_dir=tmp_path / "empty") as ds:
+    with georvq.open(f, cache_dir=tmp_path / "empty") as ds:
         with pytest.raises(BundleError, match="names no release"):
             ds.read()
     root, _ = _cache_with(tiny, tmp_path)
-    with georvq.ae.open(f, cache_dir=root, device="cpu") as ds:
+    with georvq.open(f, cache_dir=root, device="cpu") as ds:
         assert np.array_equal(ds.read(quality=RUNG), tiny["want"])
 
 
 def test_bundle_without_onnx_refuses_the_onnx_backend(tiny):
     with pytest.raises(BundleError, match="no ONNX export"):
-        georvq.ae.open(tiny["released"], bundle=tiny["bundle"],
-                       backend="onnx")
+        georvq.open(tiny["released"], bundle=tiny["bundle"],
+                    backend="onnx")
 
 
 @pytest.fixture(scope="module")
@@ -289,14 +289,14 @@ def test_bundle_with_onnx_serves_both_backends(tiny, onnx_bundle, tmp_path):
     assert meta["onnx"] == "onnx" and meta["bitstream_id"] == tiny["bid"]
     assert "onnx/decoder.onnx" in meta["files"]
     root, _ = _cache_with(tiny, tmp_path, out)
-    with georvq.ae.open(tiny["released"], cache_dir=root,
-                        backend="onnx") as ds:
+    with georvq.open(tiny["released"], cache_dir=root,
+                     backend="onnx") as ds:
         assert isinstance(ds.codec, v2.AEV2OnnxCodec)
         got = ds.read(quality=RUNG)
     d = np.abs(got.astype(int) - tiny["want"].astype(int))
     assert d.max() <= 1 and (d > 0).mean() < 1e-3
-    with georvq.ae.open(tiny["released"], cache_dir=root,
-                        device="cpu") as ds:
+    with georvq.open(tiny["released"], cache_dir=root,
+                     device="cpu") as ds:
         assert np.array_equal(ds.read(quality=RUNG), tiny["want"])
 
 
@@ -347,14 +347,14 @@ def test_without_torch_the_onnx_export_is_used(tiny, onnx_bundle, tmp_path):
     from tests.test_onnx_stats import NO_TORCH
     out, _ = onnx_bundle
     root, _ = _cache_with(tiny, tmp_path, out)
-    with georvq.ae.open(tiny["released"], cache_dir=root,
-                        backend="onnx") as ds:
+    with georvq.open(tiny["released"], cache_dir=root,
+                     backend="onnx") as ds:
         np.save(tmp_path / "want.npy", ds.read(quality=RUNG))
     code = NO_TORCH + f"""
 import numpy as np
-import georvq.ae
+import georvq
 from georvq.ae import v2
-with georvq.ae.open({str(tiny["released"])!r}, cache_dir={str(root)!r}) as ds:
+with georvq.open({str(tiny["released"])!r}, cache_dir={str(root)!r}) as ds:
     assert isinstance(ds.codec, v2.AEV2OnnxCodec)
     got = ds.read(quality={RUNG!r})
 assert np.array_equal(got, np.load({str(tmp_path / "want.npy")!r}))
@@ -417,7 +417,7 @@ def test_download_failures_are_bundle_errors(tiny, tmp_path, monkeypatch,
     monkeypatch.setattr(huggingface_hub, "snapshot_download",
                         _hub_raising(make()))
     root = tmp_path / "cache"
-    with georvq.ae.open(tiny["released"], cache_dir=root) as ds:
+    with georvq.open(tiny["released"], cache_dir=root) as ds:
         with pytest.raises(BundleError) as err:
             ds.read()
     msg = str(err.value)
@@ -432,14 +432,14 @@ def test_download_failures_are_bundle_errors(tiny, tmp_path, monkeypatch,
 def test_cache_entry_with_a_missing_or_corrupt_file(tiny, tmp_path):
     root, entry = _cache_with(tiny, tmp_path)
     (entry / "mean_channel.npz").rename(tmp_path / "moved.npz")
-    with georvq.ae.open(tiny["released"], cache_dir=root) as ds:
+    with georvq.open(tiny["released"], cache_dir=root) as ds:
         with pytest.raises(BundleError, match="missing.*delete it") as err:
             ds.read()
     assert str(entry) in str(err.value)
     (tmp_path / "moved.npz").rename(entry / "mean_channel.npz")
     with open(entry / "mean_channel.npz", "ab") as fh:
         fh.write(b"\0")
-    with georvq.ae.open(tiny["released"], cache_dir=root) as ds:
+    with georvq.open(tiny["released"], cache_dir=root) as ds:
         with pytest.raises(BundleError, match="sha256.*delete it"):
             ds.read()
 

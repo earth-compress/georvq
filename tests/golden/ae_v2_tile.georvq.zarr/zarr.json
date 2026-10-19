@@ -272,8 +272,14 @@
         "order": "per stat, one byte per rung in header rungs order",
         "decode_precision": "fp32"
       },
+      "output": {
+        "dtype": "int8",
+        "nodata": -128,
+        "count": 64,
+        "band_names": null
+      },
       "format": "georvq-zarr",
-      "version": "0.4",
+      "version": "0.5",
       "status": "prototype",
       "layout": {
         "window_px": 64,

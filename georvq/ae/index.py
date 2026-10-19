@@ -7,20 +7,9 @@ tile the store codes, matched on the product id (the source file's stem,
 unique across the source index). `path` is rewritten to the coded store
 and the source's path moves to `source_path`. The other source columns,
 `location` included, describe the source tile and are copied unchanged.
-Added columns:
-
-- `bitstream_id`, `decoder_id`: from the store's codec header;
-- `store_bytes`: the bytes stored by the store's arrays, each array's
-  zarr.json included (zarr-python's `nbytes_stored`);
-- `metadata_bytes`: the group zarr.json, which a reader fetches on open
-  and which holds the consolidated metadata of the arrays;
-- `quality_bytes`: the stored bytes of the store's quality arrays, 0
-  when it has none;
-- `rungs`: per rung of the header's rung table, in order, `rung`
-  ("8-8-2"), the header's nominal `bits_px`, and `bytes`, the bytes a
-  whole-tile read at that rung reads: the records of base and of each
-  tier's levels up to the rung's depth, outside empty chunks, and the
-  mask array's stored bytes; quality excluded.
+Added columns, as georvq.inference.store_index describes them:
+`bitstream_id`, `decoder_id`, `store_bytes`, `metadata_bytes`,
+`quality_bytes` and `rungs`.
 
 Only metadata and stored sizes are read, so the stores must be on a
 filesystem zarr-python can list, such as a local directory. The output
@@ -38,7 +27,9 @@ import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
 from georvq import __version__
-from georvq.inference.records import SUFFIX, RecordReader
+from georvq.inference.records import SUFFIX
+from georvq.inference.store_index import (find_stores, rung_bytes,  # noqa: F401
+                                          stem as _stem, tile_record)
 
 INDEX_NAME = "aef_georvq_index.parquet"
 _BBOX = ("xmin", "ymin", "xmax", "ymax")
@@ -46,53 +37,6 @@ _BBOX = ("xmin", "ymin", "xmax", "ymax")
 RUNG_TYPE = pa.list_(pa.struct([("rung", pa.string()),
                                  ("bits_px", pa.float64()),
                                  ("bytes", pa.int64())]))
-
-
-def rung_bytes(reader: RecordReader, mask_bytes: int) -> list:
-    """Per header rung: {rung, bits_px, bytes}, with bytes the record
-    bytes a whole-tile read at the rung reads."""
-    col = reader.column_bytes()
-    out = []
-    for r in reader.header["rungs"]:
-        t = [int(v) for v in r["tuple"]]
-        cols = reader.columns_for(t, mask=False)
-        out.append({"rung": "-".join(map(str, t)),
-                    "bits_px": float(r["bits_px"]),
-                    "bytes": int(sum(col.get(c, 0) for c in cols) + mask_bytes)})
-    return out
-
-
-def tile_record(path, **reader_kw) -> dict:
-    """Metadata facts of one coded store: product id, codec ids, sizes and
-    rung bytes. `reader_kw` go to RecordReader."""
-    rd = RecordReader(path, **reader_kw)
-    h = rd.header
-    codec = h.get("codec") or {}
-    sizes = rd.stored_bytes()
-    meta = os.path.join(os.fspath(path), "zarr.json")
-    return {"product_id": str(h["product"]["id"]),
-            "bitstream_id": codec.get("bitstream_id"),
-            "decoder_id": codec.get("decoder_id"),
-            "store_bytes": int(sum(sizes.values())),
-            "metadata_bytes": int(os.path.getsize(meta)),
-            "quality_bytes": int(sum(b for k, b in sizes.items()
-                                     if k.startswith("quality/"))),
-            "rungs": rung_bytes(rd, sizes.get("mask", 0))}
-
-
-def find_stores(root) -> list:
-    """`*.georvq.zarr` stores under a local directory, sorted."""
-    out = []
-    for d, names, _ in os.walk(os.fspath(root)):
-        hits = [n for n in names if n.endswith(SUFFIX)]
-        out += [os.path.join(d, n) for n in hits]
-        names[:] = [n for n in names if not n.endswith(SUFFIX)]
-    return sorted(out)
-
-
-def _stem(p: str) -> str:
-    name = p.rstrip("/").rsplit("/", 1)[-1]
-    return name[:-len(SUFFIX)] if name.endswith(SUFFIX) else os.path.splitext(name)[0]
 
 
 def _geo(source_geo, table, column):

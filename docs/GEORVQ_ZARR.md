@@ -9,7 +9,7 @@ with its own defaults, so zarr-python and xarray open it without
 georvq, and every array decodes with the standard `bytes`, `zstd` and
 `sharding_indexed` codecs. What those readers get back are packed code
 records, which mean nothing until they are unpacked and decoded, so
-`georvq.ae.open` (`docs/AE_RELEASE.md`) is the way to turn a store into
+`georvq.open` (`docs/AE_RELEASE.md`) is the way to turn a store into
 pixels. It accepts a path or URL, or a `zarr.Group` that a user has
 already opened, for example on another storage backend or as a
 rechunked copy. This document specifies the layout for anyone writing
@@ -90,7 +90,9 @@ The group's attributes hold the codec header as JSON under `georvq`:
 `format` (`georvq-zarr`), `version`, `status`, `codec` (its format,
 `bitstream_id`, `decoder_id`, tiers, window and release), `product`
 (the source's id, path, CRS, north-up transform, size and orientation),
-`rungs`, `quality` for the header's own decoder, and `layout`. The
+`rungs`, `quality` for the header's own decoder, `output` (the data
+type, nodata value, band count and band names a reader returns), and
+`layout`. The
 layout gives the window size, the window grid and product size, each
 kind's chunk size, chunk grid and empty chunks, the mask chunks that
 hold an invalid pixel, the record fields of every column, and the

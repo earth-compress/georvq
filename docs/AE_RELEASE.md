@@ -4,13 +4,13 @@ This document describes the released georvq codec for the AlphaEarth Foundations
 embedding tiles. The model that this codec uses is [released on Hugging Face](https://huggingface.co/earth-compress/georvq-ae-v2). 
 We use this codec to encode source tiles into a Zarr store that contains the compressed
 blobs used by the decoder. These Zarr stores can be streamed from their location on the cloud at any of 23 bitrates, with windowed
-range reads over HTTP, allowing users to access lossily compressed AlphaEarth Foundations data at bitrates from ~0.1-7.5 bits per pixel, with cosine similarity going from 97.2% to 99.8%. The code that this release uses is in `georvq/ae/v2.py`, and the store format is defined in `georvq/inference/records.py`.
+range reads over HTTP, allowing users to access lossily compressed AlphaEarth Foundations data at bitrates from ~0.1-7.5 bits per pixel, with cosine similarity going from 97.2% to 99.8%. The code that this release uses is in `georvq/ae/v2.py`, on the shared store codec and reader in `georvq/inference/store_codec.py` and `georvq/inference/store_dataset.py`, and the store format is defined in `georvq/inference/records.py`.
 
 ## Who is this for
 
 | you are | recommended points of entry |
 |---|---|
-| AE data user, reading tiles | `georvq.ae.open`, `python -m georvq.ae.v2 decode/reconstruct/info`, the Reading and Rate sections below |
+| AE data user, reading tiles | `georvq.open`, `python -m georvq.ae.v2 decode/reconstruct/info`, the Reading and Rate sections below |
 | archive operator, bulk-encoding source tiles | `python -m georvq.ae.v2 encode` on a GPU, the quality array, the Encoding cost section |
 | codec researcher | `georvq/{model,train,...}` and `docs/OVERVIEW.md`; `georvq/ae/v2.py` is a worked example of a release layer on the Zarr store |
 
@@ -88,9 +88,9 @@ Functionally, most users will not need to worry about anything beyond this, as o
 
 ## Reading
 
-The main principle being followed in the reader's design is to mirror the behaviour of a rasterio file object's read method, so that after replacing `rasterio.open()` with `georvq.ae.open()` in your code, the `.read` will work as it did before. This is to make the transition as straightforward as possible for people who are already using the AlphaEarth Foundations dataset on source.coop.
+The main principle being followed in the reader's design is to mirror the behaviour of a rasterio file object's read method, so that after replacing `rasterio.open()` with `georvq.open()` in your code, the `.read` will work as it did before. This is to make the transition as straightforward as possible for people who are already using the AlphaEarth Foundations dataset on source.coop.
 
-`georvq.ae.open(store, ...)`, given a path, a URL or an open `zarr.Group`, returns a lazy-loaded read-only dataset with the
+`georvq.open(store, ...)`, given a path, a URL or an open `zarr.Group`, returns a lazy-loaded read-only dataset with the
 source tile's georeferencing and shape: `crs`, `transform`, `width`,
 `height`, `count` (64), `dtypes` (int8), `nodata` (-128), `profile`,
 `meta`, `tags()`, `descriptions`, `block_shapes`, `block_windows()`,
@@ -119,9 +119,9 @@ A bundle whose ids do not match the store is refused, including one at
 backend to torch.
 
 ```python
-import georvq.ae
+import georvq
 
-ds = georvq.ae.open("annual/2021/44N/<stem>.georvq.zarr")
+ds = georvq.open("annual/2021/44N/<stem>.georvq.zarr")
 w = ((0, 1024), (0, 1024))                            # rows, cols in source pixels
 a = ds.read(window=w, quality="8-8-2")                # (64, 1024, 1024) int8
 b = ds.read(3, window=w, quality="p99<=0.02")         # band 3 only, 1-based
@@ -219,7 +219,7 @@ hf download earth-compress/georvq-ae-v2 \
 
 A sample of six encoded tiles with their index is on Hugging Face as
 [`earth-compress/georvq-ae-v2-sample`](https://huggingface.co/datasets/earth-compress/georvq-ae-v2-sample), in the same
-`annual/{year}/{zone}/` layout, and `georvq.ae.open` reads them by URL, e.g.
+`annual/{year}/{zone}/` layout, and `georvq.open` reads them by URL, e.g.
 `https://huggingface.co/datasets/earth-compress/georvq-ae-v2-sample/resolve/main/annual/2025/32N/xh72hhha3ih6mroc7-0000008192-0000008192.georvq.zarr`.
 The full set of encoded tiles will be hosted at
 `<host>/annual/{year}/{zone}/{stem}.georvq.zarr` `[pending: hosting]`.

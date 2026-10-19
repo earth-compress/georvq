@@ -56,7 +56,7 @@ holds the source tiles, used here only for comparison; Source
 Cooperative serves them publicly over HTTPS.
 
 The codec weights are not in the stores. On the first pixel read,
-`georvq.ae.open` finds the bundle the store's header names: in
+`georvq.open` finds the bundle the store's header names: in
 `$GEORVQ_AE_BUNDLE`, in the cache at `~/.cache/georvq/bundles/<bitstream_id>/`,
 or by downloading it from the Hugging Face release
 (`earth-compress/georvq-ae-v2`, about 420 MB). On a machine with a GPU
@@ -99,7 +99,7 @@ from rasterio.enums import Resampling
 
 import io
 import pyarrow.parquet as pq
-import georvq.ae
+import georvq
 from georvq.ae.v2 import quality_value
 from georvq.inference.records import Trace
 import ae_demo_http
@@ -123,7 +123,7 @@ def data_url(tile):
 
 
 def open_tile(tile, **kw):
-    return georvq.ae.open(data_url(tile), storage_options=STORAGE_OPTIONS if REMOTE else None, **kw)
+    return georvq.open(data_url(tile), storage_options=STORAGE_OPTIONS if REMOTE else None, **kw)
 
 
 def source_url(tile):
@@ -240,7 +240,7 @@ def mb(n):
 md("""
 ## Opening a store
 
-`georvq.ae.open` opens the store with zarr-python, which reads the
+`georvq.open` opens the store with zarr-python, which reads the
 group's zarr.json with one request: the georeferencing, the codec
 header and the metadata of every array. The dataset it returns has the attributes of a rasterio dataset
 for the source tile (`crs`, `transform`, `width`, `height`, `count`,
@@ -253,7 +253,7 @@ code("""
 path = data_url(TILE)
 ds = open_tile(TILE)
 meter.clear()
-georvq.ae.open(metered(TILE))
+georvq.open(metered(TILE))
 open_req, open_bytes = len(meter.events), sum(e["bytes"] for e in meter.events)
 
 print(f"{'store':<12}{path}")
@@ -431,7 +431,7 @@ fetch the records without decoding them.
 
 code("""
 def cost(fn, tile=TILE):
-    with georvq.ae.open(metered(tile), codec=ds.codec) as d:
+    with georvq.open(metered(tile), codec=ds.codec) as d:
         meter.clear()
         fn(d)
         ev = list(meter.events)
@@ -484,7 +484,7 @@ md("""
 ## How long a read takes over HTTP
 
 This section times one cold read of the 1024 px block, from
-`georvq.ae.open` to the int8 array in memory, at four rungs, and the
+`georvq.open` to the int8 array in memory, at four rungs, and the
 same block read from the source tile on Source Cooperative with
 rasterio and GDAL. The codec is loaded beforehand and reused, so
 loading the weights is not timed.
@@ -534,7 +534,7 @@ for q in SPEED_RUNGS:
     tr = Trace()
     rec_g.clear()
     t0 = time.perf_counter()
-    with georvq.ae.open(speed_url, codec=codec, trace=tr) as d:
+    with georvq.open(speed_url, codec=codec, trace=tr) as d:
         a = d.read(window=WINDOW, quality=q)
     # the server's requests in place of the reader's per-array reads
     events = [e for e in tr.events if e["kind"] != "get"] + list(rec_g.events)

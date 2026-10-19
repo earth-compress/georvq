@@ -401,6 +401,12 @@
       "window_order": "row-major",
       "window_px": 16
      },
+     "output": {
+      "band_names": null,
+      "count": 64,
+      "dtype": "int8",
+      "nodata": -128
+     },
      "product": {
       "count": 64,
       "dtype": "int8",
@@ -500,7 +506,7 @@
       }
      ],
      "status": "prototype",
-     "version": "0.4"
+     "version": "0.5"
     },
     "georvq_aux": [
      "band_tags",

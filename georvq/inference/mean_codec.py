@@ -21,6 +21,14 @@ per-window scale, for two reasons:
 The constants travel in the release bundle beside the codebooks. They
 are part of what the decoder needs, so a change to them is a change to
 the bitstream.
+
+Both coders here share one interface, which the store codec
+(`georvq.inference.store_codec`) relies on: `kind`, `bands`,
+`record_fields()` (the fields of its part of a window's base record, as
+(name, count, bits)), `field_widths()`, `encode`, `decode`,
+`round_trip`, `cost_bits`, `id_state()` (the arrays `bitstream_id`
+hashes), `save` and `load`. `load_channel(path)` reads either kind from
+its `.npz`.
 """
 from __future__ import annotations
 
@@ -34,6 +42,8 @@ class MeanChannel:
     bits:      per band, matching the model's `stats_cond.bits_per_band`.
     clip:      half-range in units of `scale`; values beyond it saturate.
     """
+
+    kind = "uniform"
 
     def __init__(self, mu0, scale, bits: int, clip: float = 4.0):
         self.mu0 = np.asarray(mu0, dtype=np.float32)
@@ -56,6 +66,19 @@ class MeanChannel:
     def cost_bits(self) -> int:
         """Bits per window. No per-window side info, by construction."""
         return self.bands * self.bits
+
+    def field_widths(self) -> np.ndarray:
+        """Bit widths of a packed record: one code per band."""
+        return np.full(self.bands, self.bits, np.int64)
+
+    def record_fields(self) -> list:
+        """The channel's fields in a base record: one code per band."""
+        return [("mean", self.bands, self.bits)]
+
+    def id_state(self) -> list:
+        """What a decoder must agree on, for `bitstream_id(extra=...)`."""
+        return [self.mu0, self.scale, np.int32(self.bits),
+                np.float32(self.clip)]
 
     # ---- fit ----
 
@@ -96,7 +119,7 @@ class MeanChannel:
 
     @classmethod
     def load(cls, path) -> "MeanChannel":
-        z = np.load(path)
+        z = np.load(path, allow_pickle=False)
         return cls(z["mu0"], z["scale"], int(z["bits"]), float(z["clip"]))
 
 
@@ -131,6 +154,8 @@ class RVQPCAMeanChannel:
     codes are sent, not how they decode. Decode is a fixed float32
     computation from the codes and the shipped tables.
     """
+
+    kind = "rvq-pca"
 
     def __init__(self, books, mu0, V, s, bits, clip):
         self.books = np.asarray(books, dtype=np.float32)
@@ -170,6 +195,21 @@ class RVQPCAMeanChannel:
     def record_bytes(self) -> int:
         from georvq.inference.bitpack import record_bytes
         return record_bytes(self.field_widths())
+
+    def record_fields(self) -> list:
+        """The channel's fields in a base record: the RVQ indices, then
+        runs of PCA components sharing a bit width, named by their first
+        component."""
+        out = [("mean_rvq", int(self.books.shape[0]), self.index_bits)]
+        bits = [int(b) for b in self.bits]
+        k = 0
+        while k < len(bits):
+            j = k
+            while j < len(bits) and bits[j] == bits[k]:
+                j += 1
+            out.append((f"mean_pca_{k}", j - k, bits[k]))
+            k = j
+        return out
 
     # ---- code ----
 
@@ -279,10 +319,37 @@ class RVQPCAMeanChannel:
 
     @classmethod
     def load(cls, path) -> "RVQPCAMeanChannel":
-        z = np.load(path)
+        z = np.load(path, allow_pickle=False)
         return cls(z["books"], z["mu0"], z["V"], z["s"], z["bits"], z["clip"])
 
     def id_state(self) -> list:
         """What a decoder must agree on, for `bitstream_id(extra=...)`."""
         return [self.books, self.mu0, self.V, self.s,
                 self.bits.astype(np.int32), self.clip]
+
+
+CHANNELS = {MeanChannel.kind: MeanChannel,
+            RVQPCAMeanChannel.kind: RVQPCAMeanChannel}
+
+
+def channel_kind(path) -> str:
+    """The kind of the mean channel saved at `path`, told apart by the
+    tables it holds."""
+    with np.load(path, allow_pickle=False) as z:
+        names = set(z.files)
+    if {"books", "V"} <= names:
+        return RVQPCAMeanChannel.kind
+    if {"mu0", "scale"} <= names:
+        return MeanChannel.kind
+    raise ValueError(f"{path}: not a saved mean channel (arrays "
+                     f"{sorted(names)})")
+
+
+def load_channel(path, kind=None):
+    """A mean channel from its `.npz`. `kind`, when given (a bundle
+    records it), must agree with the tables the file holds."""
+    found = channel_kind(path)
+    if kind is not None and kind != found:
+        raise ValueError(f"{path}: holds a {found!r} mean channel, "
+                         f"{kind!r} was expected")
+    return CHANNELS[found].load(path)
