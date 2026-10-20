@@ -1079,6 +1079,13 @@ def _train(cfg: Config, gpu, stop):
             # Collapse guard: a stage latch is a catastrophic ceiling drop
             # that never recovers; trip on the FIRST validation past it.
             ceil_q = vs[f"{qm.key}_ceiling"]
+            if vq_live and not best_is_quantized:
+                # the unquantised ceiling falls once the network trains on
+                # quantised latents (0.976 -> 0.926 R2 within 2k steps on
+                # s2_w60 while full decode rose), so the warmup's best is
+                # not a reference for the quantised phase
+                best_ceil_guard = (-math.inf if qm.higher_better
+                                   else math.inf)
             if cfg.train.guard_drop is not None:
                 worse = (best_ceil_guard - ceil_q if qm.higher_better
                          else ceil_q - best_ceil_guard)
