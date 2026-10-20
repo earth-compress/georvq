@@ -115,12 +115,14 @@ def rng_state():
 
 
 def set_rng_state(st):
-    torch.set_rng_state(st["torch"])
+    # a checkpoint loaded with map_location=cuda puts these on the GPU, and
+    # torch only accepts RNG states as CPU byte tensors
+    torch.set_rng_state(st["torch"].cpu())
     if st.get("cuda") is not None and torch.cuda.is_available() \
             and len(st["cuda"]) == torch.cuda.device_count():
-        torch.cuda.set_rng_state_all(st["cuda"])
+        torch.cuda.set_rng_state_all([t.cpu() for t in st["cuda"]])
     kind, keys, pos, has_gauss, gauss = st["numpy"]
-    np.random.set_state((kind, keys.numpy().astype(np.uint32), pos,
+    np.random.set_state((kind, keys.cpu().numpy().astype(np.uint32), pos,
                          has_gauss, gauss))
     version, internal, gauss_next = st["python"]
     random.setstate((version, tuple(internal), gauss_next))
