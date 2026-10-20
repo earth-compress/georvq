@@ -123,11 +123,19 @@ class S2ConvTileEncoder(nn.Module):
     becomes one fine-tier cell (6 px at 10 m) and a pooled branch gives
     the single coarse-tier vector.
 
+    With `mid_dim` and `mid_cell` set there is a third, middle tier
+    between the two: each token reads a `mid_cell` x `mid_cell` block of
+    the 60 m feature map through a conv whose kernel and stride are that
+    block, so it sees its own block of fine cells and nothing outside it,
+    then a 1x1 conv and a projection to `mid_dim`. Without them the
+    module holds exactly beta_v2's parameters.
+
     Module names follow beta_v2's `TileVQAutoencoder` so its weights load
     by prefix. `width` is beta's stem width (128 in beta_v2).
     """
 
-    def __init__(self, coarse_dim, fine_dim, width=128):
+    def __init__(self, coarse_dim, fine_dim, width=128, mid_dim=None,
+                 mid_cell=None):
         super().__init__()
         w, w2, w4 = width, 2 * width, 4 * width
         n10, n20, n60 = (GROUPS[g][0] for g in ("10m", "20m", "60m"))
@@ -143,27 +151,61 @@ class S2ConvTileEncoder(nn.Module):
         self.cls_res = _ResBlock(w4)
         self.cls_pool = nn.AdaptiveAvgPool2d(1)
         self.cls_proj = nn.Linear(w4, coarse_dim)
+        # built after beta_v2's modules, so that a two-tier encoder draws
+        # the same initial weights from a given seed as before
+        if (mid_dim is None) != (mid_cell is None):
+            raise ValueError("mid_dim and mid_cell are set together")
+        if mid_dim is not None:
+            self.mid_down = nn.Sequential(*_cbg(w4, w4, mid_cell, mid_cell),
+                                          *_cbg(w4, w4, 1))
+            self.mid_proj = nn.Conv2d(w4, mid_dim, 1)
+        else:
+            self.mid_down = self.mid_proj = None
+
+    def trunk(self, x):
+        """The shared stack: the prepped batch -> the 60 m feature map
+        (B, 4 * width, W/6, W/6)."""
+        h = self.enc_10m(x["10m"])
+        h = self.enc_fuse_20m(torch.cat([h, x["20m"]], 1))
+        h = self.enc_20m(h)
+        return self.enc_res(self.enc_fuse_60m(torch.cat([h, x["60m"]], 1)))
+
+    def mid(self, h):
+        """60 m feature map -> middle-tier tokens (B, g_mid**2, mid_dim)."""
+        return self.mid_proj(self.mid_down(h)).flatten(2).transpose(1, 2)
 
     def forward(self, x, stats_bias=None):
         if stats_bias is not None:
             raise ValueError("S2ConvTileEncoder takes no stats conditioning")
-        h = self.enc_10m(x["10m"])
-        h = self.enc_fuse_20m(torch.cat([h, x["20m"]], 1))
-        h = self.enc_20m(h)
-        h = self.enc_res(self.enc_fuse_60m(torch.cat([h, x["60m"]], 1)))
+        h = self.trunk(x)
         fine = self.hq_proj(h).flatten(2).transpose(1, 2)    # (B, g*g, D)
         coarse = self.cls_proj(self.cls_pool(self.cls_res(h)).flatten(1))
-        return [coarse.unsqueeze(1), fine]
+        if self.mid_down is None:
+            return [coarse.unsqueeze(1), fine]
+        return [coarse.unsqueeze(1), self.mid(h), fine]
 
 
 def _check_tile_layout(model_cfg, what):
-    """The beta_v2 conv encoder needs two tiers, a whole-window coarse cell
-    and a fine cell of one 60 m pixel."""
-    t = model_cfg.tiers
-    if len(t) != 2 or t[0].grid != 1 or t[1].grid * 6 != model_cfg.window:
+    """The beta_v2 conv encoder needs a whole-window coarse cell and a fine
+    cell of one 60 m pixel, with optionally a middle tier between them
+    whose cell is a whole number of fine cells.
+
+    Returns the middle tier's cell size in fine cells, or None for two
+    tiers."""
+    t, win = model_cfg.tiers, model_cfg.window
+    g_fine = win // 6
+    ok = (len(t) in (2, 3) and win % 6 == 0 and t[0].grid == 1
+          and t[-1].grid == g_fine)
+    if ok and len(t) == 3:
+        g_mid = t[1].grid
+        ok = 1 < g_mid < g_fine and g_fine % g_mid == 0
+    if not ok:
         raise ValueError(
-            f"{what} needs tiers [1:..., window/6:...]; got "
-            f"{[str(s) for s in t]} on window {model_cfg.window}")
+            f"{what} needs tiers [1:..., window/6:...] or "
+            f"[1:..., g_mid:..., window/6:...] with g_mid dividing window/6 "
+            f"(window {win}, window/6 = {win / 6:g}); got "
+            f"{[str(s) for s in t]}")
+    return g_fine // t[1].grid if len(t) == 3 else None
 
 
 class S2Normalizer:
@@ -300,10 +342,11 @@ class S2Source(Source):
                               head_feat=model_cfg.decoder.head_feat)
 
     def build_encoder(self, model_cfg) -> nn.Module:
-        _check_tile_layout(model_cfg, "tokenizer.kind=source")
+        mid_cell = _check_tile_layout(model_cfg, "tokenizer.kind=source")
         t = model_cfg.tiers
-        return S2ConvTileEncoder(t[0].dim, t[1].dim,
-                                 width=model_cfg.tokenizer.dim)
+        return S2ConvTileEncoder(
+            t[0].dim, t[-1].dim, width=model_cfg.tokenizer.dim,
+            mid_dim=t[1].dim if mid_cell else None, mid_cell=mid_cell)
 
     def normalizer(self, model_cfg):
         return self._norm

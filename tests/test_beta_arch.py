@@ -131,3 +131,106 @@ def test_figures_draw_reference_curves():
     labels = [l.get_label() for l in f.axes[0].get_lines()]
     assert "ref" in labels
     plt.close(f)
+
+
+def _three_tier_cfg(tiers, window=24, **model):
+    return Config.model_validate({
+        "data": {"source": "s2", "store_dir": "/tmp/unused"},
+        "model": {"window": window, "bands": 13, "tiers": tiers,
+                  "tokenizer": {"kind": "source", "dim": 8},
+                  "decoder": {"dim": 16, "depth": 1, "heads": 2,
+                              "head_feat": 8, "cls_bridge": False},
+                  **model}})
+
+
+def test_w60_preset_has_three_nested_tiers():
+    """s2_w60: one whole-window cell, 5 x 5 cells of 12 px and 10 x 10
+    cells of 6 px, all 128 wide."""
+    m = build_model(load_config("configs/s2/s2_w60.yaml"))
+    x = {"10m": torch.randn(2, 4, 60, 60), "20m": torch.randn(2, 6, 30, 30),
+         "60m": torch.randn(2, 3, 10, 10)}
+    zs = m.encode_levels(x)
+    assert [tuple(z.shape) for z in zs] == \
+        [(2, 1, 128), (2, 25, 128), (2, 100, 128)]
+
+
+def test_two_tier_encoder_has_only_beta_parameters():
+    """The middle branch exists only when there is a middle tier, so
+    beta_v2's weights still load strictly into a two-tier encoder."""
+    m = build_model(load_config("configs/s2/beta_arch.yaml"))
+    assert not any("mid_" in k for k in m.state_dict())
+    m3 = build_model(_three_tier_cfg(["1:8:16:2", "2:8:16:2", "4:8:16:2"]))
+    assert any(k.startswith("tokenizer.mid_down") for k in m3.state_dict())
+
+
+@pytest.mark.parametrize("tiers,window", [
+    (["1:8:16:2", "3:8:16:2", "10:8:16:2"], 60),    # 3 does not divide 10
+    (["1:8:16:2", "2:8:16:2", "5:8:16:2", "10:8:16:2"], 60),   # four tiers
+    (["1:8:16:2", "2:8:16:2", "5:8:16:2"], 60),     # fine cell is not 6 px
+])
+def test_conv_encoder_rejects_bad_three_tier_layouts(tiers, window):
+    with pytest.raises(ValueError, match="g_mid dividing window/6"):
+        build_model(_three_tier_cfg(tiers, window=window))
+
+
+def test_mid_token_reads_only_its_own_block():
+    """Each middle token is computed from its own 2 x 2 block of the 60 m
+    feature map (12 x 12 px at 10 m), so changing one fine cell's features
+    moves the middle token over it and no other, whilst the pooled coarse
+    vector sees every cell. The conv trunk before the feature map reaches
+    across cell edges as beta_v2's does, so this is a property of the
+    branch, not of the whole encoder."""
+    m = build_model(_three_tier_cfg(["1:8:16:2", "2:8:16:2", "4:8:16:2"]))
+    enc = m.tokenizer.eval()
+    torch.manual_seed(0)
+    h = torch.randn(3, 32, 4, 4)
+    with torch.no_grad():
+        base = enc.mid(h)
+        assert base.shape == (3, 4, 8)
+        for r in range(4):
+            for c in range(4):
+                h2 = h.clone()
+                h2[:, :, r, c] += 1.0
+                moved = (enc.mid(h2) - base).abs().amax((0, 2)) > 0
+                own = (r // 2) * 2 + c // 2
+                assert moved.nonzero().flatten().tolist() == [own]
+    x = {"10m": torch.randn(1, 4, 24, 24), "20m": torch.randn(1, 6, 12, 12),
+         "60m": torch.randn(1, 3, 4, 4)}
+    with torch.no_grad():
+        h = enc.trunk(x)
+        coarse, mid, fine = enc(x)
+        assert torch.equal(mid, enc.mid(h))
+        assert torch.equal(fine, enc.hq_proj(h).flatten(2).transpose(1, 2))
+        x2 = {k: v.clone() for k, v in x.items()}
+        x2["60m"][:, :, 3, 3] += 1.0       # one corner 60 m pixel
+        c2, m2, _ = enc(x2)
+        assert not torch.equal(c2, coarse)
+        assert torch.equal(m2[:, 0], mid[:, 0])    # opposite corner block
+
+
+def test_three_tier_conv_encoder_trains(s2_store, tmp_path):
+    """Warmup with a quarter batch, tree init at full batch, then path
+    sampled quantised steps over all three tiers."""
+    from georvq.train.loop import train
+    cfg = Config.model_validate({
+        "data": {"source": "s2", "store_dir": str(s2_store), "val_frac": 0.0,
+                 "pool": {"size": 6, "workers": 0, "device": "cpu"}},
+        "model": {"window": 24, "bands": 13,
+                  "tiers": ["1:16:16:3", "2:16:32:3", "4:16:32:3"],
+                  "min_depths": [3, 0, 0], "depth_sampling": "path",
+                  "full_frac": 0.05,
+                  "tokenizer": {"kind": "source", "dim": 16},
+                  "decoder": {"dim": 32, "depth": 1, "heads": 4,
+                              "head_feat": 8, "cls_bridge": False},
+                  "vq": {"warmup_steps": 4, "init_mode": "tree",
+                         "init_per_code": 4, "reset_mode": "split",
+                         "clip_norm": 0.25}},
+        "train": {"steps": 8, "batch_windows": 8,
+                  "batch_ramp": {"until": 2, "divisor": 4}, "amp": False,
+                  "val_interval": 8, "fig_interval": 8, "save_interval": 8},
+        "eval": {"recon_tuples": ["3-0-0", "3-3-1", "3-3-3"]},
+        "log": {"run_tag": "w3", "wandb": False, "out_dir": str(tmp_path)},
+    })
+    run = train(cfg, gpu=-1)
+    blob = json.load(open(os.path.join(run, "final_val.json")))
+    assert {"3-0-0", "3-3-1", "3-3-3"} <= set(blob["quality_by_tuple"])
