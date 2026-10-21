@@ -1,0 +1,20 @@
+# Decoder-only stage for the HQ rungs alone (8-1 to 8-8) of the 36 px S2
+# model: the coarse tier always at 8 levels and the fine tier uniform over
+# 1..8 (nested, min_depths [8, 1], full_frac 0). 8-0 is left to the
+# separate coarse decoder (beta_arch_w36_coarse.yaml), so this decoder no
+# longer has to serve the coarse-only case, whose rows have about 7 times
+# the error of a full-depth row and pulled the shared decoder towards it.
+# Everything else as beta_arch_w36_dec.yaml (frozen encoder and books,
+# lr 5e-5 after 500 steps at lr 0 and a 1000-step warmup, cosine, batch
+# 16384, 15,000 steps, bf16), which was stable at that lr (job 1147,
+# stopped at step 2,000+ for this run).
+inherit: beta_arch_w36_dec.yaml
+
+model:
+  min_depths: [8, 1]
+
+log:
+  run_tag: beta_arch_w36_hq
+
+eval:
+  recon_tuples: ["8-1", "8-2", "8-4", "8-8"]
