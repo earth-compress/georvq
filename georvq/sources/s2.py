@@ -351,6 +351,18 @@ class S2Source(Source):
     def normalizer(self, model_cfg):
         return self._norm
 
+    #: denormalized values are reflectance / MAX_VALUE; this turns them
+    #: back into stored DN for figures
+    physical_scale = MAX_VALUE
+
+    @staticmethod
+    def error_parts(out, x, valid):
+        """Signed errors split by native grid, each over that grid's valid
+        pixels: {"10m": 1-D tensor, "20m": ..., "60m": ...}."""
+        return {g: (out[g].float() - x[g].float())[
+                    group_valid(valid, g).expand_as(x[g])]
+                for g in GROUPS}
+
     #: Share of a rung's index bits the stats channel may take before a
     #: cheaper encoding is chosen.
     STATS_BUDGET = 0.02
@@ -479,13 +491,11 @@ class S2Source(Source):
                       higher_better=False, bounded=False)
         # R=B04, G=B03, B=B02 within the 10m group's band order; the
         # preview selects that group out of the model's dict output.
-        # no error_hist: it does tensor arithmetic on the whole batch to
-        # build one signed-error distribution, which has no single meaning
-        # across three native grids. A per-group version would be worth
-        # having; it is not this figure.
+        # error_hist draws one row per native grid (`error_parts`), in
+        # standardized units and in DN
         return ReportSpec(
             quality=r2, extra=(rmse, sam), baselines=(),
-            figures=tuple(f for f in FIGURES if f != "error_hist"),
+            figures=FIGURES, units="DN",
             preview=band_rgb_preview(2, 1, 0, select=_s2_10m))
 
 

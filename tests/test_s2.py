@@ -555,3 +555,28 @@ def test_s2_w36_preset_tiles_l1c_and_keeps_its_sample_budget():
     torch.manual_seed(0)
     model = build_model(cfg)
     assert model.side_bits() == 16 * 26 + 8
+
+
+def test_error_histogram_has_a_row_per_native_grid(s2_store):
+    """S2's decoder emits three grids, so the signed-error histogram is
+    split by grid, in standardized units and in DN."""
+    import matplotlib
+    matplotlib.use("Agg")
+    from georvq.data.pool import fixed_val_tokens
+    from georvq.train.figures import error_hist_harvest, error_hist_render
+
+    cfg = _cfg()
+    model = build_model(cfg)
+    assert model.source.report(cfg.model).has_figure("error_hist")
+    val = fixed_val_tokens(s2_store, s2_store.index, token=24, per_chip=2,
+                           nodata=None)
+    h = error_hist_harvest(model, model.source, val, tuples=[[3, 0], [3, 3]],
+                           chunk=4)
+    assert set(h["rel"]) == {f"{t}|{g}" for t in ("3-0", "3-3")
+                             for g in ("10m", "20m", "60m")}
+    assert set(h["absu"]) == set(h["rel"])
+    # a 60 m error in DN is the standardized error times the band's std
+    # in DN, so the two spaces differ by far more than rounding
+    assert h["absu"]["3-0|60m"].abs().mean() > 10 * h["rel"]["3-0|60m"].abs().mean()
+    fig = error_hist_render(h, step=0, unit="DN")
+    assert len(fig.axes) == 6

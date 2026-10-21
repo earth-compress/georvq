@@ -390,18 +390,31 @@ def error_hist_harvest(model, source, val_s, tuples=None, mins=None,
     prep = _run_prep(model, source, prep)
     pts = ({tname(t): t for t in tuples} if tuples
            else canonical_tuples(model.specs, mins))
-    rel = {k: [] for k in pts}
+    # a multi-grid source (S2) splits each error into its native grids,
+    # one distribution per grid; keys become "<tuple>|<grid>"
+    parts = getattr(source, "error_parts", None)
+    rel = {} if parts else {k: [] for k in pts}
     absu = None
     with _harvest_mode(model, source):
         for i in range(0, min(max_tokens, val_s.shape[0]), chunk):
             x, v, _ = prep(val_s[i:i + chunk], {}, val_s.device)
             phys = _to_physical(source, prep)
             if absu is None and phys is not None:
-                absu = {k: [] for k in pts}
+                absu = {} if parts else {k: [] for k in pts}
             loc = val_loc[i:i + chunk] if val_loc is not None else None
             _, cums = model.level_cumsums(x, loc=loc, valid=v)
             for k, t in pts.items():
-                out = model.eval_tuple(cums, t, x, valid=v).float()
+                out = model.eval_tuple(cums, t, x, valid=v)
+                if parts:
+                    for g, e in parts(out, x, v).items():
+                        rel.setdefault(f"{k}|{g}", []).append(e.cpu())
+                    if phys is not None:
+                        scale = getattr(source, "physical_scale", 1.0)
+                        for g, e in parts(phys(out), phys(x), v).items():
+                            absu.setdefault(f"{k}|{g}", []).append(
+                                (e * scale).cpu())
+                    continue
+                out = out.float()
                 m = v.unsqueeze(1).expand_as(out)
                 rel[k].append((out - x)[m].cpu())
                 if phys is not None:
@@ -413,13 +426,24 @@ def error_hist_harvest(model, source, val_s, tuples=None, mins=None,
 def error_hist_render(payload, step, unit="source units"):
     """CPU phase: histograms from a harvest payload."""
     rel, absu = payload["rel"], payload["absu"]
-    panels = [("model space (per-tile normalized)", rel)]
+    spaces = [("model space (per-tile normalized)", rel)]
     if absu is not None:
-        panels.append((unit, absu))
-    colors = plt.cm.viridis(np.linspace(0.1, 0.9, len(rel)))
-    fig, axes = plt.subplots(1, len(panels), figsize=(5.2 * len(panels), 3.6),
+        spaces.append((unit, absu))
+    # "<tuple>|<grid>" keys (a multi-grid source) give one row per grid
+    grids = list(dict.fromkeys(k.split("|")[1] for k in rel if "|" in k))
+    rows = []
+    for g in grids or [None]:
+        pick = (lambda d: d) if g is None else (
+            lambda d, g=g: {k.split("|")[0]: v for k, v in d.items()
+                            if k.endswith("|" + g)})
+        rows.append([(name if g is None else f"{g}, {name}", pick(d))
+                     for name, d in spaces])
+    n_tuples = len(rows[0][0][1])
+    colors = plt.cm.viridis(np.linspace(0.1, 0.9, n_tuples))
+    fig, axes = plt.subplots(len(rows), len(spaces),
+                             figsize=(5.2 * len(spaces), 3.6 * len(rows)),
                              constrained_layout=True, squeeze=False)
-    for ax, (name, errs) in zip(axes[0], panels):
+    for ax, (name, errs) in zip(axes.flat, [p for r in rows for p in r]):
         es = {k: v.numpy() for k, v in errs.items()}
         lim = max(np.quantile(np.abs(e), 0.999) for e in es.values())
         edges = np.linspace(-lim, lim, 202)
