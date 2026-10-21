@@ -411,11 +411,15 @@ def _train(cfg: Config, gpu, stop):
         n_book = freeze_books(model)
         print(f"vq.freeze_books: {n_book/1e6:.1f}M codebook weights frozen "
               f"(no EMA, no resets, no grad)", flush=True)
-    if cfg.train.decoder_only:
-        n_dec = freeze_all_but_decoder(model)
-        print(f"train.decoder_only: {n_dec/1e6:.2f}M decoder params train; "
-              f"encoder and books frozen (eval, no EMA, no resets)",
-              flush=True)
+    # the top-level modules a decoder-only stage trains
+    dec_modules = (("coarse_decoder",) if cfg.train.coarse_decoder_only
+                   else DECODER_MODULES)
+    dec_stage = cfg.train.decoder_only or cfg.train.coarse_decoder_only
+    if dec_stage:
+        n_dec = freeze_all_but_decoder(model, dec_modules)
+        print(f"decoder-only stage: {n_dec/1e6:.2f}M params train in "
+              f"{dec_modules}; everything else frozen (eval, no EMA, no "
+              f"resets)", flush=True)
     if ddp_world > 1:
         # Absorb prefill skew explicitly before the first real collective:
         # ranks reach this point many minutes apart because each fills its
@@ -442,8 +446,8 @@ def _train(cfg: Config, gpu, stop):
     # params (the encoder) must be present from the start or
     # unfreezing them later would never take effect.
     def _trains_eventually(n, p):
-        if cfg.train.decoder_only:
-            return n.split(".")[0] in DECODER_MODULES
+        if dec_stage:
+            return n.split(".")[0] in dec_modules
         if v.freeze_books and n.startswith("rvqs."):
             return False              # frozen for the whole run
         if cfg.train.freeze_codec:
@@ -471,8 +475,8 @@ def _train(cfg: Config, gpu, stop):
               f"{sched.get_last_lr()[0]:.3g})", flush=True)
     elif cfg.train.init_from:
         ck = load_checkpoint(cfg.train.init_from, map_location=device)
-        if cfg.train.decoder_only:
-            print("train.decoder_only: fresh AdamW over the decoder",
+        if dec_stage:
+            print(f"decoder-only stage: fresh AdamW over {dec_modules}",
                   flush=True)
         elif "opt" in ck:
             try:
@@ -516,7 +520,7 @@ def _train(cfg: Config, gpu, stop):
     select_weight = (cfg.model.conditioning.weight
                      if cfg.model.conditioning is not None
                      and cfg.model.conditioning.kind == "select" else 0.0)
-    commit_weight = 0.0 if cfg.train.decoder_only else v.commit_weight
+    commit_weight = 0.0 if dec_stage else v.commit_weight
     # batch_windows is the GLOBAL batch: splitting it keeps the effective
     # batch, the LR schedule and the step count identical to a single-GPU
     # run, so extra ranks buy wall-clock rather than changing the recipe.
@@ -574,10 +578,10 @@ def _train(cfg: Config, gpu, stop):
     last_save = None
     last_val_ok = start - 1
     for step in range(start, cfg.train.steps + 1):
-        if cfg.train.decoder_only:
+        if dec_stage:
             # validate() and the figure harvests return the whole model
             # to train(), which would let BatchNorm and the books update
-            freeze_all_but_decoder(model)
+            freeze_all_but_decoder(model, dec_modules)
         if enc_frozen and step > cfg.train.freeze_encoder_steps:
             set_encoder_frozen(model, False)
             enc_frozen = False
@@ -703,6 +707,8 @@ def _train(cfg: Config, gpu, stop):
                 pt = torch.rand(x.shape[0], device=device) \
                     < v.passthrough_frac
                 Ls = torch.where(pt[:, None], Ls_full.expand_as(Ls), Ls)
+            if cfg.train.coarse_decoder_only:
+                Ls[:, 1:] = 0
             with amp:
                 zs = model.encode_levels(x, st, valid)
             mark_resets(model, step, first_reset)

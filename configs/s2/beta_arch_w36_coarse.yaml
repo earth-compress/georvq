@@ -1,0 +1,76 @@
+# A separate decoder for the coarse-only rung (8-0) of beta_arch_w36 at
+# step 42,500. The attention decoder serves every rung from 8-0 to 8-8 and
+# is told which by its AdaLN depth conditioning, so at 8-0, where it has
+# one vector to expand into a whole window, it spends shared capacity on a
+# problem unlike the others. Here 8-0 gets a decoder of its own and every
+# other rung keeps the attention decoder's weights unchanged.
+#
+#   sbatch scratch/s2-final/jobs/beta_arch_w36_coarse.sbatch
+#
+# model.coarse_decoder (S2CoarseDecoder in georvq/sources/s2.py) reads the
+# coarse tier's quantised vector, the sum of its 8 levels, and runs the
+# conv encoder backwards: a linear map to a 192-channel 6 x 6 map on the
+# 60 m grid, residual blocks and the 60 m head, nearest upsampling by 3 and
+# a 3x3 conv to 128 channels on the 20 m grid, residual blocks and the
+# 20 m head, then by 2 to 64 channels on the 10 m grid and the 10 m head.
+# Two residual blocks per grid, of the encoder's kind (3x3 then 1x1 conv,
+# BatchNorm). 2.3M parameters, 0.9M of them in the linear map. It has no
+# attention and no depth conditioning, since it only ever sees one depth.
+# PyramidCodec.decode sends rows whose fine tier is at depth 0 to it and
+# all other rows to the attention decoder, so validation, figures and
+# score_s2.py use it without change. The model has no decoder-side stats
+# conditioning (no model.stats_cond): the S2 normaliser removes and
+# restores the per-window mean and std outside the network, so the coarse
+# decoder emits the same normalised groups as the attention decoder's
+# head.
+#
+# train.coarse_decoder_only freezes the encoder, the books and the
+# attention decoder (eval mode, no gradient), sets every row's fine-tier
+# depth to 0 and trains the coarse decoder alone from scratch with a fresh
+# AdamW. Nested sampling with min_depths [8, 0] keeps the coarse tier at 8
+# levels, so every row is 8-0. vq.warmup_steps 0 keeps the loaded books.
+#
+# lr 1e-3 with a 500-step warmup, then cosine to zero: the decoder is small
+# and starts from random weights, so it takes a higher rate than the 5e-5
+# of the attention decoder's fine-tuning. AdamW weight decay 0.01 and grad
+# clip 0.25, as the other S2 runs, and bf16 autocast as the base run.
+#
+# Batch 16384 windows. The attention decoder does not run on these rows,
+# so a step costs the frozen encoder's forward pass and a 2.3M-parameter
+# conv stack, and the batch is limited by the 10 m stage's activations
+# (64 x 36 x 36 per window). 10,000 steps (164M windows): a decoder of
+# this size fed one 128-d vector per window should level off within a few
+# thousand steps at this batch, and the 8-0 validation every 500 steps
+# shows whether it has.
+#
+# Validation scores 8-0 (the coarse decoder) and 8-1, 8-4 and 8-8 (the
+# attention decoder), which must read the same as the frozen model's.
+# The collapse guard is off, as in beta_arch_w36_dec.yaml.
+inherit: beta_arch_w36.yaml
+
+model:
+  depth_sampling: nested
+  min_depths: [8, 0]
+  full_frac: 0.0
+  coarse_decoder: {widths: [192, 128, 64], blocks: 2}
+  vq:
+    warmup_steps: 0
+    clip_norm: 0.25
+
+train:
+  coarse_decoder_only: true
+  init_from: /home/ali/projects/georvq-s2-final/checkpoints/beta_arch_w36/frozen_42500.pt
+  steps: 10000
+  batch_windows: 16384
+  batch_ramp: null
+  guard_drop: null
+  optim: {lr: 1.0e-3, wd: 0.01, warmup: 500, schedule: cosine}
+  val_interval: 500
+  fig_interval: 2500
+  save_interval: 1000
+
+log:
+  run_tag: beta_arch_w36_coarse
+
+eval:
+  recon_tuples: ["8-0", "8-1", "8-4", "8-8"]

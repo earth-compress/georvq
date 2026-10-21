@@ -185,6 +185,52 @@ class S2ConvTileEncoder(nn.Module):
         return [coarse.unsqueeze(1), self.mid(h), fine]
 
 
+class S2CoarseDecoder(nn.Module):
+    """The coarse tier's single vector -> the three native grids, with no
+    attention and no depth conditioning, for windows sent coarse-only.
+
+    It runs the conv encoder's path backwards: a linear map to a feature
+    map on the 60 m grid (W/6), residual blocks and the 60 m head, nearest
+    upsampling by 3 to the 20 m grid, a 3x3 conv to the next width,
+    residual blocks and the 20 m head, then the same by 2 to the 10 m
+    grid. `widths` are the channels at 60, 20 and 10 m. The output is in
+    the normalised space the attention decoder's head emits.
+    """
+
+    def __init__(self, in_dim, window, widths=(192, 128, 64), blocks=2):
+        super().__init__()
+        if len(widths) != 3:
+            raise ValueError("S2CoarseDecoder needs one width per native "
+                             f"grid (60, 20, 10 m); got {list(widths)}")
+        w60, w20, w10 = widths
+        self.g = window // 6
+        self.w60 = w60
+        self.fc = nn.Linear(in_dim, w60 * self.g * self.g)
+        self.stage_60m = nn.Sequential(*[_ResBlock(w60)
+                                         for _ in range(blocks)])
+        self.up_20m = nn.Sequential(*_cbg(w60, w20, 3, 1, 1))
+        self.stage_20m = nn.Sequential(*[_ResBlock(w20)
+                                         for _ in range(blocks)])
+        self.up_10m = nn.Sequential(*_cbg(w20, w10, 3, 1, 1))
+        self.stage_10m = nn.Sequential(*[_ResBlock(w10)
+                                         for _ in range(blocks)])
+        self.heads = nn.ModuleDict({
+            "10m": nn.Conv2d(w10, GROUPS["10m"][0], 3, 1, 1),
+            "20m": nn.Conv2d(w20, GROUPS["20m"][0], 3, 1, 1),
+            "60m": nn.Conv2d(w60, GROUPS["60m"][0], 3, 1, 1)})
+
+    def forward(self, z):                              # (B, in_dim)
+        h60 = self.stage_60m(
+            self.fc(z).view(z.shape[0], self.w60, self.g, self.g))
+        h20 = self.stage_20m(self.up_20m(
+            F.interpolate(h60, scale_factor=3, mode="nearest")))
+        h10 = self.stage_10m(self.up_10m(
+            F.interpolate(h20, scale_factor=2, mode="nearest")))
+        return GroupBatch({"10m": self.heads["10m"](h10),
+                           "20m": self.heads["20m"](h20),
+                           "60m": self.heads["60m"](h60)})
+
+
 def _check_tile_layout(model_cfg, what):
     """The beta_v2 conv encoder needs a whole-window coarse cell and a fine
     cell of one 60 m pixel, with optionally a middle tier between them
@@ -347,6 +393,14 @@ class S2Source(Source):
         return S2ConvTileEncoder(
             t[0].dim, t[-1].dim, width=model_cfg.tokenizer.dim,
             mid_dim=t[1].dim if mid_cell else None, mid_cell=mid_cell)
+
+    def build_coarse_decoder(self, model_cfg) -> nn.Module:
+        if model_cfg.window % 6:
+            raise ValueError("the S2 coarse decoder needs a window "
+                             f"divisible by 6; got {model_cfg.window}")
+        c = model_cfg.coarse_decoder
+        return S2CoarseDecoder(model_cfg.tiers[0].dim, model_cfg.window,
+                               widths=c.widths, blocks=c.blocks)
 
     def normalizer(self, model_cfg):
         return self._norm

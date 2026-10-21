@@ -105,6 +105,22 @@ class DecoderStageConfig(StrictModel):
     ff_ratio: Optional[float] = None
 
 
+class CoarseDecoderConfig(StrictModel):
+    """A second decoder for the rows that carry the coarsest tier alone.
+
+    When it is configured, `PyramidCodec.decode` sends every row whose
+    finer tiers are all at depth 0 to this decoder and every other row to
+    the main one, so the main decoder's parameters and outputs are
+    untouched. It reads only the coarse tier's quantised vector and sees
+    one kind of input, so it takes no depth conditioning. The source
+    builds it (`Source.build_coarse_decoder`), since the output layout is
+    the source's; `widths` gives the channels of its stages, coarsest
+    first, and `blocks` the residual blocks per stage.
+    """
+    widths: list[int] = Field(default_factory=lambda: [192, 128, 64])
+    blocks: int = 2
+
+
 class DecoderConfig(StrictModel):
     # "attn": mixing decoder + per-source pixel head read from the fine
     # tokens. "tiersum": every present tier gets its own map head, the
@@ -366,6 +382,9 @@ class ModelConfig(StrictModel):
     # Resolution-matched decoders, one per tier prefix. None keeps the
     # single decoder every existing preset and checkpoint uses.
     decoder_bank: Optional[list[DecoderStageConfig]] = None
+    # A conv decoder for coarse-only rows (finer tiers all at depth 0).
+    # None decodes every row with `decoder`.
+    coarse_decoder: Optional[CoarseDecoderConfig] = None
     vq: Optional[VQConfig] = Field(default_factory=VQConfig)
     # PCA basis for a source NORMALIZER's stats side channel, fitted by
     # scripts/fit_stats_pca_s2.py. Distinct from `stats_cond`, which
@@ -460,6 +479,17 @@ class ModelConfig(StrictModel):
                         f"member must use decoder.dim {self.decoder.dim}; "
                         f"entries {bad} differ")
             self.decoder_bank = b
+        if self.coarse_decoder is not None:
+            if len(self.tiers) < 2 or self.vq is None:
+                raise ValueError("model.coarse_decoder needs a quantised "
+                                 "model with at least two tiers")
+            if self.decoder_bank is not None or self.decoder.kind != "attn":
+                raise ValueError("model.coarse_decoder works with the single "
+                                 "attention decoder only")
+            if self.stats_cond is not None and self.stats_cond.cond_decoder:
+                raise ValueError("model.coarse_decoder takes no stats "
+                                 "conditioning; set stats_cond.cond_decoder "
+                                 "false")
         # The latents must be the TIGHTEST bottleneck in the model: a
         # trunk narrower than a tier's latent caps that latent's usable
         # rank and silently confounds any latent-width experiment (the
@@ -613,6 +643,10 @@ class TrainConfig(StrictModel):
     # gradient, so the books take no EMA update, reset or init, and the
     # commitment loss is dropped. The optimiser starts fresh.
     decoder_only: bool = False
+    # As decoder_only, but the coarse decoder alone trains (the main
+    # decoder is frozen too) and every row is decoded coarse-only: the
+    # finer tiers' sampled depths are set to 0.
+    coarse_decoder_only: bool = False
     optim: OptimConfig = Field(default_factory=OptimConfig)
     seed: int = 0
     val_interval: int = 1000
@@ -834,6 +868,20 @@ class Config(StrictModel):
             if v is None or v.warmup_steps:
                 raise ValueError("train.decoder_only needs a quantised model "
                                  "with model.vq.warmup_steps: 0, so that the "
+                                 "loaded books are never refitted")
+        if self.train.coarse_decoder_only:
+            if self.train.decoder_only:
+                raise ValueError("train.decoder_only and "
+                                 "train.coarse_decoder_only are exclusive")
+            if self.model.coarse_decoder is None:
+                raise ValueError("train.coarse_decoder_only needs "
+                                 "model.coarse_decoder")
+            if self.train.init_from is None and self.train.resume is None:
+                raise ValueError("train.coarse_decoder_only requires "
+                                 "train.init_from")
+            if v is None or v.warmup_steps:
+                raise ValueError("train.coarse_decoder_only needs "
+                                 "model.vq.warmup_steps: 0, so that the "
                                  "loaded books are never refitted")
         if self.train.freeze_codec:
             if self.train.init_from is None:
