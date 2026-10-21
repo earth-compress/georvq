@@ -354,22 +354,25 @@ class GeotesseraTile:
     grid_{lon}_{lat}/grid_{lon}_{lat}.npy` and `_scales.npy`, landmasks in
     `global_0.1_degree_tiff_all/`). `landmask` is a landmask GeoTIFF to
     georeference by, overriding the one under `root`; `cache_dir` keeps
-    downloads. The tile is georeferenced by its landmask when one is
-    found, else by `rule_georef`; when both are available a disagreement
-    warns and the landmask is used."""
+    downloads. `source_root`, when given, is the root whose paths the
+    store's header records as the tile's source, for a tile read from a
+    local copy of the bucket (default: `root`). The tile is georeferenced
+    by its landmask when one is found, else by `rule_georef`; when both
+    are available a disagreement warns and the landmask is used."""
 
     def __init__(self, year, lon, lat, root=TESSERA_BUCKET, landmask=None,
-                 cache_dir=None, check_rule=True):
+                 cache_dir=None, check_rule=True, source_root=None):
         from rasterio.crs import CRS
         self.year, self.lon, self.lat = int(year), float(lon), float(lat)
         name = tile_name(lon, lat)
         root = root.rstrip("/") + "/"
-        base = f"{root}{EMBEDDINGS_DIR}/{self.year}/{name}/{name}"
-        self.embedding_path, self.scales_path = base + ".npy", base + "_scales.npy"
-        q = np.load(io.BytesIO(_read(self.embedding_path, cache_dir)),
+        rel = f"{EMBEDDINGS_DIR}/{self.year}/{name}/{name}"
+        q = np.load(io.BytesIO(_read(f"{root}{rel}.npy", cache_dir)),
                     allow_pickle=False)
-        s = np.load(io.BytesIO(_read(self.scales_path, cache_dir)),
+        s = np.load(io.BytesIO(_read(f"{root}{rel}_scales.npy", cache_dir)),
                     allow_pickle=False)
+        rec = (source_root or root).rstrip("/") + "/" + rel
+        self.embedding_path, self.scales_path = rec + ".npy", rec + "_scales.npy"
         if q.ndim != 3 or q.shape[-1] != BANDS or q.dtype != np.int8:
             raise ValueError(f"{self.embedding_path}: {q.dtype} {q.shape}, "
                              f"expected int8 (H, W, {BANDS})")
@@ -474,8 +477,8 @@ def build_index(stores, manifest, out_path=None, url_prefix=None, root=None):
     """Index of Tessera v2 stores joined to geotessera's manifest
     (`manifest.parquet`, one row per (year, lon, lat) tile) on (year,
     lon_i, lat_i): the manifest's columns, `path` (the store, `url_prefix`
-    joined to its path relative to `root` when given), and the store
-    facts of georvq.inference.store_index.tile_record. Writes Parquet to
+    joined to its path relative to `root` when given, or that relative
+    path alone when `url_prefix` is ""), and the store facts of georvq.inference.store_index.tile_record. Writes Parquet to
     `out_path` when given; returns the table."""
     import pyarrow as pa
     import pyarrow.parquet as pq
@@ -499,7 +502,8 @@ def build_index(stores, manifest, out_path=None, url_prefix=None, root=None):
         rec = tile_record(f)
         path = os.path.abspath(f)
         if url_prefix is not None:
-            path = url_prefix.rstrip("/") + "/" + os.path.relpath(
+            prefix = url_prefix.rstrip("/")
+            path = (prefix + "/" if prefix else "") + os.path.relpath(
                 f, os.fspath(root)).replace(os.sep, "/")
         rows.append({"path": path, **{k: rec[k] for k in (
             "bitstream_id", "decoder_id", "store_bytes", "metadata_bytes",
@@ -554,6 +558,9 @@ def main(argv=None):
                    help="lon,lat of a tile centre, e.g. 17.25,46.75; repeat")
     e.add_argument("--bundle", required=True)
     e.add_argument("--root", default=TESSERA_BUCKET)
+    e.add_argument("--source-root", default=None,
+                   help="root recorded as the tiles' source in the headers "
+                        "(default: --root)")
     e.add_argument("--cache-dir", default=None,
                    help="keep downloaded tiles here")
     e.add_argument("--device", default=None)
@@ -589,7 +596,8 @@ def main(argv=None):
                             default_device("torch"))
     for lon, lat in args.tile:
         tile = GeotesseraTile(args.year, lon, lat, root=args.root,
-                              cache_dir=args.cache_dir)
+                              cache_dir=args.cache_dir,
+                              source_root=args.source_root)
         out = store_path(args.out_dir, args.year, lon, lat)
         os.makedirs(os.path.dirname(out), exist_ok=True)
         t = encode_tile(tile, out, codec, stats=not args.no_quality,

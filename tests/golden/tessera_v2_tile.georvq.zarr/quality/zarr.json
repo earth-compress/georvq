@@ -1,0 +1,9 @@
+{
+  "attributes": {
+    "decoders": [
+      "0b7fe2594606214a"
+    ]
+  },
+  "zarr_format": 3,
+  "node_type": "group"
+}

@@ -60,9 +60,19 @@ TESSERA embeddings (University of Cambridge) -- CC-BY-SA 4.0
     notebooks/demo_tessera_codec.ipynb (cell outputs)
         figures and values computed from TESSERA embeddings and their
         georvq encodings.
-  Changes: windows were cropped from the distributed int8 embeddings and
-  their scale planes; codes are lossy encodings of them. These files
-  are shared under the same licence.
+    tests/golden/tessera_v2_tile_inputs.npz
+        a 100 x 120 px crop of the 2024 embeddings near 35.48 N,
+        135.64 E (int8 codes and the per-pixel scale plane), from a
+        validation chip.
+    tests/golden/tessera_v2_golden.npz
+        codes and decode hashes of that crop under the georvq Tessera v2
+        codec.
+    tests/golden/tessera_v2_tile.georvq.zarr
+        that crop encoded with the georvq Tessera v2 codec (lossy).
+  Changes: windows and the crop were cut from the distributed int8
+  embeddings and their scale planes (the crop's scales rounded to
+  float16); codes are lossy encodings of them. These files are shared
+  under the same licence.
 
 
 Major TOM Core-S2L1C -- CC-BY-SA 4.0 (LICENSES/CC-BY-SA-4.0.txt)

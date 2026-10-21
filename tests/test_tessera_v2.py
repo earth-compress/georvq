@@ -174,6 +174,13 @@ def test_tile_is_georeferenced_by_its_landmask(tiny, tmp_path):
     root = _root(tmp_path / "b", q, s, landmask=False)
     with pytest.raises(ValueError, match="its rule gives"):
         v2.GeotesseraTile(YEAR, LON, LAT, root=str(root))
+    rel = f"{v2.EMBEDDINGS_DIR}/{YEAR}/grid_17.25_46.75/grid_17.25_46.75"
+    assert t.source == str(tiny["tmp"] / "bucket") + "/" + rel + ".npy"
+    u = v2.GeotesseraTile(YEAR, LON, LAT, root=str(tiny["tmp"] / "bucket"),
+                          check_rule=False, source_root=v2.TESSERA_BUCKET)
+    assert u.source == v2.TESSERA_BUCKET + rel + ".npy"
+    assert u.product_meta["scales"] == v2.TESSERA_BUCKET + rel + "_scales.npy"
+    assert np.array_equal(u.q, t.q) and np.array_equal(u.s, t.s)
 
 
 def test_store_header(tiny):
@@ -229,3 +236,9 @@ def test_index_joins_the_manifest(tiny, tmp_path):
     t = v2.build_index(os.path.dirname(os.path.dirname(tiny["store"])), man)
     assert t.num_rows == 1 and t.column("grid_path").to_pylist() == ["a"]
     assert t.column("rungs").to_pylist()[0][0]["rung"] == "2-0-0"
+    root = os.path.dirname(os.path.dirname(tiny["store"]))
+    for prefix, want in (("", "2024/grid_17.25_46.75.georvq.zarr"),
+                         ("https://h/x/", "https://h/x/2024/grid_17.25_46.75"
+                                          ".georvq.zarr")):
+        t = v2.build_index(root, man, url_prefix=prefix)
+        assert t.column("path").to_pylist() == [want]

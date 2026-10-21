@@ -1,0 +1,495 @@
+{
+  "shape": [
+    2,
+    2,
+    84
+  ],
+  "data_type": "uint8",
+  "chunk_grid": {
+    "name": "regular",
+    "configuration": {
+      "chunk_shape": [
+        2,
+        2,
+        84
+      ]
+    }
+  },
+  "chunk_key_encoding": {
+    "name": "default",
+    "configuration": {
+      "separator": "/"
+    }
+  },
+  "fill_value": 0,
+  "codecs": [
+    {
+      "name": "bytes"
+    }
+  ],
+  "attributes": {
+    "zarr_conventions": [
+      {
+        "schema_url": "https://raw.githubusercontent.com/zarr-conventions/proj/refs/tags/v0.1/schema.json",
+        "spec_url": "https://github.com/zarr-conventions/proj/blob/v0.1/README.md",
+        "uuid": "f17cb550-5864-4468-aeb7-f3180cfb622f",
+        "name": "proj",
+        "description": "Coordinate reference system information for geospatial data"
+      },
+      {
+        "schema_url": "https://raw.githubusercontent.com/zarr-conventions/spatial/refs/tags/v0.1/schema.json",
+        "spec_url": "https://github.com/zarr-conventions/spatial/blob/v0.1/README.md",
+        "uuid": "689b58e2-cf7b-45e0-9fff-9cfc0883d6b4",
+        "name": "spatial",
+        "description": "Spatial coordinate information"
+      }
+    ],
+    "proj:code": "EPSG:32653",
+    "spatial:dimensions": [
+      "wy",
+      "wx"
+    ],
+    "spatial:shape": [
+      2,
+      2
+    ],
+    "spatial:transform": [
+      640.0,
+      0.0,
+      557196.1865261089,
+      0.0,
+      -640.0,
+      3928278.6666762675
+    ],
+    "spatial:bbox": [
+      557196.1865261089,
+      3926998.6666762675,
+      558476.1865261089,
+      3928278.6666762675
+    ],
+    "spatial:registration": "pixel",
+    "georvq_quality": {
+      "decoder_id": "0b7fe2594606214a",
+      "bitstream_id": "cdadaa29e3b5f45a",
+      "release": {
+        "name": "golden",
+        "bitstream_id": "cdadaa29e3b5f45a",
+        "decoder_id": "0b7fe2594606214a",
+        "uri": "hf://earth-compress/georvq-tessera-v2",
+        "revision": null
+      },
+      "rungs": [
+        {
+          "tuple": [
+            4,
+            0,
+            0
+          ],
+          "bits_window": 928,
+          "bits_px": 0.2265625
+        },
+        {
+          "tuple": [
+            5,
+            0,
+            0
+          ],
+          "bits_window": 936,
+          "bits_px": 0.228515625
+        },
+        {
+          "tuple": [
+            6,
+            0,
+            0
+          ],
+          "bits_window": 944,
+          "bits_px": 0.23046875
+        },
+        {
+          "tuple": [
+            7,
+            0,
+            0
+          ],
+          "bits_window": 952,
+          "bits_px": 0.232421875
+        },
+        {
+          "tuple": [
+            8,
+            0,
+            0
+          ],
+          "bits_window": 960,
+          "bits_px": 0.234375
+        },
+        {
+          "tuple": [
+            9,
+            0,
+            0
+          ],
+          "bits_window": 968,
+          "bits_px": 0.236328125
+        },
+        {
+          "tuple": [
+            10,
+            0,
+            0
+          ],
+          "bits_window": 976,
+          "bits_px": 0.23828125
+        },
+        {
+          "tuple": [
+            11,
+            0,
+            0
+          ],
+          "bits_window": 984,
+          "bits_px": 0.240234375
+        },
+        {
+          "tuple": [
+            12,
+            0,
+            0
+          ],
+          "bits_window": 992,
+          "bits_px": 0.2421875
+        },
+        {
+          "tuple": [
+            13,
+            0,
+            0
+          ],
+          "bits_window": 1000,
+          "bits_px": 0.244140625
+        },
+        {
+          "tuple": [
+            14,
+            0,
+            0
+          ],
+          "bits_window": 1008,
+          "bits_px": 0.24609375
+        },
+        {
+          "tuple": [
+            15,
+            0,
+            0
+          ],
+          "bits_window": 1016,
+          "bits_px": 0.248046875
+        },
+        {
+          "tuple": [
+            16,
+            0,
+            0
+          ],
+          "bits_window": 1024,
+          "bits_px": 0.25
+        },
+        {
+          "tuple": [
+            17,
+            0,
+            0
+          ],
+          "bits_window": 1032,
+          "bits_px": 0.251953125
+        },
+        {
+          "tuple": [
+            18,
+            0,
+            0
+          ],
+          "bits_window": 1040,
+          "bits_px": 0.25390625
+        },
+        {
+          "tuple": [
+            19,
+            0,
+            0
+          ],
+          "bits_window": 1048,
+          "bits_px": 0.255859375
+        },
+        {
+          "tuple": [
+            20,
+            0,
+            0
+          ],
+          "bits_window": 1056,
+          "bits_px": 0.2578125
+        },
+        {
+          "tuple": [
+            20,
+            1,
+            0
+          ],
+          "bits_window": 1232,
+          "bits_px": 0.30078125
+        },
+        {
+          "tuple": [
+            20,
+            2,
+            0
+          ],
+          "bits_window": 1408,
+          "bits_px": 0.34375
+        },
+        {
+          "tuple": [
+            20,
+            3,
+            0
+          ],
+          "bits_window": 1584,
+          "bits_px": 0.38671875
+        },
+        {
+          "tuple": [
+            20,
+            4,
+            0
+          ],
+          "bits_window": 1760,
+          "bits_px": 0.4296875
+        },
+        {
+          "tuple": [
+            20,
+            5,
+            0
+          ],
+          "bits_window": 1936,
+          "bits_px": 0.47265625
+        },
+        {
+          "tuple": [
+            20,
+            6,
+            0
+          ],
+          "bits_window": 2112,
+          "bits_px": 0.515625
+        },
+        {
+          "tuple": [
+            20,
+            7,
+            0
+          ],
+          "bits_window": 2288,
+          "bits_px": 0.55859375
+        },
+        {
+          "tuple": [
+            20,
+            8,
+            0
+          ],
+          "bits_window": 2464,
+          "bits_px": 0.6015625
+        },
+        {
+          "tuple": [
+            20,
+            9,
+            0
+          ],
+          "bits_window": 2640,
+          "bits_px": 0.64453125
+        },
+        {
+          "tuple": [
+            20,
+            10,
+            0
+          ],
+          "bits_window": 2816,
+          "bits_px": 0.6875
+        },
+        {
+          "tuple": [
+            20,
+            11,
+            0
+          ],
+          "bits_window": 2992,
+          "bits_px": 0.73046875
+        },
+        {
+          "tuple": [
+            20,
+            12,
+            0
+          ],
+          "bits_window": 3168,
+          "bits_px": 0.7734375
+        },
+        {
+          "tuple": [
+            20,
+            13,
+            0
+          ],
+          "bits_window": 3344,
+          "bits_px": 0.81640625
+        },
+        {
+          "tuple": [
+            20,
+            13,
+            1
+          ],
+          "bits_window": 6416,
+          "bits_px": 1.56640625
+        },
+        {
+          "tuple": [
+            20,
+            13,
+            2
+          ],
+          "bits_window": 9488,
+          "bits_px": 2.31640625
+        },
+        {
+          "tuple": [
+            20,
+            13,
+            3
+          ],
+          "bits_window": 12560,
+          "bits_px": 3.06640625
+        },
+        {
+          "tuple": [
+            20,
+            13,
+            4
+          ],
+          "bits_window": 15632,
+          "bits_px": 3.81640625
+        },
+        {
+          "tuple": [
+            20,
+            13,
+            5
+          ],
+          "bits_window": 18704,
+          "bits_px": 4.56640625
+        },
+        {
+          "tuple": [
+            20,
+            13,
+            6
+          ],
+          "bits_window": 21776,
+          "bits_px": 5.31640625
+        },
+        {
+          "tuple": [
+            20,
+            13,
+            7
+          ],
+          "bits_window": 24848,
+          "bits_px": 6.06640625
+        },
+        {
+          "tuple": [
+            20,
+            13,
+            8
+          ],
+          "bits_window": 27920,
+          "bits_px": 6.81640625
+        },
+        {
+          "tuple": [
+            20,
+            13,
+            9
+          ],
+          "bits_window": 30992,
+          "bits_px": 7.56640625
+        },
+        {
+          "tuple": [
+            20,
+            13,
+            10
+          ],
+          "bits_window": 34064,
+          "bits_px": 8.31640625
+        },
+        {
+          "tuple": [
+            20,
+            13,
+            11
+          ],
+          "bits_window": 37136,
+          "bits_px": 9.06640625
+        },
+        {
+          "tuple": [
+            20,
+            13,
+            12
+          ],
+          "bits_window": 40208,
+          "bits_px": 9.81640625
+        }
+      ],
+      "fields": [
+        {
+          "name": "mean",
+          "count": 42,
+          "bits": 8
+        },
+        {
+          "name": "p99",
+          "count": 42,
+          "bits": 8
+        }
+      ],
+      "quality": {
+        "stats": [
+          "mean",
+          "p99"
+        ],
+        "error": "||decoded - source|| / ||source|| per valid pixel (relative L2 of the 128-band vector), decoded float field against the prepared source",
+        "encoding": "code = round(32 * (log10(e) + 6)) clipped to 0..255; 0 means e <= 1e-6",
+        "scale": 32.0,
+        "offset": 6.0,
+        "order": "per stat, one byte per rung in header rungs order",
+        "decode_precision": "fp32"
+      }
+    }
+  },
+  "dimension_names": [
+    "wy",
+    "wx",
+    "quality_byte"
+  ],
+  "zarr_format": 3,
+  "node_type": "array",
+  "storage_transformers": []
+}
