@@ -149,6 +149,14 @@ class RVQPCAMeanChannel:
     bits:  (D,) bits per component (0 = not sent); clip: (D,) per-component
            half-range in units of s, used at that component's bit count.
 
+    pre_scale, pre_log: optional (D,) fixed transform into the space the
+           tables were fitted in, y = log(x) * pre_scale on the dimensions
+           where pre_log is set and y = x * pre_scale elsewhere. It lets one
+           coder weight its dimensions unequally (a per-dimension error
+           budget) or code positive quantities to a relative error. Without
+           it the tables code x directly, as for AE and Tessera, and the
+           saved file holds no transform arrays.
+
     Encode searches the RVQ levels greedily in float32; near-ties may
     resolve differently across hardware, which changes which (valid)
     codes are sent, not how they decode. Decode is a fixed float32
@@ -157,7 +165,8 @@ class RVQPCAMeanChannel:
 
     kind = "rvq-pca"
 
-    def __init__(self, books, mu0, V, s, bits, clip):
+    def __init__(self, books, mu0, V, s, bits, clip, pre_scale=None,
+                 pre_log=None):
         self.books = np.asarray(books, dtype=np.float32)
         self.mu0 = np.asarray(mu0, dtype=np.float32)
         self.V = np.asarray(V, dtype=np.float32)
@@ -175,6 +184,17 @@ class RVQPCAMeanChannel:
             raise ValueError(f"V must have shape ({D}, {D})")
         if (self.bits < 0).any() or (self.bits > 16).any():
             raise ValueError("component bits must be in 0..16")
+        self.pre_scale = self.pre_log = None
+        if pre_scale is not None or pre_log is not None:
+            self.pre_scale = (np.ones(D, np.float32) if pre_scale is None
+                              else np.asarray(pre_scale, dtype=np.float32))
+            self.pre_log = (np.zeros(D, bool) if pre_log is None
+                            else np.asarray(pre_log, dtype=bool))
+            if self.pre_scale.shape != (D,) or self.pre_log.shape != (D,):
+                raise ValueError(f"pre_scale and pre_log must have shape "
+                                 f"({D},)")
+            if not (self.pre_scale > 0).all():
+                raise ValueError("pre_scale must be positive")
 
     @property
     def bands(self) -> int:
@@ -211,12 +231,28 @@ class RVQPCAMeanChannel:
             k = j
         return out
 
+    # ---- transform ----
+
+    def to_coded(self, x) -> np.ndarray:
+        """(N, D) values -> the space the tables code (identity without a
+        transform)."""
+        return coded_space(x, self.pre_scale, self.pre_log)
+
+    def from_coded(self, y) -> np.ndarray:
+        """Inverse of `to_coded`."""
+        y = np.asarray(y, dtype=np.float32)
+        if self.pre_scale is None:
+            return y
+        x = y / self.pre_scale
+        x[:, self.pre_log] = np.exp(x[:, self.pre_log])
+        return x.astype(np.float32)
+
     # ---- code ----
 
     def encode(self, mu) -> np.ndarray:
         """(N, D) float -> (N, L + D) int64 fields: RVQ indices, then
         per-component codes (0 for components given no bits)."""
-        r = np.asarray(mu, dtype=np.float32)
+        r = self.to_coded(mu)
         idx = []
         for C in self.books:
             d = ((r * r).sum(1, keepdims=True) - 2 * r @ C.T
@@ -245,7 +281,7 @@ class RVQPCAMeanChannel:
                 n = 1 << b
                 lo, w = -self.clip[k] * self.s[k], 2 * self.clip[k] * self.s[k]
                 ch[:, k] = lo + (f[:, L + k] + 0.5) * w / n
-        return out + self.mu0 + ch @ self.V.T
+        return self.from_coded(out + self.mu0 + ch @ self.V.T)
 
     def round_trip(self, mu) -> np.ndarray:
         """The mean the decoder will see; encode the window against this."""
@@ -264,12 +300,16 @@ class RVQPCAMeanChannel:
     @classmethod
     def fit_residual(cls, books, residual, total_bits: int,
                      clips=(1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 5.0),
-                     bmax: int = 14) -> "RVQPCAMeanChannel":
+                     bmax: int = 14, pre_scale=None,
+                     pre_log=None) -> "RVQPCAMeanChannel":
         """PCA coder for `residual` (N, D), the means minus their RVQ
         reconstruction, with `total_bits - L * index_bits` bits shared
         across components greedily from an empirical distortion table
         (1- or 2-bit steps, best drop per bit). Each (component, bits)
-        pair keeps the clip range with the lowest distortion."""
+        pair keeps the clip range with the lowest distortion. With a
+        transform (`pre_scale`, `pre_log`), `books` and `residual` are in
+        the coded space (`coded_space`), and the channel carries the
+        transform."""
         books = np.asarray(books, dtype=np.float32)
         L, K, D = books.shape
         budget = int(total_bits) - L * (int(K).bit_length() - 1)
@@ -309,23 +349,51 @@ class RVQPCAMeanChannel:
             bits[k] += step
             left -= step
         clip = np.array([Ct[k, bits[k]] for k in range(D)])
-        return cls(books, mu0, V, s, bits, clip)
+        return cls(books, mu0, V, s, bits, clip, pre_scale, pre_log)
 
     # ---- persistence ----
 
+    def _transform_arrays(self) -> dict:
+        if self.pre_scale is None:
+            return {}
+        return {"pre_scale": self.pre_scale,
+                "pre_log": self.pre_log.astype(np.uint8)}
+
     def save(self, path):
         np.savez(path, books=self.books, mu0=self.mu0, V=self.V, s=self.s,
-                 bits=self.bits.astype(np.int32), clip=self.clip)
+                 bits=self.bits.astype(np.int32), clip=self.clip,
+                 **self._transform_arrays())
 
     @classmethod
     def load(cls, path) -> "RVQPCAMeanChannel":
         z = np.load(path, allow_pickle=False)
-        return cls(z["books"], z["mu0"], z["V"], z["s"], z["bits"], z["clip"])
+        pre = ((z["pre_scale"], z["pre_log"].astype(bool))
+               if "pre_scale" in z.files else (None, None))
+        return cls(z["books"], z["mu0"], z["V"], z["s"], z["bits"], z["clip"],
+                   *pre)
 
     def id_state(self) -> list:
         """What a decoder must agree on, for `bitstream_id(extra=...)`."""
         return [self.books, self.mu0, self.V, self.s,
-                self.bits.astype(np.int32), self.clip]
+                self.bits.astype(np.int32), self.clip,
+                *self._transform_arrays().values()]
+
+
+def coded_space(x, pre_scale=None, pre_log=None) -> np.ndarray:
+    """(N, D) values -> the space an `RVQPCAMeanChannel` with this
+    transform fits and codes in: log on the `pre_log` dimensions, then
+    times `pre_scale`. Log dimensions must be positive."""
+    y = np.array(x, dtype=np.float32)
+    if pre_scale is None and pre_log is None:
+        return y
+    if pre_log is not None:
+        lg = np.asarray(pre_log, dtype=bool)
+        if (y[:, lg] <= 0).any():
+            raise ValueError("log-coded dimensions must be positive")
+        y[:, lg] = np.log(y[:, lg])
+    if pre_scale is not None:
+        y = y * np.asarray(pre_scale, dtype=np.float32)
+    return y.astype(np.float32)
 
 
 CHANNELS = {MeanChannel.kind: MeanChannel,
