@@ -1,0 +1,49 @@
+# beta_arch (beta_v4's architecture, georvq's single-stage recipe) on the
+# 36 px window of s2_w36, after beta_arch at 42 px passed beta_v4 (no
+# deblock) at 8-4 and 8-8 in trainer R2 by step 40k. The window divides a
+# 10980 px L1C tile exactly (305 x 305 windows).
+#
+#   sbatch scratch/s2-final/jobs/beta_arch_w36.sbatch
+#
+# The conv encoder needs no change: it is fully convolutional with a total
+# stride of 6, so 36 px gives a 6 x 6 grid of 6 px cells and one
+# whole-window vector. Everything else is beta_arch.yaml.
+#
+# Books of K=8192 on both tiers rather than beta's 16384, which halves
+# what a client downloads for the books (16.8M parameters against 33.6M).
+#
+# Batch 7168 windows, the largest of 4096 / 5632 / 7168 measured by job
+# 1012 (peak GPU memory 38.8 / 52.8 / 67.0 GB over quantised steps), with
+# 13 GB left on the 80 GB card. The coarse book then gets
+# 7168 x 500 / 8192 = 437 vectors per code per EMA window, about the ~450
+# the sample-budget rule asks for, and the fine book 7168 x 36 x 500 /
+# 8192 = 15,750 before path sampling thins the deep levels.
+#
+# 100,000 steps, 717M windows: beta_arch at 42 px had levelled off by
+# about 80k steps of 2048 (164M windows), and this is about 2.5 days at an
+# estimated 2 s per step.
+#
+# The rate per pixel of the fine tier is unchanged (one cell per 36 px at
+# 10 m either way), whilst the per-window costs rise by 1764 / 1296 = 1.36:
+# the float16 stats are 424 bits, 0.327 b/px here against 0.240, and each
+# coarse level 14 bits, 0.0108 b/px against 0.0079.
+#
+# No reference curves: artifacts/s2_ref_beta_v4.json was scored on 42 px
+# windows, and trainer R2 on per-window normalised data is not comparable
+# across window sizes. Compare with beta_v4 and beta_arch through
+# scratch/s2-final/score_s2.py, in DN at matched rate.
+inherit: beta_arch.yaml
+
+model:
+  window: 36
+  tiers: ["1:128:8192:8", "6:128:8192:8"]
+
+train:
+  steps: 100000
+  batch_windows: 7168
+
+log:
+  run_tag: beta_arch_w36
+
+eval:
+  ref_curves: []

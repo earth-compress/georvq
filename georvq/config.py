@@ -608,6 +608,11 @@ class TrainConfig(StrictModel):
     resume: Optional[Path] = None
     freeze_encoder_steps: int = 0
     freeze_codec: bool = False
+    # Train the decoder (and stats_dec, if any) alone on the codes of the
+    # init_from checkpoint. Everything else is held in eval mode with no
+    # gradient, so the books take no EMA update, reset or init, and the
+    # commitment loss is dropped. The optimiser starts fresh.
+    decoder_only: bool = False
     optim: OptimConfig = Field(default_factory=OptimConfig)
     seed: int = 0
     val_interval: int = 1000
@@ -823,6 +828,13 @@ class Config(StrictModel):
                     f"model.vq.passthrough_frac ({v.passthrough_frac}) > 1: "
                     "they are shares of the same batch and leave no rows for "
                     "the sampled depth tuples")
+        if self.train.decoder_only:
+            if self.train.init_from is None and self.train.resume is None:
+                raise ValueError("train.decoder_only requires train.init_from")
+            if v is None or v.warmup_steps:
+                raise ValueError("train.decoder_only needs a quantised model "
+                                 "with model.vq.warmup_steps: 0, so that the "
+                                 "loaded books are never refitted")
         if self.train.freeze_codec:
             if self.train.init_from is None:
                 raise ValueError("train.freeze_codec requires train.init_from")
