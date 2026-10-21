@@ -15,7 +15,7 @@ from georvq.repro import load_checkpoint, run_metadata, save_checkpoint, seed_al
 
 RELEASED = [
     "/home/ali/projects/georvq/scratch/ae-v2/ownk_sc4_step80000.pt",
-    "/data/georvq-releases/tessera-beta-v1/bundle/model.pt",
+    "/data/georvq-releases/tessera-v2/tessera_v2_step88000.pt",
 ]
 
 

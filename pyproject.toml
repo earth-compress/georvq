@@ -36,8 +36,8 @@ dependencies = [
 [project.optional-dependencies]
 # training, stores, evaluation and figures
 train = ["pandas", "matplotlib", "scikit-learn", "wandb"]
-tessera = ["geotessera"]   # fetch Tessera tiles: the demo notebook, a store build
-# the tessera-vq baseline the demo compares against (Yang, Feng & Keshav)
+tessera = ["geotessera"]   # fetch Tessera tiles for a chip store build
+# the tessera-vq baseline (scripts/baseline_tessera_vq.py; Yang, Feng & Keshav)
 baseline = ["tessera-vq @ git+https://github.com/sk818/tessera-vq.git@v0.3.1"]
 # Downstream eval benchmarks (AEF extraction, ASTER GED, LUCAS/LCMAP)
 eval = ["georvq[train]", "h5py", "requests", "pyproj", "shapely"]

@@ -52,14 +52,6 @@ TESSERA embeddings (University of Cambridge) -- CC-BY-SA 4.0
   geotessera (https://github.com/ucam-eo/geotessera).
 
   Files:
-    tests/golden/tessera_val_windows.npz
-        three windows of TESSERA embeddings from validation chips.
-    tests/golden/tessera_golden.npz
-        codes, mean-channel codes and decode hashes of those windows
-        under the georvq Tessera release codec.
-    notebooks/demo_tessera_codec.ipynb (cell outputs)
-        figures and values computed from TESSERA embeddings and their
-        georvq encodings.
     tests/golden/tessera_v2_tile_inputs.npz
         a 100 x 120 px crop of the 2024 embeddings near 35.48 N,
         135.64 E (int8 codes and the per-pixel scale plane), from a
@@ -69,10 +61,9 @@ TESSERA embeddings (University of Cambridge) -- CC-BY-SA 4.0
         codec.
     tests/golden/tessera_v2_tile.georvq.zarr
         that crop encoded with the georvq Tessera v2 codec (lossy).
-  Changes: windows and the crop were cut from the distributed int8
-  embeddings and their scale planes (the crop's scales rounded to
-  float16); codes are lossy encodings of them. These files are shared
-  under the same licence.
+  Changes: the crop was cut from the distributed int8 embeddings and
+  their scale plane, with the scales rounded to float16; codes are
+  lossy encodings of it. These files are shared under the same licence.
 
 
 Major TOM Core-S2L1C -- CC-BY-SA 4.0 (LICENSES/CC-BY-SA-4.0.txt)

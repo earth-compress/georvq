@@ -132,7 +132,7 @@ georvq-train -c configs/ae/hybrid_rate.yaml --gpu 0 train.init_from=checkpoints/
 Presets are grouped by source under `configs/<source>/`. `configs/ae/`
 holds `pyr64`, the standard recipe, and the exploratory `stage1`,
 `hybrid_rate`, `cascade` and `satclip_select`. `configs/tessera/` holds
-the lineage ending at the released `tessera_vq8_k256_statscond`, and
+the lineage ending at the released `tessera_v2`, and
 `s2/`, `dem/` and `era5/` hold the presets for those sources.
 `smoke.yaml` (CI) is at the top level. A preset's `data.store_dir`
 points at the group server, so override it for your own store.
@@ -162,21 +162,22 @@ the source before choosing an architecture for it.
 
 ## Ship
 
-Release bundles (`georvq.inference.release`) are self-contained
-directories, holding the weights, the embedded config and the
-`bitstream_id`, that decode anywhere georvq is installed:
+Release bundles (`georvq.inference.bundle`) are self-contained
+directories, holding the weights, the config and the `bitstream_id`,
+that decode anywhere georvq is installed:
 
 ```python
-from georvq.inference.release import load_release
-codec = load_release("releases/my_run", device="cuda")
-xhat = codec.decode(codec.encode(x), depths=[8, 4, 0])
+from georvq.tessera.v2 import load_bundle
+codec = load_bundle("georvq-tessera-v2", device="cuda").codec
+xhat = codec.decode(codec.encode(x), depths=[20, 13, 0])
 ```
 
 Each shipped source also has its own release layer on top of this
 generic code, which sets the container, the side channels and the
-executables for that source. Two are shipped. They differ in how the
-mean is coded, in the container and in whether a refinement is offered,
-and each of those choices was measured on its source.
+executables for that source. Two are shipped. They share the store
+format and the kind of mean channel, and differ in the mean channel's
+rate, in the output they return and in the quality statistic, and each
+of those choices was measured on its source.
 
 The AlphaEarth release (`georvq/ae/v2.py`, `docs/AE_RELEASE.md`) codes
 each source tile with a model that transmits each window's mean (440
@@ -192,14 +193,15 @@ ds = georvq.open(url)
 a = ds.read(window=((0, 1024), (0, 1024)), quality="8-8-2")
 ```
 
-The Tessera release (`georvq/tessera/`, `docs/TESSERA_RELEASE.md`) codes
-128-band embedding windows across 0.23–10.9 b/px. It transmits the
-patch mean as a side channel and offers an opt-in fine-tier refinement:
+The Tessera release (`georvq/tessera/v2.py`, `docs/TESSERA_RELEASE.md`)
+codes each geotessera tile (128 bands) as one Zarr store, readable at 42
+rungs across 0.23–9.8 b/px. It transmits each window's mean (896 bits
+per window) and returns float32 embeddings:
 
 ```python
-from georvq.tessera import load
-R = load("/data/georvq-releases/tessera-beta-v1/bundle", device="cuda")
-recon = R.decode(R.encode(x, valid=v), depths=[20, 20, 5], valid=v)
+import georvq
+ds = georvq.open("2024/grid_-9.35_30.15.georvq.zarr")
+a = ds.read(quality="20-13-0")
 ```
 
 ## Docs
@@ -231,10 +233,10 @@ pytest                 # adds the resume and real-checkpoint tests
 ```
 
 The golden decode tests (`tests/test_ae_v2_bundle.py` for the AlphaEarth
-release, `tests/test_tessera_bundle.py` for the Tessera release) verify
+release, `tests/test_tessera_v2_bundle.py` for the Tessera release) verify
 that released weights still encode and decode bit for bit, and skip
 themselves where the bundle is not present (`GEORVQ_AE_V2_BUNDLE`,
-`GEORVQ_AE_BUNDLE`, `GEORVQ_TESSERA_BUNDLE`). The recorded hashes hold
+`GEORVQ_AE_BUNDLE`, `GEORVQ_TESSERA_V2_BUNDLE`, `GEORVQ_TESSERA_BUNDLE`). The recorded hashes hold
 on torch 2.10 or later with numpy 2; older versions give different codes.
 
 ## Development

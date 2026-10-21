@@ -29,10 +29,10 @@ taken over the decoder weights, so that variant decoders can publish
 their own versions of it alongside each other.
 
 Optional additive refinements extend a packet without changing the
-indices. The Tessera release's opt-in refinement carries the fine tier's
-post-quantisation residual, which is added to the fine tokens when that
-tier decodes at full depth, and removing or ignoring a refinement always
-gives a valid decode. The AE release has no refinement. Its transmitted
+indices. A refinement carries a tier's post-quantisation residual,
+which is added to that tier's tokens when it decodes at full depth, and
+removing or ignoring a refinement always gives a valid decode. Neither
+the AE nor the Tessera release has a refinement. Their transmitted
 per-window mean is part of the packet (item 3 above) rather than a
 refinement, because the encoder codes the window with its mean removed,
 so the indices cannot be decoded without it.

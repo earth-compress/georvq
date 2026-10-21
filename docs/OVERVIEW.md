@@ -63,9 +63,9 @@ checkpoint exactly.
 | `georvq/sources/` | `Source` interface + registry; `ae.py` (minimal reference), `tessera.py` (dense embeddings with a per-pixel scale), `s2.py` (multi-resolution example), `dem.py` (one band with a mean/std side channel), `era5.py` (gridded physical variables); `prep.py` fitted model-space transforms; `report.py` the per-source reporting surface (metrics, baselines, figures, previews) |
 | `georvq/train/` | `loop.py` the one trainer (it also owns the dead-code reset schedule, `mark_resets`); `stage1.py` σ-conditioned pretrain; `grow.py` grown training; `dist.py` data parallelism for frozen codebooks; `signals.py` the SIGUSR1/SIGTERM stop flag; `validate.py`, `figures.py`, `report.py`, `warmstart.py` |
 | `georvq/eval/` | Held-out extraction, probes, benchmark registry, codec A/B helpers |
-| `georvq/inference/` | Source-agnostic deployment code: `api.py` Codec/Packet, `stats_codec.py`, `refine.py` additive residual refinements, `mean_codec.py` the `stats_cond` channel on the wire, `release.py` bundles + bitstream/decoder ids, `records.py` the release container (record layout, Zarr writer, zarr-python reader, record cache), `store_codec.py` a release's codec over the container (`ReleaseSpec`, `StoreCodec`, `encode_product`), `store_dataset.py` the rasterio-like reader, `bundle.py` and `bundle_resolve.py` release bundles and finding them, `store_index.py` per-store facts for a tile index, `bitpack.py` fixed-width records, `onnx_stats.py` ONNX for transmitted-mean models |
+| `georvq/inference/` | Source-agnostic deployment code: `api.py` Codec/Packet, `stats_codec.py`, `mean_codec.py` the `stats_cond` channel on the wire, `release.py` bitstream/decoder ids, `records.py` the release container (record layout, Zarr writer, zarr-python reader, record cache), `store_codec.py` a release's codec over the container (`ReleaseSpec`, `StoreCodec`, `encode_product`), `store_dataset.py` the rasterio-like reader, `bundle.py` and `bundle_resolve.py` release bundles and finding them, `store_index.py` per-store facts for a tile index, `bitpack.py` fixed-width records, `onnx_stats.py` ONNX for transmitted-mean models |
 | `georvq/ae/` | The AlphaEarth release codec: `v2.py` (the release's `ReleaseSpec`, the GeoTIFF tile reader, `encode_tile`, CLI), `v2_bundle.py`, `v2_resolve.py` (finding the bundle a store names), `index.py`. See `docs/AE_RELEASE.md` |
-| `georvq/tessera/` | The Tessera release codec, holding Tessera-specific policy (transmitted mean, rate ladder, fine-tier refinement). See `docs/TESSERA_RELEASE.md` |
+| `georvq/tessera/` | The Tessera release codec, holding Tessera-specific policy: `v2.py` (the release's `ReleaseSpec`, the geotessera tile reader, `encode_tile`, bundles, the tile index, CLI), `io.py` (`prep` of geotessera arrays). See `docs/TESSERA_RELEASE.md` |
 | `scripts/` | Thin drivers over the above (train, store builders, eval, release builds); `scripts/viz/` panel/GIF styling and builders |
 | `analysis/` | Source-characterisation and codec-diagnostic probes (`analysis/README.md`) |
 | `lab/` | The findings ledger and kept experiments (`lab/README.md`); the maintainer's TODO queue |
@@ -78,7 +78,7 @@ checkpoint exactly.
    same bits, so `model/vq.py`, the quantise paths in
    `codec.py`/`conditioning.py`, and `model/vq_quant.py` are guarded by
    golden tests. `tests/test_ae_v2_bundle.py` and
-   `tests/test_tessera_bundle.py` require the released bundles to
+   `tests/test_tessera_v2_bundle.py` require the released bundles to
    reproduce their recorded codes and decoded bits exactly, and skip
    themselves where the bundle is absent. Any change there must keep those tests exact, not
    approximately equal. The recorded hashes hold on torch 2.10 or later
@@ -98,15 +98,15 @@ checkpoint exactly.
    Decoder-side improvements must never require re-encoding. Anything
    that changes the bitstream changes `bitstream_id`, and
    decoder-specific artifacts are keyed by `decoder_id`. Additive
-   refinements (`inference/refine.py`) sit outside this definition,
+   refinements (`Packet.refinements` in `inference/api.py`) sit outside this definition,
    because they extend a packet without touching its indices, so
    ignoring one always gives a valid decode at a lower rate.
 4. A released quantiser's payload is frozen. Shipped files must stay
    readable even when the code behind them is generalised.
    `tests/test_ae_v2_bundle.py` reads back a golden Zarr tile
    (`tests/golden/ae_v2_tile.georvq.zarr`), and
-   `tests/test_tessera_bundle.py` pins the bytes of the packed Tessera
-   refinement. Any other shipped container should be treated the same
+   `tests/test_tessera_v2_bundle.py` reads back a golden Tessera store
+   (`tests/golden/tessera_v2_tile.georvq.zarr`). Any other shipped container should be treated the same
    way.
 5. VQ state stays fp32 under bf16 autocast. Assignment scores may run in
    bf16 (`vq.bf16_scores`), but residuals, EMA buffers and codebooks must
@@ -145,7 +145,8 @@ python -m georvq.ae.v2 decode tile.georvq.zarr out.npy --quality 8-8-2
 python -m georvq.ae.v2 export-onnx <onnx-dir> --bundle <bundle>   # torch-free decode
 
 # Tessera release codec (georvq/tessera — see docs/TESSERA_RELEASE.md)
-python scripts/build_release_tessera.py --ckpt <ckpt> --out <bundle>
+python -m georvq.tessera.v2 bundle <ckpt> <mean_channel.npz> <bundle-dir> --onnx
+python -m georvq.tessera.v2 encode out_dir/ --year 2024 --tile 17.25,46.75 --bundle <bundle>
 ```
 
 `configs/smoke.yaml` runs the pipeline end to end on a synthetic store
@@ -163,18 +164,19 @@ are the changes most likely to break the invariants above, so keeping
 them intact is the researcher's job.
 
 A release engineer, shipping a trained codec, works in
-`georvq/inference/` (bundles, ids, refinements, ONNX export) and in a
+`georvq/inference/` (bundles, ids, ONNX export) and in a
 source-specific release layer. `georvq/ae/` and `georvq/tessera/` are two
 worked examples of the same contract, and reading them side by side is
 the quickest way to see which decisions are policy. Both send a
-transmitted mean, but they differ in how it is coded, in the container,
-and in whether a refinement is offered (only Tessera has one, as an
-opt-in). Each of these differences was measured, and the measurements
+transmitted mean through an RVQ-PCA channel and write the same store
+format, but they differ in the mean channel's rate, in the output they
+return and in the quality statistic. Each of these differences was measured, and the measurements
 are in `docs/AE_RELEASE.md` and `docs/TESSERA_RELEASE.md`.
 
 A data end user, decoding compressed data, needs `georvq.open` and
 the `{stem}.georvq.zarr` stores for AlphaEarth, with
-`docs/AE_RELEASE.md` as the complete contract, or `georvq.tessera` and
+`docs/AE_RELEASE.md` as the complete contract, or `georvq.open` and the
+`{year}/grid_{lon}_{lat}.georvq.zarr` stores with
 `docs/TESSERA_RELEASE.md` for Tessera. None of the training code is
 needed for this.
 
@@ -198,8 +200,10 @@ runs.
 - `tessera_vq8.yaml` is that geometry with int8 QAT codebooks.
 - `tessera_vq8_k256.yaml` has graded-down codebooks (K=256 x 20 levels),
   the sizing that the sample-budget rule implies.
-- `tessera_vq8_k256_statscond.yaml` is the released Tessera codec, which
-  is the above with the transmitted patch mean added.
+- `tessera_vq8_k256_statscond.yaml` was the Tessera beta release's codec
+  (since replaced), which is the above with the transmitted patch mean
+  added.
+- `tessera_v2.yaml` is the Tessera v2 release codec.
 - `satclip_select.yaml` trains the selector only, on a frozen codec. The
   variant with 4× codebooks trained from scratch, described in its
   header comment, is an unvalidated research direction. It never trained
