@@ -24,18 +24,27 @@
 # usable (a first attempt at 1..8 was stopped at step 2,000 for that
 # reason).
 #
+# The first 500 steps run at lr 0 (optim.lr0_steps) so that the fresh
+# AdamW's moment estimates fill before any weight moves.
+#
 # lr 2e-4 and AdamW weight decay 0.01, as beta's decoder stage. A
 # 1000-step warmup, because a fresh AdamW's zero second moments give
-# full-size first updates, then cosine to zero over the 30,000 steps.
+# full-size first updates, then cosine to zero over the 15,000 steps.
 # beta held its lr constant for 80,000 steps; with a fixed and shorter
 # budget, annealing gives the end of the run its lowest-noise updates,
-# and the 30,000-step snapshot is the one reported.
+# and the 15,000-step snapshot is the one reported.
+#
+# Batch 16384 windows. At the base run's 7168 the decoder-only run peaked
+# at 27.2 GB of the 80 GB card (wandb, first attempt), since the frozen
+# encoder and books carry no gradients or EMA state; 16384 is expected at
+# about 57 GB. 15,000 steps keep the data seen close to the planned 30,000
+# at 7168 (246M against 215M windows).
 #
 # Grad clip 0.25, as every recent S2 run, which spiked late under 1.0.
 #
-# Batch 7168 as the base run, without its batch ramp, which only served
-# the unquantised warmup. 30,000 steps is 215M windows, against beta's
-# 80,000 steps of about 2048 tiles (164M).
+# No batch ramp: the base run's only served the unquantised warmup.
+# 15,000 steps of 16384 is 246M windows, against beta's 80,000 steps of
+# about 2048 tiles (164M).
 #
 # The collapse guard is off: it watches the unquantised ceiling, which a
 # decoder trained only on quantised latents is expected to lose, so a
@@ -53,10 +62,12 @@ model:
 train:
   decoder_only: true
   init_from: /home/ali/projects/georvq-s2-final/checkpoints/beta_arch_w36/frozen_42500.pt
-  steps: 30000
+  steps: 15000
+  batch_windows: 16384
   batch_ramp: null
   guard_drop: null
-  optim: {lr: 2.0e-4, wd: 0.01, warmup: 1000, schedule: cosine}
+  optim: {lr: 2.0e-4, wd: 0.01, warmup: 1000, lr0_steps: 500,
+          schedule: cosine}
   save_interval: 2500
 
 log:
