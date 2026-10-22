@@ -235,9 +235,11 @@ def frame_support(gh, gw, window, frame=None, halo=None):
 def load_deblocker(path, device="cpu", cls=Deblocker):
     """Saved deblocker -> (eval-mode net, entry dict). The file holds
     `arch` (kwargs of `cls`), `model` (state dict), `recipe`,
-    `trained_against` {bitstream_id, decoder_id} and `provenance`.
+    `trained_against` {bitstream_id, decoder_id} and `provenance`, and
+    optionally `applies_to`, a list of {bitstream_id, decoder_id} of
+    codecs it was validated on besides the one it was trained against.
     A deblocker is trained on one base decoder's outputs, so callers
-    should refuse one whose `trained_against` does not match."""
+    should refuse a codec that is in neither."""
     from georvq.repro import load_checkpoint
     ck = load_checkpoint(path)
     net = cls(**ck["arch"]).to(device).eval()
@@ -245,4 +247,6 @@ def load_deblocker(path, device="cpu", cls=Deblocker):
     for p in net.parameters():
         p.requires_grad_(False)
     entry = {k: ck[k] for k in ("recipe", "trained_against", "provenance")}
+    if "applies_to" in ck:
+        entry["applies_to"] = list(ck["applies_to"])
     return net, entry

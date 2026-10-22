@@ -506,6 +506,10 @@ def test_deblocked_window_matches_whole_product(codec, tmp_path):
                                                "decoder_id": codec.decoder_id})
             with pytest.raises(ValueError, match="trained against"):
                 D.read_deblocked(ds, (net, bad), ((0, 36), (0, 36)), "3-2")
+            ok = dict(bad, applies_to=[entry["trained_against"]])
+            assert np.array_equal(
+                D.read_deblocked(ds, (net, ok), ((36, 108), (72, 144)),
+                                 quality="3-2")["10m"], got["10m"])
     finally:
         torch.set_grad_enabled(True)
     changed = 0

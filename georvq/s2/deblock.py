@@ -6,8 +6,10 @@ is not part of the codec: stores, their quality arrays and the rung
 tables describe the base decoder only, and nothing in a store changes
 when a reader deblocks. Its weights are published as a separate file
 (`DEBLOCKER_FILE`) in the S2 model repository next to the bundle,
-together with the recipe it was trained with and the `bitstream_id`
-and `decoder_id` of the codec whose decodes it was trained on.
+together with the recipe it was trained with, the `bitstream_id`
+and `decoder_id` of the codec whose decodes it was trained on
+(`trained_against`), and those of further codecs it was validated on
+and applies to (`applies_to`).
 
 The network standardises each frame over its own extent, so its output
 depends on where the frames lie. `read_deblocked` therefore expands the
@@ -38,19 +40,22 @@ def load(path, device="cpu"):
 
 
 def check(entry, header, force=False):
-    """Refuse a deblocker trained against another codec than the one the
-    store's header names, unless `force`."""
-    want = entry.get("trained_against") or {}
+    """Refuse a deblocker for a store whose codec (bitstream and decoder
+    ids in the header) is neither the one it was trained against nor
+    one of those listed in its `applies_to`, unless `force`."""
+    keys = ("bitstream_id", "decoder_id")
     codec = header["codec"]
-    diff = [k for k in ("bitstream_id", "decoder_id")
-            if want.get(k) != codec.get(k)]
-    if diff and not force:
-        raise ValueError(
-            "the deblocker was trained against "
-            + ", ".join(f"{k} {want.get(k)}" for k in diff)
-            + "; the store has "
-            + ", ".join(f"{k} {codec.get(k)}" for k in diff)
-            + ". Pass force=True to apply it anyway")
+    have = tuple(codec.get(k) for k in keys)
+    known = [entry.get("trained_against") or {}] + list(
+        entry.get("applies_to") or [])
+    if force or any(tuple(c.get(k) for k in keys) == have for c in known):
+        return
+    names = "; ".join(", ".join(f"{k} {c.get(k)}" for k in keys)
+                      for c in known)
+    raise ValueError(
+        f"the deblocker was trained against or validated on {names}; the "
+        f"store has bitstream_id {have[0]}, decoder_id {have[1]}. Pass "
+        "force=True to apply it anyway")
 
 
 def read_deblocked(ds, deblocker, window=None, quality=None, force=False,

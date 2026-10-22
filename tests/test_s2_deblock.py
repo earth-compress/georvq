@@ -133,3 +133,8 @@ def test_save_and_load_round_trip(tmp_path):
     for g in x:
         assert torch.equal(a[g], b[g])
     assert entry["recipe"] == RECIPE
+    assert "applies_to" not in entry
+    ck = torch.load(path, weights_only=True)
+    ck["applies_to"] = [{"bitstream_id": "b2", "decoder_id": "d"}]
+    torch.save(ck, path)
+    assert load_s2_deblocker(str(path))[1]["applies_to"] == ck["applies_to"]
