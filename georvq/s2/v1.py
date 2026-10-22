@@ -581,6 +581,11 @@ def main(argv=None):
     e.add_argument("--device", default=None)
     e.add_argument("--no-quality", action="store_true")
     e.add_argument("--batch", type=int, default=256)
+    e.add_argument("--sources", default=None,
+                   help="JSON file of {SAFE name: URL}, the URL each "
+                        "product's header records as its source (default "
+                        "the SAFE path); every product encoded must be in "
+                        "it")
     r = sub.add_parser("reconstruct", help="store -> SAFE product")
     r.add_argument("store")
     r.add_argument("out_dir")
@@ -623,6 +628,13 @@ def main(argv=None):
                                device=args.device, bundle=args.bundle)
         print(out)
         return 0
+    sources = None
+    if args.sources:
+        with open(args.sources) as f:
+            sources = {safe_name(k): v for k, v in json.load(f).items()}
+        missing = [s for s in args.safe if safe_name(s) not in sources]
+        if missing:
+            ap.error(f"no source URL in {args.sources} for {missing}")
     from georvq.inference.bundle_resolve import default_device
     from georvq.inference.records import output_name
     from georvq.inference.store_codec import quiet_build
@@ -633,7 +645,8 @@ def main(argv=None):
     for s in args.safe:
         out = os.path.join(args.out_dir, output_name(s))
         t = encode_safe(s, out, codec, stats=not args.no_quality,
-                        batch=args.batch, log=log)
+                        batch=args.batch, log=log,
+                        source=sources[safe_name(s)] if sources else None)
         print(json.dumps(dict(t, out=out)))
     return 0
 

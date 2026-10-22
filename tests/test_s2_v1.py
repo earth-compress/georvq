@@ -549,3 +549,30 @@ def test_index(codec, tmp_path):
     assert row["safe"] == name + ".SAFE" and row["spacecraft"] == "Sentinel-2C"
     assert row["sensing_start"].year == 2026
     assert b'"primary_column": "geometry"' in t.schema.metadata[b"geo"]
+
+
+def test_cli_encode_records_source_urls(codec, safe_dir, tmp_path):
+    from georvq.inference.bundle import write_bundle
+    bundle = tmp_path / "bundle"
+    write_bundle(str(bundle), codec.model, tiny_cfg(), codec.channel, v1.SPEC,
+                 extra={"licence_stores": v1.STORES_LICENCE})
+    name = S.safe_name(safe_dir)
+    url = "https://example.org/Products(1234)"
+    srcs = tmp_path / "sources.json"
+    srcs.write_text(json.dumps({name + ".SAFE": url}))
+    out = tmp_path / "sample"
+    torch.set_grad_enabled(False)
+    try:
+        empty = tmp_path / "empty.json"
+        empty.write_text("{}")
+        with pytest.raises(SystemExit):
+            v1.main(["encode", str(out), safe_dir, "--bundle", str(bundle),
+                     "--device", "cpu", "--sources", str(empty)])
+        assert not out.exists()
+        assert v1.main(["encode", str(out), safe_dir, "--bundle", str(bundle),
+                        "--device", "cpu", "--sources", str(srcs)]) == 0
+    finally:
+        torch.set_grad_enabled(True)
+    p = json.load(open(out / (name + ".georvq.zarr") / "zarr.json"))
+    assert p["attributes"]["georvq"]["product"]["source"] == url
+    assert p["attributes"]["georvq"]["product"]["id"] == name
