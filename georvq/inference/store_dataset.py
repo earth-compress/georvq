@@ -1,17 +1,24 @@
 """Reading georvq stores: a rasterio-like dataset over any release.
 
 `StoreDataset` reads a store written by a release layer (georvq.ae,
-georvq.tessera) through its codec, with the georeferencing, data type,
-nodata and band names the store's header gives, and with rasterio's
-arguments and results. `open_dataset(store, spec, ...)` opens one for a
-given release; `georvq.open` finds the release from the store itself.
-`reconstruct` decodes a whole store into a GeoTIFF.
+georvq.tessera, georvq.s2) through its codec, with the georeferencing,
+data type, nodata and band names the store's header gives, and with
+rasterio's arguments and results. `open_dataset(store, spec, ...)` opens
+one for a given release; `georvq.open` finds the release from the store
+itself. `reconstruct` decodes a whole store into a GeoTIFF.
+
+A store whose output lies on several grids (the header's
+`output.grids`, Sentinel-2's 10, 20 and 60 m bands) reads as one
+dataset per grid: a StoreDataset shows one grid at a time (the first by
+default), `grid(name)` returns the dataset of another, and `read_grids`
+decodes every grid of a region at once.
 
 Nothing here imports torch: with an ONNX codec, reading needs only
 numpy, zarr-python, rasterio and onnxruntime.
 """
 from __future__ import annotations
 
+import copy
 import json
 import math
 import re
@@ -66,7 +73,10 @@ class StoreDataset(WindowMethodsMixin, TransformMethodsMixin):
     and band names are those of the release's output, from the header's
     `output` (stores written before it existed give the product's).
     `read` takes a `quality` beyond rasterio's arguments; `quality`
-    passed here is the default of every read. `driver` is "GeoRVQZarr";
+    passed here is the default of every read. For a store with several
+    output grids the dataset is that of one grid, `grid` (the header's
+    first by default): its shape, transform, band count and names are
+    the grid's, and `grids` names them all. `driver` is "GeoRVQZarr";
     `profile` and `meta` carry the source's driver (GTiff when the
     source records none), so either can be passed to
     `rasterio.open(..., "w")` to write a GeoTIFF. The store has no
@@ -86,7 +96,7 @@ class StoreDataset(WindowMethodsMixin, TransformMethodsMixin):
     mode = "r"
 
     def __init__(self, store, spec, codec=None, resolver=None, quality=None,
-                 options=None, **reader_kw):
+                 options=None, grid=None, **reader_kw):
         self.spec = spec
         self.options = spec.options(options or {})
         self.reader = RecordReader(store, **reader_kw)
@@ -102,22 +112,20 @@ class StoreDataset(WindowMethodsMixin, TransformMethodsMixin):
                              f"{spec.codec_format}")
         self._codec = None
         self._resolver = resolver
+        self._parent = None
         self.default_quality = quality
-        self.height, self.width = int(p["height"]), int(p["width"])
+        self.product_height, self.product_width = (int(p["height"]),
+                                                   int(p["width"]))
         out = self.output = h.get("output") or {
             "dtype": p["dtype"], "nodata": p["nodata"], "count": p["count"],
             "band_names": None}
-        self.count = int(out["count"])
-        self.dtypes = (out["dtype"],) * self.count
+        self.grids = tuple(g["name"] for g in out.get("grids") or ())
         self.nodata = out["nodata"]
         self._fill = 0 if self.nodata is None else self.nodata
         self.assets = self.reader.assets
         self.window_px = int(h["codec"]["window"])
         self.bottom_up = p["orientation"] == "bottom-up"
-        from affine import Affine
-        north = Affine(*p["transform"])
-        self.transform = (flip_rows(north, self.height) if self.bottom_up
-                          else north)
+        self._set_grid(grid)
         self.rungs = [tuple(r["tuple"]) for r in h["rungs"]]
         self.full = tuple(int(t.split(":")[3]) for t in h["codec"]["tiers"])
         self.names = tier_names(len(self.full))
@@ -129,8 +137,60 @@ class StoreDataset(WindowMethodsMixin, TransformMethodsMixin):
         if codec is not None:
             self.codec = codec
 
+    def _set_grid(self, grid):
+        """Make the dataset that of output grid `grid` (None: the first,
+        or the product grid of a store with one grid)."""
+        from affine import Affine
+        out, p = self.output, self.product
+        grids = out.get("grids")
+        north = Affine(*p["transform"])
+        if not grids:
+            if grid is not None:
+                raise ValueError(f"{self.name}: the store has one output "
+                                 f"grid; grid={grid!r} names none")
+            self.grid_name, f = None, 1
+            self.height, self.width = self.product_height, self.product_width
+            self.count = int(out["count"])
+            self._band_names = out.get("band_names")
+        else:
+            by = {g["name"]: g for g in grids}
+            if grid is not None and grid not in by:
+                raise ValueError(f"{self.name}: no output grid {grid!r}; the "
+                                 f"store has {list(by)}")
+            g = by[grid] if grid is not None else grids[0]
+            self.grid_name, f = g["name"], int(g["factor"])
+            self.height = int(g.get("height", self.product_height // f))
+            self.width = int(g.get("width", self.product_width // f))
+            self.count = int(g["count"])
+            self._band_names = g.get("band_names")
+            if g.get("transform") is not None:
+                north = Affine(*g["transform"])
+            else:
+                north = north * Affine.scale(f)
+        if self.window_px % f:
+            raise ValueError(f"{self.name}: grid factor {f} does not divide "
+                             f"the {self.window_px} px window")
+        self._factor = f
+        self._wpx = self.window_px // f
+        self.dtypes = (self.output["dtype"],) * self.count
+        self.transform = (flip_rows(north, self.height) if self.bottom_up
+                          else north)
+
+    def grid(self, name) -> "StoreDataset":
+        """The dataset of output grid `name`, sharing this one's reader
+        and codec (closing either closes both)."""
+        view = copy.copy(self)
+        view._parent = self._parent or self
+        view._set_grid(name)
+        return view
+
     @property
     def codec(self):
+        if self._parent is not None:
+            c = self._parent.codec
+            if c is not None and c is not self._codec:
+                self.codec = c
+            return self._codec
         if self._codec is None and self._resolver is not None:
             self.codec = self._resolver(self.header)
         return self._codec
@@ -186,7 +246,7 @@ class StoreDataset(WindowMethodsMixin, TransformMethodsMixin):
 
     @property
     def descriptions(self):
-        return tuple(self.output.get("band_names") or
+        return tuple(self._band_names or
                      self.source_meta.get("descriptions") or
                      (None,) * self.count)
 
@@ -324,7 +384,7 @@ class StoreDataset(WindowMethodsMixin, TransformMethodsMixin):
     def window_rungs(self, quality, window=None) -> np.ndarray:
         """Rung index chosen for each coded window under `window`."""
         ny0, ny1, nx0, nx1 = self._north_px(window)
-        W = self.window_px
+        W = self._wpx
         return self._depth_map(quality, ny0 // W, -(-ny1 // W), nx0 // W,
                                -(-nx1 // W))
 
@@ -426,7 +486,7 @@ class StoreDataset(WindowMethodsMixin, TransformMethodsMixin):
         inside = iy[:, None] & ix[None, :]
         out = None
         if iy.any() and ix.any():
-            W = self.window_px
+            W = self._wpx
             ny = self.height - 1 - ry if self.bottom_up else ry
             jo = np.nonzero(ix)[0]
             c0, c1 = int(cx[jo].min()), int(cx[jo].max()) + 1
@@ -460,10 +520,27 @@ class StoreDataset(WindowMethodsMixin, TransformMethodsMixin):
 
     def _decode_north(self, ny0, ny1, nx0, nx1, quality, batch):
         """(count, rows, cols) output pixels of north-up pixels [ny0:ny1,
-        nx0:nx1]."""
-        W = self.window_px
+        nx0:nx1] of the dataset's grid."""
+        W = self._wpx
         wy0, wy1 = ny0 // W, -(-ny1 // W)
         wx0, wx1 = nx0 // W, -(-nx1 // W)
+        out = self._decode_windows(wy0, wy1, wx0, wx1, quality, batch)
+        if self.grid_name is not None:
+            out = out[self.grid_name]
+        return out[:, ny0 - wy0 * W:ny1 - wy0 * W, nx0 - wx0 * W:nx1 - wx0 * W]
+
+    def _grid_shapes(self):
+        """{grid: (count, factor)}, or None for a store with one grid."""
+        grids = self.output.get("grids")
+        if not grids:
+            return None
+        return {g["name"]: (int(g["count"]), int(g["factor"])) for g in grids}
+
+    def _decode_windows(self, wy0, wy1, wx0, wx1, quality, batch):
+        """Output pixels of the whole windows [wy0:wy1, wx0:wx1]: (count,
+        rows, cols), or for a store with several grids {grid: (count,
+        rows, cols)} on each grid."""
+        W = self.window_px
         gh, gw = wy1 - wy0, wx1 - wx0
         trace = self.reader.trace
         with span(trace, "cpu", "resolve rungs"):
@@ -478,8 +555,13 @@ class StoreDataset(WindowMethodsMixin, TransformMethodsMixin):
         vwin = got["valid"].reshape(gh, W, gw, W).transpose(0, 2, 1, 3)
         live = vwin.any((2, 3))
 
-        out = np.full((self.count, gh * W, gw * W), self._fill,
-                      np.dtype(self.dtypes[0]))
+        dt = np.dtype(self.output["dtype"])
+        shapes = self._grid_shapes()
+        if shapes is None:
+            out = np.full((self.count, gh * W, gw * W), self._fill, dt)
+        else:
+            out = {n: np.full((c, gh * W // f, gw * W // f), self._fill, dt)
+                   for n, (c, f) in shapes.items()}
         if live.any():
             base = got["base"]
             tiers = [got.get(name) for name in self.names[1:]]
@@ -496,10 +578,51 @@ class StoreDataset(WindowMethodsMixin, TransformMethodsMixin):
                     dec = self.codec.decode_records(base[y, x], fin, r,
                                                     vwin[y, x], **kw)
                     with span(trace, "cpu", "assemble"):
-                        for d, yy, xx in zip(dec, y, x):
-                            out[:, yy * W:(yy + 1) * W,
-                                xx * W:(xx + 1) * W] = d
-        return out[:, ny0 - wy0 * W:ny1 - wy0 * W, nx0 - wx0 * W:nx1 - wx0 * W]
+                        if shapes is None:
+                            _place(out, dec, y, x, W)
+                        else:
+                            for n, (_, f) in shapes.items():
+                                _place(out[n], dec[n], y, x, W // f)
+        return out
+
+    def read_grids(self, window=None, quality=_DEFAULT, batch=256) -> dict:
+        """Decoded pixels of every output grid of a region, decoded once:
+        {grid name: (count, rows, cols)}. `window` is a rasterio Window
+        or ((row0, row1), (col0, col1)) in north-up pixels of the
+        product grid (the finest; None for the whole product), and each
+        grid's array covers the pixels of that grid the window touches.
+        `quality` as for `read`."""
+        self._check_open()
+        shapes = self._grid_shapes()
+        if shapes is None:
+            raise ValueError(f"{self.name}: the store has one output grid; "
+                             "use read")
+        if quality is _DEFAULT:
+            quality = self.default_quality
+        if self.codec is None:
+            raise ValueError("reading pixels needs a codec: open the store "
+                             "with georvq.open, which finds the store's "
+                             "bundle, or pass codec=")
+        H, Wd = self.product_height, self.product_width
+        if window is None:
+            r0, r1, c0, c1 = 0, H, 0, Wd
+        elif hasattr(window, "row_off"):
+            r0, c0 = int(window.row_off), int(window.col_off)
+            r1, c1 = r0 + int(window.height), c0 + int(window.width)
+        else:
+            (r0, r1), (c0, c1) = window
+        if not (0 <= r0 < r1 <= H and 0 <= c0 < c1 <= Wd):
+            raise ValueError(f"window rows {r0}:{r1} cols {c0}:{c1} outside "
+                             f"the {H}x{Wd} product")
+        W = self.window_px
+        wy0, wy1, wx0, wx1 = r0 // W, -(-r1 // W), c0 // W, -(-c1 // W)
+        got = self._decode_windows(wy0, wy1, wx0, wx1, quality, batch)
+        res = {}
+        for n, (_, f) in shapes.items():
+            o = wy0 * W // f, wx0 * W // f
+            res[n] = got[n][:, r0 // f - o[0]:-(-r1 // f) - o[0],
+                            c0 // f - o[1]:-(-c1 // f) - o[1]]
+        return res
 
     def read(self, indexes=None, out=None, window=None, masked=False,
              out_shape=None, boundless=False, resampling=None,
@@ -603,23 +726,39 @@ class StoreDataset(WindowMethodsMixin, TransformMethodsMixin):
         return res
 
     def _mask(self, win, oh, ow):
-        """uint8 (oh, ow) validity samples of `win`, 255 valid."""
+        """uint8 (oh, ow) validity samples of `win`, 255 valid. On a grid
+        coarser than the product's a pixel is valid when every product
+        pixel it covers is."""
+        f = self._factor
+
         def fetch(y0, y1, x0, x1):
-            return self.reader.read_mask(y0, y1, x0, x1)[None]
+            if f == 1:
+                return self.reader.read_mask(y0, y1, x0, x1)[None]
+            m = self.reader.read_mask(y0 * f, y1 * f, x0 * f, x1 * f)
+            return m.reshape(y1 - y0, f, x1 - x0, f).all((1, 3))[None]
         m, _ = self._gather(win, oh, ow, fetch, 1, False)
         if m is None:
             return np.zeros((oh, ow), np.uint8)
         return m[0].astype(np.uint8) * np.uint8(255)
 
 
+def _place(out, dec, y, x, W):
+    """Copy decoded windows dec (n, C, W, W) into out at window rows y
+    and columns x."""
+    for d, yy, xx in zip(dec, y, x):
+        out[:, yy * W:(yy + 1) * W, xx * W:(xx + 1) * W] = d
+
+
 def open_dataset(store, spec, codec=None, resolver=None, quality=None,
-                 options=None, **reader_kw) -> StoreDataset:
+                 options=None, grid=None, **reader_kw) -> StoreDataset:
     """A StoreDataset of `store` (an open zarr.Group, or a local path or a
     URL that zarr-python opens through fsspec) for the release `spec`.
     `codec` reads pixels; without one, `resolver(header)` is called for
-    one when pixels are first read."""
+    one when pixels are first read. `grid` picks an output grid of a
+    store with several."""
     return StoreDataset(store, spec, codec=codec, resolver=resolver,
-                        quality=quality, options=options, **reader_kw)
+                        quality=quality, options=options, grid=grid,
+                        **reader_kw)
 
 
 def reconstruct(src, out_path, quality=None, rows=1024, creation_options=None):

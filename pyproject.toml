@@ -56,6 +56,7 @@ dev = ["georvq[train]", "pytest", "xarray"]
 [project.scripts]
 georvq-train = "georvq.cli:train_pyramid"
 georvq-train-stage1 = "georvq.cli:train_stage1"
+georvq = "georvq.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["georvq*"]

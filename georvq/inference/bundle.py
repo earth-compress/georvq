@@ -7,7 +7,9 @@ Layout of a bundle directory:
     codebooks.npz     per RVQ level, `<prefix>.q` (K, D) int8 and
                       `<prefix>.scale` (K,) float32, with
                       codebook = float32(q) * scale exactly, and
-                      q = -128 standing for -0.0
+                      q = -128 standing for -0.0; for a model trained
+                      with float32 books (vq.book_bits unset),
+                      `<prefix>.weight` (K, D) float32 instead
     mean_channel.npz  the mean channel's tables (georvq.inference.
                       mean_codec; its kind is recorded in bundle.json)
     config.json       the model's resolved Config
@@ -160,9 +162,6 @@ def write_bundle(out_dir, model, cfg, channel, spec, source=None, notes="",
     model's ONNX export under onnx/, so that one bundle serves both
     backends."""
     bits = cfg.model.vq.book_bits
-    if not bits:
-        raise ValueError("a bundle stores int codebooks; the model has "
-                         "fp32 books (vq.book_bits is unset)")
     codec = make_codec(spec, model, channel)   # checks the model and bands
     os.makedirs(out_dir, exist_ok=True)
     sd = model.state_dict()
@@ -172,8 +171,11 @@ def write_bundle(out_dir, model, cfg, channel, spec, source=None, notes="",
                if k not in book_keys and not _is_training_state(k)}
     books = {}
     for p in prefixes:
-        q, s = book_to_int(sd[p + BOOK_SUFFIX], bits)
-        books[p + ".q"], books[p + ".scale"] = q, s
+        if bits:
+            q, s = book_to_int(sd[p + BOOK_SUFFIX], bits)
+            books[p + ".q"], books[p + ".scale"] = q, s
+        else:
+            books[p + ".weight"] = _numpy(sd[p + BOOK_SUFFIX].float())
     np.savez(os.path.join(out_dir, "weights.npz"), **weights)
     np.savez(os.path.join(out_dir, "codebooks.npz"), **books)
     channel.save(os.path.join(out_dir, "mean_channel.npz"))
@@ -198,7 +200,7 @@ def write_bundle(out_dir, model, cfg, channel, spec, source=None, notes="",
         "window": codec.window, "bands": codec.bands,
         "tiers": [str(sp) for sp in codec.specs],
         "min_depths": list(cfg.model.min_depths),
-        "book_bits": int(bits),
+        "book_bits": int(bits) if bits else None,
         "mean_channel": {"kind": channel.kind,
                          "bits": int(channel.cost_bits())},
         "rungs": codec.header_rungs(),
@@ -263,7 +265,11 @@ def load_model(bundle_dir, spec, device="cpu", verify=True):
     with np.load(os.path.join(bundle_dir, "codebooks.npz"),
                  allow_pickle=False) as z:
         for p in _book_keys(model):
-            sd[p + BOOK_SUFFIX] = book_from_int(z[p + ".q"], z[p + ".scale"])
+            if p + ".weight" in z.files:
+                sd[p + BOOK_SUFFIX] = torch.from_numpy(z[p + ".weight"])
+            else:
+                sd[p + BOOK_SUFFIX] = book_from_int(z[p + ".q"],
+                                                    z[p + ".scale"])
     missing, unexpected = model.load_state_dict(sd, strict=False)
     if variant == DECODER_FP16:
         # the encoder is not shipped: its tensors are NaN, so that a use
@@ -362,10 +368,11 @@ def write_decoder_bundle(bundle_dir, out_dir, spec, verify=True) -> dict:
     return payload
 
 
-def bundle_readme(meta, title, about, usage) -> str:
+def bundle_readme(meta, title, about, usage, channel=None) -> str:
     """The README of a bundle, the same for every release: `title`, an
     `about` paragraph, the licences, ids, tiers, rung table and files
-    from bundle.json, and `usage`, a Python example."""
+    from bundle.json, and `usage`, a Python example. `channel` names
+    what each window's side channel carries (default "its mean")."""
     tiers = "\n".join(f"- {t}" for t in meta["tiers"])
     rows = "\n".join(
         f"| {'-'.join(map(str, r['tuple']))} | {r['bits_window']} | "
@@ -393,6 +400,14 @@ def bundle_readme(meta, title, about, usage) -> str:
     onnx = (f"\n`{meta['onnx']}/` holds the ONNX export used by the "
             "torch-free backend (`backend=\"onnx\"`).\n"
             if meta.get("onnx") else "")
+    if meta.get("book_bits"):
+        books = f"{meta['book_bits']}-bit codebooks"
+        book_files = ("per level an int8 `q` and a float32 per-codeword "
+                      "`scale`, codebook =\nq * scale, with q = -128 "
+                      "standing for -0.0")
+    else:
+        books = "float32 codebooks"
+        book_files = "per level the float32 codebook, `<level>.weight`"
     return f"""# {title}
 
 {about}
@@ -405,12 +420,12 @@ def bundle_readme(meta, title, about, usage) -> str:
 - window {meta['window']} px, {meta['bands']} bands
 - source checkpoint {src.get('checkpoint')} at step {src.get('step')}
 
-Tiers (grid:dim:codes:depth), with {meta['book_bits']}-bit codebooks:
+Tiers (grid:dim:codes:depth), with {books}:
 
 {tiers}
 
-Every window also carries its mean, {meta['mean_channel']['bits']} bits
-through the {meta['mean_channel']['kind']} mean channel. The rate of each
+Every window also carries {channel or 'its mean'}, {meta['mean_channel']['bits']} bits
+through the {meta['mean_channel']['kind']} {'mean ' if channel is None else ''}channel. The rate of each
 rung below includes it.
 
 | rung | bits/window | bits/px |
@@ -418,8 +433,7 @@ rung below includes it.
 {rows}
 
 Files ({size / 1e6:.1f} MB): `weights.npz` (model tensors), `codebooks.npz`
-(per level an int8 `q` and a float32 per-codeword `scale`, codebook =
-q * scale, with q = -128 standing for -0.0), `mean_channel.npz`,
+({book_files}), `mean_channel.npz`,
 `config.json`, `bundle.json`. All arrays load with `allow_pickle=False`.
 {onnx}
 ```python

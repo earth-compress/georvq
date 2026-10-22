@@ -91,8 +91,9 @@ The group's attributes hold the codec header as JSON under `georvq`:
 `bitstream_id`, `decoder_id`, tiers, window and release), `product`
 (the source's id, path, CRS, north-up transform, size and orientation),
 `rungs`, `quality` for the header's own decoder, `output` (the data
-type, nodata value, band count and band names a reader returns), and
-`layout`. The
+type, nodata value, band count and band names a reader returns, and for
+a store whose bands lie on several grids, `grids` with each grid's name,
+pixel size factor, bands, shape and transform), and `layout`. The
 layout gives the window size, the window grid and product size, each
 kind's chunk size, chunk grid and empty chunks, the mask chunks that
 hold an invalid pixel, the record fields of every column, and the

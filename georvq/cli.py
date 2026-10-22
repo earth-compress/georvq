@@ -32,3 +32,21 @@ def train_stage1(argv=None):
     cfg, gpu = _parse(argv, "Train a stage-1 continuous sigma-conditioned AE")
     from georvq.train.stage1 import train
     train(cfg, gpu)
+
+
+# release commands of `georvq <release> ...`, by name: the module whose
+# main(argv) takes the rest of the command line
+RELEASE_COMMANDS = {"s2": "georvq.s2.v1"}
+
+
+def main(argv=None):
+    """`georvq <release> <command> ...`, e.g. `georvq s2 reconstruct
+    STORE OUT_DIR --quality 8-4`."""
+    import importlib
+    import sys
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if not argv or argv[0] not in RELEASE_COMMANDS:
+        print(f"usage: georvq {{{','.join(RELEASE_COMMANDS)}}} COMMAND ...",
+              file=sys.stderr)
+        return 2
+    return importlib.import_module(RELEASE_COMMANDS[argv[0]]).main(argv[1:])

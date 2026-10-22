@@ -47,7 +47,7 @@ checkpoint exactly.
 | `georvq/compat.py` | Legacy (research-repo) checkpoint loader: prefix-renames state dicts, reconstructs a `Config` from argparse args |
 | `georvq/metrics.py` | `masked_recon_stats`, `centered_cos` |
 | `georvq/repro.py` | Seeding, git/env metadata, `save_checkpoint` (embeds config + hash) |
-| `georvq/cli.py` | `georvq-train`, `georvq-train-stage1` entry points |
+| `georvq/cli.py` | `georvq-train`, `georvq-train-stage1` and `georvq` (release commands, `georvq s2 ...`) entry points |
 | `georvq/model/vq.py` | `VectorQuantizer`, `ResidualVQ`, data-sample init, dead-code revival (`reset_mode`). Its numerics are frozen (see Invariants) |
 | `georvq/model/vqinit.py` | Codebook seeding: balanced-PCA-tree init, per-tier init budgets (`init_per_code`) |
 | `georvq/model/vq_quant.py` | b-bit quantisation-aware codebooks (`vq.book_bits`), so that int8 books are ~4x smaller to download |
@@ -66,6 +66,7 @@ checkpoint exactly.
 | `georvq/inference/` | Source-agnostic deployment code: `api.py` Codec/Packet, `stats_codec.py`, `mean_codec.py` the `stats_cond` channel on the wire, `release.py` bitstream/decoder ids, `records.py` the release container (record layout, Zarr writer, zarr-python reader, record cache), `store_codec.py` a release's codec over the container (`ReleaseSpec`, `StoreCodec`, `encode_product`), `store_dataset.py` the rasterio-like reader, `bundle.py` and `bundle_resolve.py` release bundles and finding them, `store_index.py` per-store facts for a tile index, `bitpack.py` fixed-width records, `onnx_stats.py` ONNX for transmitted-mean models |
 | `georvq/ae/` | The AlphaEarth release codec: `v2.py` (the release's `ReleaseSpec`, the GeoTIFF tile reader, `encode_tile`, CLI), `v2_bundle.py`, `v2_resolve.py` (finding the bundle a store names), `index.py`. See `docs/AE_RELEASE.md` |
 | `georvq/tessera/` | The Tessera release codec, holding Tessera-specific policy: `v2.py` (the release's `ReleaseSpec`, the geotessera tile reader, `encode_tile`, bundles, the tile index, CLI), `io.py` (`prep` of geotessera arrays). See `docs/TESSERA_RELEASE.md` |
+| `georvq/s2/` | The Sentinel-2 L1C release codec: `v1.py` (the release's `ReleaseSpec` on three output grids, the SAFE product reader, `encode_safe`, `reconstruct_safe`, bundles, CLI), `safe.py` (band images, the metadata zip, JPEG 2000 writing, `manifest.safe` checksums) |
 | `scripts/` | Thin drivers over the above (train, store builders, eval, release builds); `scripts/viz/` panel/GIF styling and builders |
 | `analysis/` | Source-characterisation and codec-diagnostic probes (`analysis/README.md`) |
 | `lab/` | The findings ledger and kept experiments (`lab/README.md`); the maintainer's TODO queue |

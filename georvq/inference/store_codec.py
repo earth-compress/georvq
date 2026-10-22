@@ -133,6 +133,23 @@ class ReleaseSpec:
     `quality_scale`, `quality_offset` and `quality_floor` set the log
     code.
 
+    Several grids. A source whose bands sit on grids of different pixel
+    sizes (Sentinel-2's 10, 20 and 60 m) sets `raw_factors`, the pixel
+    size of each raw array in pixels of the product grid (the finest),
+    and `output_grids`, one (name, factor, band names) per output grid.
+    Each raw array then covers the product at its own resolution, the
+    window is `window / factor` of its pixels, and `raw_valid` and
+    `invalidate` work on the product grid. The decoded output is then a
+    dict {grid name: (n, C_g, W / factor, W / factor)}. Product sizes
+    and chunk sizes are multiples of every factor. None (the default)
+    means one grid.
+
+    `channel_values` is the number of values the mean channel codes per
+    window, by default the model's band count (S2 sends a mean and a
+    standard deviation per band). `onnx_export(codec, out_dir, opset)`
+    replaces `export_onnx`'s stats_cond export for a release whose model
+    it does not fit, writing the directory `onnx_codec` loads.
+
     `check_model(model, channel)` raises ValueError for a model and
     channel the release cannot ship. `torch_codec` and `onnx_codec` are
     the codec classes a resolved bundle is loaded as (StoreCodec and
@@ -181,6 +198,10 @@ class ReleaseSpec:
     onnx_codec: Optional[type] = None
     bundle_readme: Optional[Callable] = None
     licence: Optional[dict] = None
+    raw_factors: Optional[tuple] = None
+    output_grids: Optional[tuple] = None
+    channel_values: Optional[int] = None
+    onnx_export: Optional[Callable] = None
 
     def with_(self, **kw) -> "ReleaseSpec":
         return dataclasses.replace(self, **kw)
@@ -195,12 +216,28 @@ class ReleaseSpec:
             out[names[-1]] = fine
         return out
 
-    def output_header(self, codec) -> dict:
-        """The header's `output`: what reading the store returns."""
+    def output_header(self, codec, src=None) -> dict:
+        """The header's `output`: what reading the store returns. With
+        `output_grids`, `grids` lists each grid's name, factor, band
+        names and, for a product `src`, its shape and north-up
+        transform."""
         names = self.band_names
-        return {"dtype": self.out_dtype, "nodata": self.out_nodata,
-                "count": int(codec.bands),
-                "band_names": None if names is None else list(names)}
+        out = {"dtype": self.out_dtype, "nodata": self.out_nodata,
+               "count": int(codec.bands),
+               "band_names": None if names is None else list(names)}
+        if self.output_grids is not None:
+            out["grids"] = []
+            for name, f, bands in self.output_grids:
+                g = {"name": name, "factor": int(f), "count": len(bands),
+                     "band_names": list(bands)}
+                if src is not None:
+                    a, b, c, d, e, ff = (float(v) for v in
+                                         list(src.transform)[:6])
+                    g.update(height=int(src.height) // int(f),
+                             width=int(src.width) // int(f),
+                             transform=[a * f, b * f, c, d * f, e * f, ff])
+                out["grids"].append(g)
+        return out
 
     def options(self, given: dict) -> dict:
         """Output options: the defaults updated by `given`, refusing an
@@ -347,9 +384,10 @@ class StoreCodec:
         self.device = next(model.parameters()).device
         if spec.check_model is not None:
             spec.check_model(model, channel)
-        if channel.bands != model.bands:
-            raise ValueError(f"mean channel has {channel.bands} bands, model "
-                             f"{model.bands}")
+        want = spec.channel_values or model.bands
+        if channel.bands != want:
+            raise ValueError(f"mean channel has {channel.bands} bands, the "
+                             f"release codes {want} values per window")
         self.codec = Codec(model)
         self.specs = list(model.specs)
         self.window = int(model.window)
@@ -405,6 +443,14 @@ class StoreCodec:
                  "bits_px": rung_bits(self.specs, r, self.channel) / W2}
                 for r in self.rungs]
 
+    def check_encoder(self):
+        """Raise for a codec loaded from a decoder-only bundle, which has
+        no encoder weights. A release's own encode_windows calls it."""
+        if self.decode_only:
+            raise RuntimeError("this codec was loaded from a decoder-only "
+                               "bundle, which has no encoder weights; encode "
+                               "with the full bundle")
+
     def header_quality(self) -> dict:
         s = self.spec
         name = {} if s.quality_name is None else {"name": s.quality_name}
@@ -423,10 +469,7 @@ class StoreCodec:
         each (B, ..., W, W). Returns ({group: (levels, B, n_values)}, x,
         valid) with x, valid the prepared device input."""
         import torch
-        if self.decode_only:
-            raise RuntimeError("this codec was loaded from a decoder-only "
-                               "bundle, which has no encoder weights; encode "
-                               "with the full bundle")
+        self.check_encoder()
         dev = self.device
         x, valid = self.spec.prep(self.model, _as_arrays(raw), dev)
         mu = self.model.patch_stats(x, valid).float().cpu().numpy()
@@ -481,13 +524,19 @@ class StoreCodec:
         arrs = tuple(np.asarray(a) for a in _as_arrays(raw))
         if s.check_raw is not None:
             s.check_raw(arrs, self.bands)
-        H, Wd = arrs[0].shape[-2:]
+        factors = s.raw_factors or (1,) * len(arrs)
+        H, Wd = (n * factors[0] for n in arrs[0].shape[-2:])
         W = self.window
         gh, gw = -(-H // W), -(-Wd // W)
         padded = []
-        for a, fill in zip(arrs, s.pad):
-            p = np.full(a.shape[:-2] + (gh * W, gw * W), fill, a.dtype)
-            p[..., :H, :Wd] = a
+        for a, fill, f in zip(arrs, s.pad, factors):
+            if a.shape[-2:] != (H // f, Wd // f):
+                raise ValueError(f"raw array of shape {a.shape} does not "
+                                 f"cover {H} x {Wd} product pixels at "
+                                 f"factor {f}")
+            p = np.full(a.shape[:-2] + (gh * W // f, gw * W // f), fill,
+                        a.dtype)
+            p[..., :H // f, :Wd // f] = a
             padded.append(p)
         padded = tuple(padded)
         if valid is not None:
@@ -497,7 +546,8 @@ class StoreCodec:
         pv = s.raw_valid(padded)
         live = pv.reshape(gh, W, gw, W).any((1, 3))
         rows, cols = np.nonzero(live)
-        wins = [p.reshape(p.shape[:-2] + (gh, W, gw, W)) for p in padded]
+        wins = [p.reshape(p.shape[:-2] + (gh, W // f, gw, W // f))
+                for p, f in zip(padded, factors)]
         parts = []
         for i in range(0, len(rows), batch):
             r, c = rows[i:i + batch], cols[i:i + batch]
@@ -600,6 +650,8 @@ def export_onnx(codec: StoreCodec, out_dir, opset=18) -> dict:
     tables, under the codec's bitstream id. Returns the meta dict."""
     from georvq.inference.onnx_stats import export_stats_onnx
     spec = codec.spec
+    if spec.onnx_export is not None:
+        return spec.onnx_export(codec, out_dir, opset)
     os.makedirs(out_dir, exist_ok=True)
     codec.channel.save(os.path.join(out_dir, ONNX_CHANNEL_NAME))
     extra = {spec.onnx_meta_key: {
@@ -764,15 +816,18 @@ def product_header(src: ProductSource, kind) -> dict:
 def encode_product(src: ProductSource, out_path, codec: StoreCodec,
                    stats=True, chunk_px=None, strip_px=None, batch=256,
                    release=None, uri=None, revision=None, assets=None,
-                   log=None) -> dict:
+                   log=None, licence=None) -> dict:
     """Encode one product to the Zarr store `out_path`, replacing a store
     already there once the new one is written. Strips of `strip_px` rows
     (the release's by default) are encoded in turn. chunk_px: per-kind
     chunk sizes, the release's by default. `release`, `uri` and
     `revision` are written to the header's `codec.release`;
     `release=None` writes none. `assets` ({name: (bytes, media_type,
-    filename)}) are stored in the store's `assets` group. Returns
-    timings."""
+    filename)}) are stored in the store's `assets` group. `licence`, a
+    dict, is the header's `licence` (default the release's, for a
+    release whose stores share one). Returns timings."""
+    if getattr(codec, "decode_only", False):
+        codec.check_encoder()
     spec = codec.spec
     W = codec.window
     strip_px = strip_px or spec.strip_px
@@ -786,9 +841,10 @@ def encode_product(src: ProductSource, out_path, codec: StoreCodec,
               "rungs": codec.header_rungs()}
     if stats:
         header["quality"] = codec.header_quality()
-    header["output"] = spec.output_header(codec)
-    if spec.licence is not None:
-        header["licence"] = dict(spec.licence)
+    header["output"] = spec.output_header(codec, src)
+    licence = spec.licence if licence is None else licence
+    if licence is not None:
+        header["licence"] = dict(licence)
     lay = codec.layout(quality=stats, chunk_px=chunk_px)
     aux = src.aux
     w = RecordWriter(out_path, header, lay, src.product_id,
