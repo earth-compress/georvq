@@ -1,0 +1,115 @@
+# S2 v2: the beta_arch_w36 geometry trained from scratch with int8
+# codebooks and the per-window statistics sent through `model.stats_cond`,
+# with AE v2's training recipe where it applies to this source.
+#
+#   sbatch scratch/s2-v2/jobs/s2_v2.sbatch     (main checkout's scratch;
+#   gpus 1, cpus 16, mem 170G, signal B:USR1@300; the script cds to the
+#   release-format worktree and execs the trainer)
+#   Resume with train.resume=checkpoints/s2_v2/model.pt.
+#
+# Geometry, as beta_arch_w36 (the S2 v1 base model): a 36 px window at
+# 10 m (18 at 20 m, 6 at 60 m), the conv encoder at width 128, a coarse
+# tier of one 128-wide vector and a fine tier of 6 x 6 cells of 6 px, both
+# with 8 levels of K=8192, and beta_v4's attention decoder (dim 384, depth
+# 8, 8 heads, per-grid patch heads of width 48).
+#
+# Codebooks: int8 (vq.book_bits 8, as AE v2 and Tessera), trained with
+# the books projected onto their 8-bit grid at every update, so that the
+# books a release ships are the ones the model was trained with. The S2 v1
+# model was trained with float32 books and had to have its decoder
+# fine-tuned on the codes the rounded books assign (configs/s2/s2_v1.yaml).
+#
+# Statistics: the 13 per-band means and 13 stds of each window, taken over
+# each band's nonzero pixels with the unbiased std floored at 1e-4
+# (1 DN), are removed before the encoder and restored after the decoder by
+# the standard stats_cond block instead of S2's own normaliser. The
+# arithmetic is the same as the normaliser's (tests/test_s2_stats_cond.py
+# checks it bit for bit), so the encoder reads the same standardised
+# windows as beta_arch_w36's. What is new is that the encoder and decoder
+# are told the statistics, which neither the S2 v1 model nor ring-space's
+# beta_v4 was: a StatsEmbed of the 26 values is added to the output of the
+# encoder's 10 m stack and to the decoder's AdaLN conditioning, as AE v2
+# conditions both ends. Both embeddings start at zero, so training starts
+# from the unconditioned model. The loss and the trainer's metrics stay in
+# the standardised space, as for beta_arch_w36, so its validation numbers
+# are comparable with this run's.
+#
+# Rate: the statistics are charged at bits_per_band 10, 260 bits per
+# window (0.201 b/px), close to the 256-bit RVQ+PCA channel S2 v1 ships
+# them with. As for AE, bits_per_band is accounting only; the model is
+# trained on the exact statistics, and a channel is fitted afterwards
+# (the S2 v1 one, scratch/s2-stats, reads only the store). The rungs then
+# cost 0.281 (8-0) to 3.170 (8-8) b/px.
+#
+# Recipe, with the differences from beta_arch_w36:
+#   - vq.bf16_scores true (beta_arch_w36: false, which was needed only to
+#     reproduce beta_v4's own codes), as AE v2.
+#   - vq.passthrough_frac 0.15 (beta_arch_w36: 0), as AE v2: 15% of each
+#     batch is decoded from the unquantised latents at full depth, so the
+#     encoder keeps a clean gradient.
+#   - full_frac 0.15, unchanged and as AE v2, rather than 0.05: with path
+#     sampling and the coarse tier at 8 levels in every row (min_depths
+#     [8, 0]), the full-depth rows are what feed the deepest fine levels.
+#   - vq.init_per_code 1000 (beta_arch_w36: 500), as AE v2: tree init on
+#     8.2M vectors per tier.
+#   - lr 1.5e-4 (beta_arch_w36: 2e-4) after 100 steps at lr 0 that fill
+#     AdamW's moments (optim.lr0_steps), a 1000-step warmup (2000) and a
+#     cosine to zero at step 100,000, as AE v2.
+#   - grad clip 0.25 (vq.clip_norm; beta_arch_w36: 1.0). Every recent S2
+#     run spiked late under 1.0, and beta_arch_w36 collapsed at step 44k
+#     under it (job 1015, the collapse guard tripped on a drop of the
+#     unquantised R2 from 0.960 to 0.773); the S2 v1 decoder fine-tune
+#     used 0.25.
+# Unchanged from beta_arch_w36, and also AE v2's: EMA decay 0.998, split
+# resets, tree init, skipped masked levels, commitment weight 0.25,
+# dead threshold 0.000625, bf16 autocast, path depth sampling, AdamW
+# weight decay 0.01, the collapse guard at 0.05. Unchanged from
+# beta_arch_w36 and different from AE v2: the unquantised warmup is 5,000
+# steps at a quarter batch (1792 windows, ramp ends at 4999 so the books
+# are fitted at step 5001 from full batches), where AE v2 had 12,500
+# steps at an eighth; the 36 px warmup had reached an unquantised R2 of
+# 0.947 by step 5000, and the S2 warmup runs at 0.37 s per step.
+#
+# Batch 7168 windows, as beta_arch_w36, whose quantised steps peaked at
+# 67.0 GB of the 80 GB card (job 1012); the smoke of this preset measured
+# the peak with int8 books and the stats embeddings (see the job log).
+# Sample budget (lab/findings/codebook-sample-budget.md) at EMA decay
+# 0.998 (window 500): coarse book 7168 x 500 / 8192 = 437 vectors per code,
+# about the ~450 the rule asks for; fine book 7168 x 36 x 500 / 8192 =
+# 15,750 before path sampling thins the deep levels.
+#
+# 100,000 steps, 717M windows, as beta_arch_w36's schedule. That run had
+# levelled off by about step 31k and stopped at 44k with its lr still at
+# about 75% of the peak; this one is meant to run the whole cosine, so
+# that the last part anneals. At beta_arch_w36's 1.75 s per quantised step
+# this is about 2.1 days.
+#
+# Data: the Major-TOM S2 L1C store and 8192-slot pool (97 GiB resident) of
+# beta_arch; the job needs --mem=170G (job 1015 reached 150 GiB RSS).
+inherit: beta_arch_w36.yaml
+
+model:
+  full_frac: 0.15
+  stats_cond:
+    subtract_mean: true
+    use_std: true
+    std_floor: 1.0e-4
+    cond_encoder: true
+    cond_decoder: true
+    bits_per_band: 10
+  vq:
+    book_bits: 8
+    bf16_scores: true
+    passthrough_frac: 0.15
+    init_per_code: 1000
+    clip_norm: 0.25
+
+train:
+  steps: 100000
+  batch_windows: 7168
+  batch_ramp: {until: 4999, divisor: 4}
+  optim: {lr: 1.5e-4, wd: 0.01, warmup: 1000, lr0_steps: 100,
+          schedule: cosine}
+
+log:
+  run_tag: s2_v2

@@ -10,7 +10,10 @@ resampling of the data itself:
 - normalizer: per-tile per-band mean/std, taken over each band's valid
   (non-zero) pixels, are removed before encoding and re-applied after
   decoding; the stats travel in the packet's side channel
-  (see georvq.inference.stats_codec).
+  (see georvq.inference.stats_codec). A model with `model.stats_cond`
+  (use_std) does the same standardisation inside the model instead, and
+  also conditions the encoder and decoder on the stats; `prep` then
+  leaves the field in reflectance and `S2Normalizer` does not run.
 
 Batches are dicts {"10m": (B,4,W,W), "20m": (B,6,W/2,W/2),
 "60m": (B,3,W/6,W/6)} with W = window (10m pixels, divisible by 6).
@@ -132,6 +135,16 @@ class S2ConvTileEncoder(nn.Module):
 
     Module names follow beta_v2's `TileVQAutoencoder` so its weights load
     by prefix. `width` is beta's stem width (128 in beta_v2).
+
+    With `model.stats_cond.cond_encoder` the window's stats embedding
+    (`stats_bias`, width `width`) is added per channel to the output of
+    the 10 m stack, the first feature map every later layer reads. The
+    stats are removed from the input, so this is where the encoder learns
+    the window's absolute brightness and contrast, and adding it before
+    the 20 m and 60 m joins and the residual blocks lets both tiers use it
+    nonlinearly. Adding it to the coarse branch alone would leave the fine
+    tier without it, and the fine projection is a 1x1 conv, so a bias
+    there would only shift the fine latents.
     """
 
     def __init__(self, coarse_dim, fine_dim, width=128, mid_dim=None,
@@ -162,10 +175,12 @@ class S2ConvTileEncoder(nn.Module):
         else:
             self.mid_down = self.mid_proj = None
 
-    def trunk(self, x):
+    def trunk(self, x, stats_bias=None):
         """The shared stack: the prepped batch -> the 60 m feature map
         (B, 4 * width, W/6, W/6)."""
         h = self.enc_10m(x["10m"])
+        if stats_bias is not None:
+            h = h + stats_bias[:, :, None, None].to(h.dtype)
         h = self.enc_fuse_20m(torch.cat([h, x["20m"]], 1))
         h = self.enc_20m(h)
         return self.enc_res(self.enc_fuse_60m(torch.cat([h, x["60m"]], 1)))
@@ -175,9 +190,7 @@ class S2ConvTileEncoder(nn.Module):
         return self.mid_proj(self.mid_down(h)).flatten(2).transpose(1, 2)
 
     def forward(self, x, stats_bias=None):
-        if stats_bias is not None:
-            raise ValueError("S2ConvTileEncoder takes no stats conditioning")
-        h = self.trunk(x)
+        h = self.trunk(x, stats_bias)
         fine = self.hq_proj(h).flatten(2).transpose(1, 2)    # (B, g*g, D)
         coarse = self.cls_proj(self.cls_pool(self.cls_res(h)).flatten(1))
         if self.mid_down is None:
@@ -211,7 +224,12 @@ def _check_tile_layout(model_cfg, what):
 class S2Normalizer:
     """Per-tile per-band mean/std side channel: normalize before encode,
     restore after decode. `stats_vector` orders [means..., stds...] over
-    the 13 bands (the layout the stats codec compresses)."""
+    the 13 bands (the layout the stats codec compresses).
+
+    Used by models without `model.stats_cond` (the S2 v1 model). A
+    stats_cond model standardises inside the model with the same
+    arithmetic (`georvq.model.stats_cond`, multi-group path), which
+    tests/test_s2_stats_cond.py checks against this class bit for bit."""
 
     per_sample = True       # denormalize needs the batch's own stats
 
@@ -281,6 +299,17 @@ def group_valid(valid, name):
     return v > 0.5
 
 
+class _FieldScale:
+    """The normalizer of a stats_cond model: the model space is the field
+    itself (reflectance / MAX_VALUE), so denormalizing is the identity and
+    `physical_scale` turns it into DN."""
+
+    per_sample = False
+
+    def denormalize(self, x, stats=None):
+        return x
+
+
 class S2Source(Source):
     name = "s2"
     grid_period = 6      # crop offsets must land on all three native grids
@@ -291,7 +320,17 @@ class S2Source(Source):
         assert p % 6 == 0, \
             ("S2 needs the fine-token patch size (window / finest grid) "
              f"divisible by 6 so every native grid decodes exactly; got {p}")
-        self._norm = S2Normalizer()
+        # A stats_cond model standardises inside the model; S2Normalizer
+        # runs only for the models trained without it.
+        sc = getattr(model_cfg, "stats_cond", None)
+        if sc is not None and not (sc.subtract_mean and sc.use_std):
+            raise ValueError(
+                "S2 with model.stats_cond needs subtract_mean and use_std: "
+                "the encoder reads per-band standardised windows, as the "
+                "S2 v1 model's normaliser gives")
+        self._stats_cond = sc
+        self._norm = _FieldScale() if sc is not None else S2Normalizer()
+        self._last_stats = None
         self._stats_pca_bits = None    # set from a checkpoint's prep state
 
     def prep_state(self):
@@ -326,6 +365,9 @@ class S2Source(Source):
             band_valid[name] = t != 0
             x[name] = t.float() / MAX_VALUE
         valid = pixel_valid(band_valid)
+        if self._stats_cond is not None:
+            # the model removes and transmits the stats (stats_cond)
+            return x, valid
         xn, self._last_stats = self._norm.normalize(x, band_valid)
         return xn, valid
 
@@ -407,7 +449,12 @@ class S2Source(Source):
         of the rung's index bits, falling back to the cheapest when even
         that does not fit. `depths=None` means "a whole packet", i.e. full
         depth.
+
+        A stats_cond model's stats are charged by `model.stats_cond`
+        (`bits_per_band`), so the source adds nothing for them.
         """
+        if self._stats_cond is not None:
+            return 0.0
         enc = self._stats_encodings(cfg)
         if depths is None:
             depths = [sp.depth for sp in cfg.tiers]
@@ -426,11 +473,29 @@ class S2Source(Source):
             return 1e-4          # tighter than PCA can hit -> f16 escape
         return 0.01
 
+    def _standardized(self, out, x):
+        """(out, x) in the per-window standardised space the encoder reads.
+
+        For a stats_cond model `out` and `x` are reflectance, and the loss
+        and metrics are still scored after removing each window's per-band
+        mean and std, taken from `x` exactly as the model takes them. That
+        keeps the S2 v1 objective (an MSE that weighs every window and band
+        alike, whatever its brightness or contrast) and keeps trainer
+        metrics comparable with runs trained without stats_cond. Other
+        models are already in that space."""
+        if self._stats_cond is None:
+            return out, x
+        from georvq.model.stats_cond import center, patch_stats, standardize
+        st = patch_stats(x, use_std=True,
+                         std_floor=self._stats_cond.std_floor)
+        return standardize(out, st), center(x, st)
+
     def recon_stats(self, out: dict, x: dict, valid):
         """Per-group MSE over valid pixels, averaged over the groups.
 
         Nodata pixels carry no target (the release restores them from the
         mask), so they are left out of the loss as DEM leaves them out."""
+        out, x = self._standardized(out, x)
         losses = {}
         total = 0.0
         for name in GROUPS:
@@ -483,11 +548,16 @@ class S2Source(Source):
         """
         from georvq.sources.report import (FIGURES, Metric, ReportSpec,
                                            band_rgb_preview)
-        r2 = Metric("r2", "R² (variance explained)", _s2_r2,
+
+        def std(fn):
+            if self._stats_cond is None:
+                return fn
+            return lambda o, x, v: fn(*self._standardized(o, x), v)
+        r2 = Metric("r2", "R² (variance explained)", std(_s2_r2),
                     higher_better=True, bounded=True)
-        sam = Metric("sam", "spectral angle, standardized (rad)", _s2_sam,
-                     higher_better=False, bounded=False)
-        rmse = Metric("rmse", "RMSE (standardized)", _s2_rmse,
+        sam = Metric("sam", "spectral angle, standardized (rad)",
+                     std(_s2_sam), higher_better=False, bounded=False)
+        rmse = Metric("rmse", "RMSE (standardized)", std(_s2_rmse),
                       higher_better=False, bounded=False)
         # R=B04, G=B03, B=B02 within the 10m group's band order; the
         # preview selects that group out of the model's dict output.

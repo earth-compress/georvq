@@ -313,7 +313,9 @@ class PyramidCodec(nn.Module):
         out = self.decoder(zqs, cond, stats=emb)
         if self.stats_cond is not None and self.stats_cond.subtract_mean:
             from georvq.model.stats_cond import uncenter
-            out = uncenter(out, stats.to(out.dtype), valid)
+            if not isinstance(out, dict):
+                stats = stats.to(out.dtype)
+            out = uncenter(out, stats, valid)
             # a source whose field is constrained (AE: unit-norm pixels)
             # cannot impose that in its head once the head predicts the
             # mean-removed residual, so it applies it here instead
