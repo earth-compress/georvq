@@ -129,6 +129,34 @@ def tuple_bits(specs, ls, side_bits=0.0):
     return float(sum(sp.bits(L) for sp, L in zip(specs, ls))) + side_bits
 
 
+def _merge_rows(B, parts):
+    """Scatter decoder outputs for disjoint row sets back into one batch.
+
+    parts: ((rows, out), ...) where each out is a tensor or a dict of
+    tensors (a multi-resolution source). The result takes the widest
+    dtype among the parts, since under autocast two decoders need not
+    return the same one."""
+    def ts(o):
+        return list(o.values()) if isinstance(o, dict) else [o]
+
+    dt = ts(parts[0][1])[0].dtype
+    for _, o in parts:
+        for t in ts(o):
+            dt = torch.promote_types(dt, t.dtype)
+
+    def merged(get):
+        t0 = get(parts[0][1])
+        full = t0.new_zeros((B,) + tuple(t0.shape[1:]), dtype=dt)
+        for rows, o in parts:
+            full[rows] = get(o).to(dt)
+        return full
+
+    o0 = parts[0][1]
+    if isinstance(o0, dict):
+        return type(o0)({k: merged(lambda o, k=k: o[k]) for k in o0})
+    return merged(lambda o: o)
+
+
 # --------------------------------------------------------------------------
 # codec
 # --------------------------------------------------------------------------
@@ -145,12 +173,17 @@ class PyramidCodec(nn.Module):
         self.norm_latents = cfg.norm_latents
         self.continuous = cfg.vq is None
 
-        self.stem = source.build_stem(cfg)
-        self.tokenizer = ViTTokenizer(
-            self.specs, cfg.window, cfg.bands, dim=cfg.tokenizer.dim,
-            depth=cfg.tokenizer.depth, ff_ratio=cfg.ff_ratio,
-            stem_pyramid=cfg.tokenizer.stem_pyramid,
-            embed_norm=cfg.tokenizer.embed_norm)
+        if cfg.tokenizer.kind == "source":
+            # the source's encoder reads the prepped batch itself
+            self.stem = nn.Identity()
+            self.tokenizer = source.build_encoder(cfg)
+        else:
+            self.stem = source.build_stem(cfg)
+            self.tokenizer = ViTTokenizer(
+                self.specs, cfg.window, cfg.bands, dim=cfg.tokenizer.dim,
+                depth=cfg.tokenizer.depth, ff_ratio=cfg.ff_ratio,
+                stem_pyramid=cfg.tokenizer.stem_pyramid,
+                embed_norm=cfg.tokenizer.embed_norm)
 
         if not self.continuous:
             v = cfg.vq
@@ -269,6 +302,11 @@ class PyramidCodec(nn.Module):
                 sigma_cond=cfg.sigma is not None,
                 sigma_freqs=cfg.sigma.freqs if cfg.sigma else 8)
 
+        # built last, so that every other module draws the same initial
+        # weights from a given seed whether or not it exists
+        self.coarse_decoder = (None if cfg.coarse_decoder is None
+                               else source.build_coarse_decoder(cfg))
+
     # ---- encode / decode ----
 
     def encode_levels(self, x, stats=None, valid=None):
@@ -305,7 +343,10 @@ class PyramidCodec(nn.Module):
         without raising."""
         self._require_stats(stats, "decode")
         emb = None if self.stats_dec is None else self.stats_dec(stats)
-        out = self.decoder(zqs, cond, stats=emb)
+        if self.coarse_decoder is None:
+            out = self.decoder(zqs, cond, stats=emb)
+        else:
+            out = self._decode_routed(zqs, cond, emb)
         if self.stats_cond is not None and self.stats_cond.subtract_mean:
             from georvq.model.stats_cond import uncenter
             out = uncenter(out, stats.to(out.dtype), valid)
@@ -317,6 +358,22 @@ class PyramidCodec(nn.Module):
             if finalize is not None:
                 out = finalize(out, valid)
         return out
+
+    def _decode_routed(self, zqs, cond, emb):
+        """Rows whose finer tiers are all at depth 0 go to the coarse
+        decoder, the rest to the main decoder, and the outputs are put
+        back in batch order. A batch of one kind makes a single call."""
+        coarse = (cond[:, 1:] == 0).all(1)
+        if bool(coarse.all()):
+            return self.coarse_decoder(zqs[0][:, 0])
+        if not bool(coarse.any()):
+            return self.decoder(zqs, cond, stats=emb)
+        ci = coarse.nonzero(as_tuple=True)[0]
+        fi = (~coarse).nonzero(as_tuple=True)[0]
+        oc = self.coarse_decoder(zqs[0][ci, 0])
+        of = self.decoder([z[fi] for z in zqs], cond[fi],
+                          stats=None if emb is None else emb[fi])
+        return _merge_rows(cond.shape[0], ((ci, oc), (fi, of)))
 
     def _require_stats(self, stats, where):
         if self.stats_cond is not None and stats is None:

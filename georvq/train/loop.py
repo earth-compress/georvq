@@ -32,12 +32,15 @@ from georvq.repro import (load_checkpoint, run_metadata, save_checkpoint,
 from georvq.train.figures import (codebook_figure, cosdist_figure,
                                   error_hist_harvest, error_hist_render,
                                   rd_err_harvest, rd_err_render, rd_figure,
-                                  recon_harvest, recon_render, reset_figure)
+                                  recon_harvest, recon_render,
+                                  ref_history_figure, reset_figure)
 from georvq.sources.report import resolve_report
-from georvq.train.validate import canonical_tuples, load_rd_ref, tname, validate
+from georvq.train.validate import (canonical_tuples, load_ref_curve,
+                                   load_rd_ref, tname, validate)
 from georvq.train import dist as D
 from georvq.train.signals import stop_on_signals
-from georvq.train.warmstart import (check_warm_start, freeze_books,
+from georvq.train.warmstart import (DECODER_MODULES, check_warm_start,
+                                    freeze_all_but_decoder, freeze_books,
                                     load_partial, set_encoder_frozen,
                                     trainable_params)
 
@@ -268,6 +271,13 @@ def _train(cfg: Config, gpu, stop):
                   if all(L >= m for L, m in zip(t, mins))]
     canon = canonical_tuples(specs, mins, cfg.model.depth_sampling)
     ref_fronts = [load_rd_ref(s) for s in cfg.eval.rd_refs]
+    ref_curves = [load_ref_curve(rc.path, rc.label)
+                  for rc in cfg.eval.ref_curves]
+    # tuples a reference scored, which every validation then scores too
+    ref_ts = [t for t in tuples
+              if any(tname(t) in rc["quality_by_tuple"] for rc in ref_curves)]
+    ref_hist = {"step": [], "ceiling": [],
+                **{tname(t): [] for t in ref_ts}}
     run_dir = os.path.join(cfg.log.out_dir, cfg.log.run_tag)
     os.makedirs(run_dir, exist_ok=True)
     write_resolved_config(run_dir, cfg)
@@ -285,6 +295,11 @@ def _train(cfg: Config, gpu, stop):
     # fail in the first second, not at the first val_interval.
     report = resolve_report(source, cfg)
     qm = report.quality
+    for rc in ref_curves:
+        if rc["quality_key"] != qm.key:
+            raise ValueError(
+                f"eval.ref_curves: {rc['path']} scores {rc['quality_key']!r} "
+                f"but this run's quality metric is {qm.key!r}")
     if D.is_main():
         print(f"report: quality={qm.key} "
               f"extra={[m.key for m in report.extra]} "
@@ -396,6 +411,15 @@ def _train(cfg: Config, gpu, stop):
         n_book = freeze_books(model)
         print(f"vq.freeze_books: {n_book/1e6:.1f}M codebook weights frozen "
               f"(no EMA, no resets, no grad)", flush=True)
+    # the top-level modules a decoder-only stage trains
+    dec_modules = (("coarse_decoder",) if cfg.train.coarse_decoder_only
+                   else DECODER_MODULES)
+    dec_stage = cfg.train.decoder_only or cfg.train.coarse_decoder_only
+    if dec_stage:
+        n_dec = freeze_all_but_decoder(model, dec_modules)
+        print(f"decoder-only stage: {n_dec/1e6:.2f}M params train in "
+              f"{dec_modules}; everything else frozen (eval, no EMA, no "
+              f"resets)", flush=True)
     if ddp_world > 1:
         # Absorb prefill skew explicitly before the first real collective:
         # ranks reach this point many minutes apart because each fills its
@@ -422,6 +446,8 @@ def _train(cfg: Config, gpu, stop):
     # params (the encoder) must be present from the start or
     # unfreezing them later would never take effect.
     def _trains_eventually(n, p):
+        if dec_stage:
+            return n.split(".")[0] in dec_modules
         if v.freeze_books and n.startswith("rvqs."):
             return False              # frozen for the whole run
         if cfg.train.freeze_codec:
@@ -449,7 +475,10 @@ def _train(cfg: Config, gpu, stop):
               f"{sched.get_last_lr()[0]:.3g})", flush=True)
     elif cfg.train.init_from:
         ck = load_checkpoint(cfg.train.init_from, map_location=device)
-        if "opt" in ck:
+        if dec_stage:
+            print(f"decoder-only stage: fresh AdamW over {dec_modules}",
+                  flush=True)
+        elif "opt" in ck:
             try:
                 # moments only -- the lr SCHEDULE stays what this run's
                 # config says (resume recipes set their warmup on
@@ -491,7 +520,7 @@ def _train(cfg: Config, gpu, stop):
     select_weight = (cfg.model.conditioning.weight
                      if cfg.model.conditioning is not None
                      and cfg.model.conditioning.kind == "select" else 0.0)
-    commit_weight = v.commit_weight
+    commit_weight = 0.0 if dec_stage else v.commit_weight
     # batch_windows is the GLOBAL batch: splitting it keeps the effective
     # batch, the LR schedule and the step count identical to a single-GPU
     # run, so extra ranks buy wall-clock rather than changing the recipe.
@@ -558,6 +587,10 @@ def _train(cfg: Config, gpu, stop):
     last_save = None
     last_val_ok = start - 1
     for step in range(start, cfg.train.steps + 1):
+        if dec_stage:
+            # validate() and the figure harvests return the whole model
+            # to train(), which would let BatchNorm and the books update
+            freeze_all_but_decoder(model, dec_modules)
         if enc_frozen and step > cfg.train.freeze_encoder_steps:
             set_encoder_frozen(model, False)
             enc_frozen = False
@@ -683,6 +716,8 @@ def _train(cfg: Config, gpu, stop):
                 pt = torch.rand(x.shape[0], device=device) \
                     < v.passthrough_frac
                 Ls = torch.where(pt[:, None], Ls_full.expand_as(Ls), Ls)
+            if cfg.train.coarse_decoder_only:
+                Ls[:, 1:] = 0
             with amp:
                 zs = model.encode_levels(x, st, valid)
             mark_resets(model, step, first_reset)
@@ -852,7 +887,8 @@ def _train(cfg: Config, gpu, stop):
 
         if (step % cfg.train.val_interval == 0
                 or step == cfg.train.steps) and D.is_main():
-            canon_ts = list(canon.values())
+            canon_ts = list(canon.values()) + [t for t in ref_ts
+                                               if t not in canon.values()]
             if step == cfg.train.steps and len(tuples) <= 64:
                 val_ts = tuples           # full enumeration at the end
             else:
@@ -878,6 +914,16 @@ def _train(cfg: Config, gpu, stop):
                 model.eval()
             if v.freeze_books:            # validate() leaves the model in
                 freeze_books(model)       # train() -- re-assert the freeze
+            if ref_curves:
+                ref_hist["step"].append(step + step0)
+                ref_hist["ceiling"].append(vs[f"{qm.key}_ceiling"])
+                for t in ref_ts:
+                    ref_hist[tname(t)].append(cbt.get(tname(t), float("nan")))
+                ref_fig = ref_history_figure(ref_hist, ref_curves, qm)
+                ref_fig.savefig(os.path.join(run_dir, "val_vs_ref.png"),
+                                dpi=90)
+                ref_img = wandb.Image(ref_fig) if use_wandb else None
+                plt.close(ref_fig)
             ebt = vs.pop("_extra", {})
             extra_str = "".join(
                 f" {m.key}_ceil={vs[f'{m.key}_ceiling']:.4f}"
@@ -943,6 +989,18 @@ def _train(cfg: Config, gpu, stop):
                     bk = f"{qm.key}_{b.key}"
                     if bk in vs:
                         scalars[f"val/{bk}"] = vs[bk]
+                # run minus reference at each tuple both scored
+                for rc in ref_curves:
+                    for tn, rv in rc["quality_by_tuple"].items():
+                        if tn in cbt:
+                            scalars[f"val/{qm.key}_{tn}_vs_{rc['slug']}"] = \
+                                cbt[tn] - rv
+                    rce = rc["scalars"].get(f"{qm.key}_ceiling")
+                    if rce is not None:
+                        scalars[f"val/{qm.key}_ceiling_vs_{rc['slug']}"] = \
+                            vs[f"{qm.key}_ceiling"] - rce
+                if ref_curves:
+                    scalars["val_figs/ref_history"] = ref_img
                 # Every figure below is a view of QUANTIZED behaviour --
                 # the R-D front, per-level codebook health, reconstructions
                 # at depth tuples. During the VQ-free warmup they would all
@@ -1012,12 +1070,12 @@ def _train(cfg: Config, gpu, stop):
                         if report.has_figure("rd"):
                             add("figs/rd", rd_figure(
                                 cbt, vs, specs, val_ts, step, report,
-                                ref_fronts=ref_fronts,
+                                ref_fronts=ref_fronts, ref_curves=ref_curves,
                                 px=cfg.model.window ** 2, side_bits=sb))
                         if report.has_figure("rd_log"):
                             add("figs/rd_log", rd_figure(
                                 cbt, vs, specs, val_ts, step, report,
-                                ref_fronts=ref_fronts,
+                                ref_fronts=ref_fronts, ref_curves=ref_curves,
                                 px=cfg.model.window ** 2, dist_log=True,
                                 side_bits=sb))
                         if report.has_figure("codebook"):
@@ -1053,6 +1111,13 @@ def _train(cfg: Config, gpu, stop):
             # Collapse guard: a stage latch is a catastrophic ceiling drop
             # that never recovers; trip on the FIRST validation past it.
             ceil_q = vs[f"{qm.key}_ceiling"]
+            if vq_live and not best_is_quantized:
+                # the unquantised ceiling falls once the network trains on
+                # quantised latents (0.976 -> 0.926 R2 within 2k steps on
+                # s2_w60 while full decode rose), so the warmup's best is
+                # not a reference for the quantised phase
+                best_ceil_guard = (-math.inf if qm.higher_better
+                                   else math.inf)
             if cfg.train.guard_drop is not None:
                 worse = (best_ceil_guard - ceil_q if qm.higher_better
                          else ceil_q - best_ceil_guard)

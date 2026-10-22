@@ -53,3 +53,25 @@ def test_stage1_smoke(smoke_cfg):
                      "log.run_tag=smoke_s1"])
     run_dir = train(cfg, gpu=-1)
     assert os.path.exists(os.path.join(run_dir, "model.pt"))
+
+
+def test_decoder_only_changes_only_the_decoder(smoke_cfg):
+    """train.decoder_only: after a few steps, with a validation in between
+    (which returns the model to train mode), every encoder and codebook
+    tensor, buffers included, is bit-identical to the checkpoint it
+    started from, and the decoder has moved."""
+    from georvq.repro import load_checkpoint
+    from georvq.train.loop import train
+    src_dir = train(load_config("configs/smoke.yaml", smoke_cfg), gpu=-1)
+    src = os.path.join(src_dir, "model.pt")
+    cfg = load_config("configs/smoke.yaml", smoke_cfg + [
+        f"train.init_from={src}", "train.decoder_only=true",
+        "model.vq.warmup_steps=0", "train.steps=6", "train.val_interval=3",
+        "train.save_interval=6", "log.run_tag=smoke_dec"])
+    dec_dir = train(cfg, gpu=-1)
+    a = load_checkpoint(src)["model"]
+    b = load_checkpoint(os.path.join(dec_dir, "model.pt"))["model"]
+    assert a.keys() == b.keys()
+    moved = [k for k in a if not torch.equal(a[k], b[k])]
+    assert moved and all(k.startswith("decoder.") for k in moved), moved
+    assert any(k.startswith("rvqs.") for k in a)

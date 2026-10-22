@@ -1,0 +1,111 @@
+# Sentinel-2 L1C on a 60 px window (600 m) with three nested tiers, the
+# maintainer's design after beta_arch (42 px) and beta_arch_w36 (36 px).
+# Scored in DN through scratch/s2-final/score_s2.py, the 42 px model beat
+# beta_v4 below 1.5 b/px but was 5-10% worse per band at 2.2-3.0 b/px,
+# and the 36 px one paid more per-window overhead. A 60 px window halves
+# that overhead per pixel against 42 px, and 183 windows tile a 10980 px
+# L1C tile exactly.
+#
+#   sbatch scratch/s2-final/jobs/s2_w60.sbatch
+#   (--gpus=1 --mem=170G --time=4-00:00:00 --signal=B:USR1@300, and the
+#   script execs scripts/train_pyramid.py -c configs/s2/s2_w60.yaml)
+#   Resume a stopped run with train.resume=checkpoints/s2_w60/model.pt.
+#
+# Tiers, all latents 128 wide:
+#   - coarse, one cell per window (600 m), K=2048, 8 levels;
+#   - mid, 5 x 5 cells of 12 px (120 m), K=8192, 8 levels;
+#   - fine, 10 x 10 cells of 6 px (60 m, one 60 m pixel, as beta's HQ
+#     cell), K=8192, 8 levels.
+# Each mid cell is exactly 2 x 2 fine cells. Per level the coarse tier
+# costs 11 bits (0.0031 b/px), the mid 325 bits (0.090 b/px) and the fine
+# 1300 bits (0.361 b/px, against 0.389 for beta_v4's 49 cells of 14 bits
+# on 42 px). With the stats the rungs are 8-0-0 0.142, 8-8-0 0.864, 8-8-1
+# 1.226, 8-8-2 1.587, 8-8-4 2.309 and 8-8-8 3.753 b/px.
+#
+# Encoder: beta_v2's conv stack as in beta_arch (S2ConvTileEncoder), whose
+# 60 m feature map (10 x 10 here) gives the fine tier through `hq_proj`
+# and the coarse vector through the pooled `cls_*` branch. The mid tier is
+# a third branch on the same map: a conv with kernel and stride 2, so
+# each token reads its own 2 x 2 block of fine cells and nothing outside
+# it, then a 1x1 conv and a projection to 128 (1.4M parameters). The
+# decoder is beta_arch's (dim 384, depth 8, learned positions per token,
+# no lineage bridge) and needs no change for a third tier. 49.8M
+# parameters in all, 18.9M of them codebooks.
+#
+# Stats: per-window per-band mean and std as float16, 424 bits (0.118 b/px
+# at 60 px, against 0.240 at 42 px), charged at every rung.
+#
+# Recipe, the maintainer's "20k unquantized with 15k reduced batch size
+# within that, then full codebook training": 20,000 unquantised warmup
+# steps with tier truncation (`warmup_truncate`), the first 15,000 of them
+# at a quarter of the batch. The tree init at step 20,001 draws its
+# vectors at the batch of step 20,000, which is already the full batch,
+# so the books are fitted on latents from the full-batch encoder. Then
+# quantised training with split resets and EMA decay 0.998, as beta_arch.
+#
+# Grad clip 0.25 from the first step, where beta_arch used the default
+# 1.0. Every recent run had late loss spikes under 1.0: beta_arch at
+# 42 px, the Tessera run, and beta_arch_w36, whose grad norm had a median
+# of 0.12-0.14 on quiet steps and then spiked to 31 before the collapse at
+# 44k. A limit of about twice the quiet median leaves ordinary steps
+# alone and caps a spike at that size.
+#
+# Depth sampling along the path with the coarse tier always at 8 levels
+# (min_depths [8, 0, 0]): 17 points from 8-0-0 to 8-8-8. full_frac is
+# 0.05 where beta_arch used 0.15, so that the middle of the ladder gets
+# more of the batch: at 0.15 the full-depth tuple would take 20% of rows
+# and each other point 5.0%, at 0.05 it takes 10.6% and each other point
+# 5.6%. beta_arch scored worst against beta_v4 in the middle of its ladder
+# (2.2-3.0 b/px), which here falls between 8-8-3 and 8-8-6.
+#
+# lr 2e-4 cosine with a 2000-step warmup, bf16 autocast, codes assigned on
+# fp32 distances (bf16_scores off), as beta_arch.
+#
+# Batch 3584 windows, 12.9 Gpx per 1000 steps. The pilot (jobs 1054 and
+# 1056) peaked at 50.0 / 59.3 / 68.9 / 78.5 GiB of GPU memory at batch
+# 2560 / 3072 / 3584 / 4096 over quantised steps, about 19 MiB per window,
+# so 3584 leaves 11 GiB of the 80 GiB card and 4096 only 1.5. Throughput
+# was flat at about 1530 windows per second, 2.33 s per quantised step at
+# 3584. Sample
+# budget (lab/findings/codebook-sample-budget.md), vectors per code per
+# EMA window of 500 steps = batch x cells x 500 x share / K:
+#   - coarse, every row at every level: 3584 x 500 / 2048 = 875;
+#   - mid, deepest level (9 of 17 path points plus the full rows, a
+#     share of 0.55): 3584 x 25 x 500 x 0.55 / 8192 = 3000;
+#   - fine, deepest level (full rows and the 8-8-8 path point, 0.106):
+#     3584 x 100 x 500 x 0.106 / 8192 = 2300.
+# All are above the ~450 the rule asks for.
+#
+# 125,000 steps, about 3 days at the measured rate: 15,000 at batch 896,
+# 5,000 unquantised at 3584 and 105,000 quantised at 3584, 409M windows or
+# 1.47e12 px. beta_arch was set for 250,000 steps of 2048 tiles of 42 px
+# (512M tiles, 0.90e12 px), so this run sees 1.6 times its pixels in
+# fewer, larger windows.
+#
+# No reference curves: artifacts/s2_ref_beta_v4.json was scored on 42 px
+# windows, and trainer R2 on per-window normalised data is not comparable
+# across window sizes. Compare with beta_v4 through
+# scratch/s2-final/score_s2.py, in DN at matched rate.
+inherit: beta_arch.yaml
+
+model:
+  window: 60
+  tiers: ["1:128:2048:8", "5:128:8192:8", "10:128:8192:8"]
+  min_depths: [8, 0, 0]
+  full_frac: 0.05
+  vq:
+    warmup_steps: 20000
+    clip_norm: 0.25
+
+train:
+  steps: 125000
+  batch_windows: 3584
+  batch_ramp: {until: 15000, divisor: 4}
+
+log:
+  run_tag: s2_w60
+
+eval:
+  recon_tuples: ["8-0-0", "8-4-0", "8-8-0", "8-8-1", "8-8-2", "8-8-4",
+                 "8-8-6", "8-8-8"]
+  ref_curves: []

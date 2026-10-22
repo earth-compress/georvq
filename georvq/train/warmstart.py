@@ -145,6 +145,23 @@ def freeze_books(model):
                for l in rvq.levels)
 
 
+DECODER_MODULES = ("decoder", "stats_dec")
+
+
+def freeze_all_but_decoder(model, modules=DECODER_MODULES):
+    """Freeze every top-level module except those named in `modules` (the
+    decoder side by default): eval mode (BatchNorm statistics and the VQ
+    EMA stay put), no gradient, no resets. Like freeze_books, it must be
+    re-asserted after validate(). Returns the number of parameters left
+    trainable."""
+    freeze_books(model)
+    for name, mod in model.named_children():
+        dec = name in modules
+        mod.train(dec)
+        mod.requires_grad_(dec)
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+
 def set_params_frozen(model, names, frozen: bool):
     """Freeze/unfreeze by name. Safe to call after the optimizer is built:
     the optimizer holds every trainable param from the start (see

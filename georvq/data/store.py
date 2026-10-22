@@ -41,6 +41,40 @@ def geographic_split(index: pd.DataFrame, val_frac=0.04, cell_deg=10.0,
         index[is_val].reset_index(drop=True)
 
 
+def _grid_cells(index: pd.DataFrame, cell_deg: float) -> pd.Series:
+    return (np.floor(index.lat / cell_deg).astype(int).astype(str) + "_"
+            + np.floor(index.lon / cell_deg).astype(int).astype(str))
+
+
+def spread_rows(rows: pd.DataFrame, cell_deg=10.0, seed=0) -> pd.DataFrame:
+    """The same rows, reordered so that any prefix spreads over every grid
+    cell they occupy.
+
+    Consumers that take the first N held-out chips (`fixed_val_tokens`
+    reads `rows.head(max_chips)`) otherwise get whatever the index order
+    puts first, which on a catalogue sorted by grid name is a few cells
+    and a narrow band of latitude. The cells are visited in a seeded
+    order, round robin, and each cell's rows in a seeded order, so a
+    prefix of length N holds about N / n_cells rows per cell (all of a
+    cell's rows once it runs out). Deterministic in (rows, cell_deg, seed).
+    """
+    if len(rows) == 0:
+        return rows
+    rng = np.random.default_rng(seed)
+    cells = _grid_cells(rows, cell_deg).to_numpy()
+    names = np.unique(cells)
+    names = names[rng.permutation(len(names))]
+    members = [rng.permutation(np.flatnonzero(cells == c)) for c in names]
+    # round robin: rank within its cell first, then the cell's visit order
+    rank = np.empty(len(rows), np.int64)
+    visit = np.empty(len(rows), np.int64)
+    for ci, m in enumerate(members):
+        rank[m] = np.arange(len(m))
+        visit[m] = ci
+    order = np.lexsort((visit, rank))
+    return rows.iloc[order].reset_index(drop=True)
+
+
 def open_store(store_dir, reader="auto"):
     """ChipStore, or a live store that reads the source rasters directly.
 

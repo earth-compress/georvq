@@ -189,3 +189,44 @@ def test_true_colour_preview_uses_the_visible_bands():
     assert 0.0 <= rgb.min() and rgb.max() <= 1.0
     # a real scene is not a constant field
     assert rgb.std() > 0.01
+
+
+def _synthetic_index():
+    """Rows sorted so that index order is cell order, as the Major-TOM
+    catalogue is: 5 cells of very different sizes."""
+    rows = []
+    sizes = {(-35.0, 2.0): 400, (31.0, -5.0): 300, (45.0, 130.0): 40,
+             (55.0, -60.0): 25, (75.0, 150.0): 3}
+    i = 0
+    for (lat, lon), n in sizes.items():
+        for k in range(n):
+            rows.append({"chip_id": i, "shard": 0, "slot": i, "path": "",
+                         "lat": lat + 0.001 * k, "lon": lon, "crs": "",
+                         "year": 0})
+            i += 1
+    return pd.DataFrame(rows)
+
+
+def test_spread_rows_prefix_covers_every_cell():
+    from georvq.data.store import spread_rows
+    idx = _synthetic_index()
+    out = spread_rows(idx, cell_deg=10.0, seed=0)
+    assert sorted(out.chip_id) == sorted(idx.chip_id)        # a permutation
+    head = out.head(60)
+    cells = np.floor(head.lat / 10).astype(int)
+    counts = cells.value_counts()
+    assert len(counts) == 5                                  # every cell
+    assert counts.min() == 3 and counts.max() <= 15          # small cell exhausted
+    # deterministic in the seed, and the seed matters
+    assert out.chip_id.tolist() == spread_rows(idx, 10.0, 0).chip_id.tolist()
+    assert out.chip_id.tolist() != spread_rows(idx, 10.0, 1).chip_id.tolist()
+    # the index-order head would have seen one cell only
+    assert np.floor(idx.head(60).lat / 10).nunique() == 1
+
+
+def test_live_split_orders_val_rows_by_spread():
+    store = LiveS2Store.__new__(LiveS2Store)
+    store.index = _synthetic_index()
+    tr, va = store.split(val_frac=1.0, seed=0)
+    assert len(tr) == 0 and len(va) == len(store.index)
+    assert np.floor(va.head(60).lat / 10).nunique() == 5

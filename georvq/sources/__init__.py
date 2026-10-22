@@ -50,6 +50,20 @@ class Source:
         px = out_px or model_cfg.window
         return fine.grid, px // fine.grid
 
+    def build_coarse_decoder(self, model_cfg) -> nn.Module:
+        """The decoder for coarse-only rows (`model.coarse_decoder`): the
+        coarse tier's quantised vector (B, dim) -> the same output
+        structure as the main decoder's head."""
+        raise NotImplementedError(
+            f"source {self.name!r} has no coarse decoder")
+
+    def build_encoder(self, model_cfg) -> nn.Module:
+        """The whole encoder, for `model.tokenizer.kind: source`: the
+        prepped batch -> one (B, cells, dim) latent per tier."""
+        raise NotImplementedError(
+            f"source {self.name!r} has no encoder of its own; use "
+            f"model.tokenizer.kind: vit")
+
     def normalizer(self, model_cfg):
         """Optional per-tile stats side-channel codec (None if the data
         needs no per-tile normalization)."""

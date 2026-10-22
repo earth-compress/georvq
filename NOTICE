@@ -75,8 +75,11 @@ Major TOM Core-S2L1C -- CC-BY-SA 4.0 (LICENSES/CC-BY-SA-4.0.txt)
     artifacts/s2_stats_pca.npz
         a PCA basis fitted to per-tile band statistics of Core-S2L1C
         chips.
-  Changes: only fitted statistics are included, no imagery. This file
-  is shared under the same licence.
+    artifacts/s2_ref_beta_v4.json
+        reconstruction scores of the ring-space beta_v4 codec on 4096
+        validation windows of Core-S2L1C chips.
+  Changes: only fitted statistics and scores are included, no imagery.
+  These files are shared under the same licence.
 
 
 ERA5 (ECMWF, Copernicus Climate Change Service) -- CC-BY 4.0

@@ -14,7 +14,7 @@ from georvq.train.validate import canonical_tuples, tname
 
 
 def rd_figure(q_by_tuple, vs, specs, tuples, step, spec, ref_fronts=(),
-              px=256, dist_log=False, side_bits=0.0):
+              px=256, dist_log=False, side_bits=0.0, ref_curves=()):
     """Rate-distortion scatter for the run's own quality metric.
 
     `spec` is the resolved `ReportSpec`: it supplies the axis label, which
@@ -34,6 +34,16 @@ def rd_figure(q_by_tuple, vs, specs, tuples, step, spec, ref_fronts=(),
     for label, front in ref_fronts:
         fb, fc = zip(*front)
         ax.plot(fb, Y(fc), ":", lw=1.6, alpha=0.9, label=label)
+    for rc in ref_curves:
+        pts = sorted(_ref_points(rc, specs, px, side_bits))
+        if pts:
+            rb, rq = zip(*pts)
+            ax.plot(rb, Y(rq), ":", marker="x", ms=4, lw=1.6, color="C3",
+                    label=rc["label"])
+            rce = rc["scalars"].get(f"{q.key}_ceiling")
+            if rce is not None:
+                ax.axhline(Y(rce), color="C3", ls=":", lw=1,
+                           label=f"{rc['label']} ceiling ({rce:.4f})")
     fig.colorbar(sc, label="L0 (coarse depth)")
     # Pareto front -- "better" is metric-dependent: an angle or an RMSE
     # improves DOWNWARD, so the frontier tracks the running min there.
@@ -61,6 +71,63 @@ def rd_figure(q_by_tuple, vs, specs, tuples, step, spec, ref_fronts=(),
                title=f"pyramid R-D @ step {step}")
     ax.grid(alpha=0.3, which="both")
     ax.legend(fontsize=7, loc="lower left" if dist_log else "lower right")
+    return fig
+
+
+def _ref_points(rc, specs, px, side_bits):
+    """(bits/px, quality) of a reference curve: its own rates when it
+    carries them, otherwise the run's rate for each tuple."""
+    out = []
+    for tn, val in rc["quality_by_tuple"].items():
+        if rc.get("bpp_by_tuple"):
+            b = rc["bpp_by_tuple"][tn]
+        else:
+            b = tuple_bits(specs, [int(v) for v in tn.split("-")],
+                           side_bits) / px
+        out.append((b, val))
+    return out
+
+
+def ref_history_figure(hist, ref_curves, q):
+    """The run's validation history at each tuple a reference scored,
+    one panel per tuple plus the unquantised ceiling, with each
+    reference as a dotted horizontal line at its own value."""
+    keys = [k for k in hist if k not in ("step",)]
+    keys = keys[1:] + keys[:1]                 # tuples first, ceiling last
+    n = len(keys)
+    cols = min(3, n)
+    rows = int(np.ceil(n / cols))
+    fig, axes = plt.subplots(rows, cols, figsize=(4.2 * cols, 2.9 * rows),
+                             constrained_layout=True, squeeze=False)
+    steps = hist["step"]
+    for ax, k in zip(axes.flat, keys):
+        ax.plot(steps, hist[k], "-o", ms=2.5, lw=1.2, color="C0",
+                label="this run")
+        for j, rc in enumerate(ref_curves):
+            rv = (rc["scalars"].get(f"{q.key}_ceiling") if k == "ceiling"
+                  else rc["quality_by_tuple"].get(k))
+            if rv is not None:
+                ax.axhline(rv, ls=":", lw=1.6, color=f"C{3 + j}",
+                           label=f"{rc['label']} ({rv:.4f})")
+        ax.set_title(k if k != "ceiling" else "unquantised ceiling",
+                     fontsize=9)
+        ax.set_xlabel("step", fontsize=8)
+        ax.set_ylabel(q.label, fontsize=8)
+        ax.grid(alpha=0.3)
+        ax.legend(fontsize=6)
+        # keep the comparison readable: frame on the run's recent values
+        # and the references rather than on the early transient
+        vals = [v for v in hist[k][len(hist[k]) // 2:] if np.isfinite(v)]
+        vals += [rc["quality_by_tuple"].get(k) if k != "ceiling"
+                 else rc["scalars"].get(f"{q.key}_ceiling")
+                 for rc in ref_curves]
+        vals = [v for v in vals if v is not None]
+        if len(vals) > 1:
+            lo, hi = min(vals), max(vals)
+            pad = max(hi - lo, 1e-4) * 0.3
+            ax.set_ylim(lo - pad, hi + pad)
+    for ax in list(axes.flat)[n:]:
+        ax.axis("off")
     return fig
 
 
@@ -323,18 +390,31 @@ def error_hist_harvest(model, source, val_s, tuples=None, mins=None,
     prep = _run_prep(model, source, prep)
     pts = ({tname(t): t for t in tuples} if tuples
            else canonical_tuples(model.specs, mins))
-    rel = {k: [] for k in pts}
+    # a multi-grid source (S2) splits each error into its native grids,
+    # one distribution per grid; keys become "<tuple>|<grid>"
+    parts = getattr(source, "error_parts", None)
+    rel = {} if parts else {k: [] for k in pts}
     absu = None
     with _harvest_mode(model, source):
         for i in range(0, min(max_tokens, val_s.shape[0]), chunk):
             x, v, _ = prep(val_s[i:i + chunk], {}, val_s.device)
             phys = _to_physical(source, prep)
             if absu is None and phys is not None:
-                absu = {k: [] for k in pts}
+                absu = {} if parts else {k: [] for k in pts}
             loc = val_loc[i:i + chunk] if val_loc is not None else None
             _, cums = model.level_cumsums(x, loc=loc, valid=v)
             for k, t in pts.items():
-                out = model.eval_tuple(cums, t, x, valid=v).float()
+                out = model.eval_tuple(cums, t, x, valid=v)
+                if parts:
+                    for g, e in parts(out, x, v).items():
+                        rel.setdefault(f"{k}|{g}", []).append(e.cpu())
+                    if phys is not None:
+                        scale = getattr(source, "physical_scale", 1.0)
+                        for g, e in parts(phys(out), phys(x), v).items():
+                            absu.setdefault(f"{k}|{g}", []).append(
+                                (e * scale).cpu())
+                    continue
+                out = out.float()
                 m = v.unsqueeze(1).expand_as(out)
                 rel[k].append((out - x)[m].cpu())
                 if phys is not None:
@@ -346,13 +426,24 @@ def error_hist_harvest(model, source, val_s, tuples=None, mins=None,
 def error_hist_render(payload, step, unit="source units"):
     """CPU phase: histograms from a harvest payload."""
     rel, absu = payload["rel"], payload["absu"]
-    panels = [("model space (per-tile normalized)", rel)]
+    spaces = [("model space (per-tile normalized)", rel)]
     if absu is not None:
-        panels.append((unit, absu))
-    colors = plt.cm.viridis(np.linspace(0.1, 0.9, len(rel)))
-    fig, axes = plt.subplots(1, len(panels), figsize=(5.2 * len(panels), 3.6),
+        spaces.append((unit, absu))
+    # "<tuple>|<grid>" keys (a multi-grid source) give one row per grid
+    grids = list(dict.fromkeys(k.split("|")[1] for k in rel if "|" in k))
+    rows = []
+    for g in grids or [None]:
+        pick = (lambda d: d) if g is None else (
+            lambda d, g=g: {k.split("|")[0]: v for k, v in d.items()
+                            if k.endswith("|" + g)})
+        rows.append([(name if g is None else f"{g}, {name}", pick(d))
+                     for name, d in spaces])
+    n_tuples = len(rows[0][0][1])
+    colors = plt.cm.viridis(np.linspace(0.1, 0.9, n_tuples))
+    fig, axes = plt.subplots(len(rows), len(spaces),
+                             figsize=(5.2 * len(spaces), 3.6 * len(rows)),
                              constrained_layout=True, squeeze=False)
-    for ax, (name, errs) in zip(axes[0], panels):
+    for ax, (name, errs) in zip(axes.flat, [p for r in rows for p in r]):
         es = {k: v.numpy() for k, v in errs.items()}
         lim = max(np.quantile(np.abs(e), 0.999) for e in es.values())
         edges = np.linspace(-lim, lim, 202)

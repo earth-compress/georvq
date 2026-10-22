@@ -395,3 +395,188 @@ def test_raw_stats_escape_round_trips_exactly_at_f32():
 
     # and the default tolerance path is still the cheap one
     assert len(packer.pack(s)) < len(f16)
+
+
+# ------------------------------------------------------ nodata masking
+
+def _raw_windows(rng, B=3, W=24):
+    return {g: torch.from_numpy(rng.integers(500, 9000, size=(B, b, W // r, W // r),
+                                             dtype=np.uint16))
+            for g, (b, r) in {"10m": (4, 1), "20m": (6, 2),
+                              "60m": (3, 6)}.items()}
+
+
+def _s2_source():
+    from georvq.sources.s2 import S2Source
+    return S2Source(_cfg().model)
+
+
+def test_s2_stats_unchanged_on_fully_valid_windows():
+    """With no nodata the masked stats equal the unmasked mean and the
+    unbiased std, so existing checkpoints see the same inputs."""
+    src = _s2_source()
+    raw = _raw_windows(np.random.default_rng(1))
+    src.prep(raw, "cpu")
+    st = src.last_stats()
+    for g, t in raw.items():
+        f = t.float() / 10000.0
+        assert torch.allclose(st[g][0], f.mean((2, 3), keepdim=True), atol=1e-6)
+        assert torch.allclose(st[g][1], f.std((2, 3), keepdim=True), atol=1e-6)
+
+
+def test_s2_stats_exclude_nodata():
+    """A window straddling a swath edge: the stats are those of its valid
+    pixels, the fill is 0 in normalized space, and the mask covers it."""
+    src = _s2_source()
+    raw = _raw_windows(np.random.default_rng(2))
+    # left half of window 0 is nodata in every band, at every resolution
+    for g, r in (("10m", 1), ("20m", 2), ("60m", 6)):
+        raw[g][0, :, :, :12 // r] = 0
+    # one 20m band has a slightly wider nodata edge than the others
+    raw["20m"][0, 2, :, 6] = 0
+    x, valid = src.prep(raw, "cpu")
+    st = src.last_stats()
+    for g, r in (("10m", 1), ("20m", 2), ("60m", 6)):
+        f = raw[g][0].float() / 10000.0
+        for b in range(f.shape[0]):
+            v = f[b][raw[g][0, b] != 0]
+            assert torch.allclose(st[g][0][0, b, 0, 0], v.mean(), atol=1e-6)
+            assert torch.allclose(st[g][1][0, b, 0, 0], v.std(), atol=1e-6)
+        assert (x[g][0][raw[g][0] == 0] == 0).all()
+    assert not valid[0, :, :12].any()
+    assert not valid[0, :, 12:14].any()      # the wider 20m edge
+    assert valid[0, :, 14:].all() and valid[1:].all()
+
+
+def test_s2_loss_ignores_nodata_pixels():
+    src = _s2_source()
+    raw = _raw_windows(np.random.default_rng(3))
+    for g, r in (("10m", 1), ("20m", 2), ("60m", 6)):
+        raw[g][0, :, :, :12 // r] = 0
+    x, valid = src.prep(raw, "cpu")
+    out = {g: t + 0.1 for g, t in x.items()}
+    loss_a, _ = src.recon_stats(out, x, valid)
+    out_b = {g: t.clone() for g, t in out.items()}
+    for g, r in (("10m", 1), ("20m", 2), ("60m", 6)):
+        out_b[g][0, :, :, :12 // r] = 50.0   # garbage where there is no data
+    loss_b, _ = src.recon_stats(out_b, x, valid)
+    assert torch.allclose(loss_a, loss_b)
+    assert torch.allclose(loss_a, torch.tensor(0.01), atol=1e-5)
+    from georvq.sources.s2 import _s2_r2
+    assert torch.allclose(_s2_r2(out, x, valid), _s2_r2(out_b, x, valid))
+
+
+def test_s2_all_nodata_window_is_finite():
+    src = _s2_source()
+    raw = {g: torch.zeros_like(t) for g, t in
+           _raw_windows(np.random.default_rng(4)).items()}
+    x, valid = src.prep(raw, "cpu")
+    assert not valid.any()
+    for g in x:
+        assert torch.isfinite(x[g]).all()
+    loss, m = src.recon_stats(x, x, valid)
+    assert torch.isfinite(loss) and torch.isfinite(m["one_minus_mse_10m"])
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA")
+def test_groupbatch_tensor_index_on_cuda_uint16():
+    """The reconstruction figure gathers val windows with a tensor index;
+    CUDA has no index kernel for uint16, the dtype S2 val tokens hold."""
+    from georvq.data.pool import GroupBatch
+    g = GroupBatch({"10m": torch.arange(60000, 60024, dtype=torch.int32)
+                    .to(torch.uint16).view(6, 4).cuda()})
+    sel = torch.tensor([0, 5, 2])
+    out = g[sel]["10m"].cpu()
+    assert out.dtype == torch.uint16
+    assert torch.equal(out, g["10m"].cpu()[sel])
+
+
+def test_groupbatch_tensor_index_on_cpu_uint16():
+    from georvq.data.pool import GroupBatch
+    t = torch.arange(60000, 60024, dtype=torch.int32).to(torch.uint16).view(6, 4)
+    g = GroupBatch({"10m": t})
+    sel = torch.tensor([0, 5, 2])
+    assert torch.equal(g[sel]["10m"], t[sel])
+
+
+# ------------------------------------------------------ the final preset
+
+def test_s2_final_preset_builds_and_keeps_its_sample_budget():
+    """configs/s2/s2_final.yaml derives each tier's K from the codebook
+    sample budget (lab/findings/codebook-sample-budget.md). Check the
+    derivation still holds for the preset as written: every level of every
+    tier sees at least ~450 vectors per code inside the EMA window, with
+    the share of rows that reach the level under path sampling, and the
+    next K up would not."""
+    from georvq.config import load_config
+    from georvq.model.codec import path_tuples
+    cfg = load_config("configs/s2/s2_final.yaml")
+    m = cfg.model
+    assert m.window == 96 and [t.grid for t in m.tiers] == [1, 4, 16]
+    assert m.window // m.tiers[-1].grid == 6          # one 60 m pixel
+    assert m.stats_pca is None                         # f16 stats channel
+    path = path_tuples(m.tiers, m.min_depths)
+    p_full = m.full_frac / (m.full_frac + 0.70)
+    window = 1.0 / (1.0 - m.vq.ema_decay)
+    for ti, sp in enumerate(m.tiers):
+        reach = np.mean([t[ti] >= sp.depth for t in path])
+        share = p_full + (1 - p_full) * reach          # deepest level
+        per_code = (cfg.train.batch_windows * sp.grid ** 2 * window * share)
+        assert per_code / sp.codes >= 450, (ti, per_code / sp.codes)
+        assert per_code / (2 * sp.codes) < 450, (ti, per_code / sp.codes)
+    torch.manual_seed(0)
+    model = build_model(cfg)
+    assert model.side_bits() == 16 * 26 + 8
+
+
+def test_s2_w36_preset_tiles_l1c_and_keeps_its_sample_budget():
+    """configs/s2/s2_w36.yaml: a 36 px window divides a 10980 px L1C tile
+    exactly and its fine cell is one 60 m pixel; both tiers keep at least
+    ~450 vectors per code at their deepest level under path sampling,
+    with the coarse tier always sent in full."""
+    from georvq.config import load_config
+    from georvq.model.codec import path_tuples
+    cfg = load_config("configs/s2/s2_w36.yaml")
+    m = cfg.model
+    assert 10980 % m.window == 0 and m.window % 6 == 0
+    assert [t.grid for t in m.tiers] == [1, 6]
+    assert m.window // m.tiers[-1].grid == 6
+    assert m.min_depths[0] == m.tiers[0].depth
+    assert m.stats_pca is None
+    assert m.vq.init_mode == "tree" and m.vq.reset_mode == "split"
+    path = path_tuples(m.tiers, m.min_depths)
+    p_full = m.full_frac / (m.full_frac + 0.70)
+    window = 1.0 / (1.0 - m.vq.ema_decay)
+    for ti, sp in enumerate(m.tiers):
+        reach = np.mean([t[ti] >= sp.depth for t in path])
+        share = p_full + (1 - p_full) * reach
+        per_code = cfg.train.batch_windows * sp.grid ** 2 * window * share
+        assert per_code / sp.codes >= 450, (ti, per_code / sp.codes)
+    torch.manual_seed(0)
+    model = build_model(cfg)
+    assert model.side_bits() == 16 * 26 + 8
+
+
+def test_error_histogram_has_a_row_per_native_grid(s2_store):
+    """S2's decoder emits three grids, so the signed-error histogram is
+    split by grid, in standardized units and in DN."""
+    import matplotlib
+    matplotlib.use("Agg")
+    from georvq.data.pool import fixed_val_tokens
+    from georvq.train.figures import error_hist_harvest, error_hist_render
+
+    cfg = _cfg()
+    model = build_model(cfg)
+    assert model.source.report(cfg.model).has_figure("error_hist")
+    val = fixed_val_tokens(s2_store, s2_store.index, token=24, per_chip=2,
+                           nodata=None)
+    h = error_hist_harvest(model, model.source, val, tuples=[[3, 0], [3, 3]],
+                           chunk=4)
+    assert set(h["rel"]) == {f"{t}|{g}" for t in ("3-0", "3-3")
+                             for g in ("10m", "20m", "60m")}
+    assert set(h["absu"]) == set(h["rel"])
+    # a 60 m error in DN is the standardized error times the band's std
+    # in DN, so the two spaces differ by far more than rounding
+    assert h["absu"]["3-0|60m"].abs().mean() > 10 * h["rel"]["3-0|60m"].abs().mean()
+    fig = error_hist_render(h, step=0, unit="DN")
+    assert len(fig.axes) == 6
