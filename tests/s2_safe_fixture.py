@@ -42,7 +42,7 @@ def _write_rgb_jp2(path, rgb, crs, transform):
 
 def _mtd(offset=-1000):
     spec = "\n".join(
-        f'      <Spectral_Information bandId="{i}" physicalBand="{b}"/>'
+        f'      <Spectral_Information bandId="{i}" physicalBand="{b.replace("B0", "B")}"/>'
         for b, i in BAND_ID.items())
     offs = "\n".join(f'      <RADIO_ADD_OFFSET band_id="{i}">{offset}'
                      f"</RADIO_ADD_OFFSET>" for i in BAND_ID.values())

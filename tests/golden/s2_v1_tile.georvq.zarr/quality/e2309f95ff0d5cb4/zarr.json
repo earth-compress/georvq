@@ -1,0 +1,195 @@
+{
+  "shape": [
+    4,
+    4,
+    27
+  ],
+  "data_type": "uint8",
+  "chunk_grid": {
+    "name": "regular",
+    "configuration": {
+      "chunk_shape": [
+        2,
+        2,
+        27
+      ]
+    }
+  },
+  "chunk_key_encoding": {
+    "name": "default",
+    "configuration": {
+      "separator": "/"
+    }
+  },
+  "fill_value": 0,
+  "codecs": [
+    {
+      "name": "bytes"
+    }
+  ],
+  "attributes": {
+    "zarr_conventions": [
+      {
+        "schema_url": "https://raw.githubusercontent.com/zarr-conventions/proj/refs/tags/v0.1/schema.json",
+        "spec_url": "https://github.com/zarr-conventions/proj/blob/v0.1/README.md",
+        "uuid": "f17cb550-5864-4468-aeb7-f3180cfb622f",
+        "name": "proj",
+        "description": "Coordinate reference system information for geospatial data"
+      },
+      {
+        "schema_url": "https://raw.githubusercontent.com/zarr-conventions/spatial/refs/tags/v0.1/schema.json",
+        "spec_url": "https://github.com/zarr-conventions/spatial/blob/v0.1/README.md",
+        "uuid": "689b58e2-cf7b-45e0-9fff-9cfc0883d6b4",
+        "name": "spatial",
+        "description": "Spatial coordinate information"
+      }
+    ],
+    "proj:code": "EPSG:32637",
+    "spatial:dimensions": [
+      "wy",
+      "wx"
+    ],
+    "spatial:shape": [
+      4,
+      4
+    ],
+    "spatial:transform": [
+      360.0,
+      0.0,
+      506520.0,
+      0.0,
+      -360.0,
+      6198600.0
+    ],
+    "spatial:bbox": [
+      506520.0,
+      6197160.0,
+      507960.0,
+      6198600.0
+    ],
+    "spatial:registration": "pixel",
+    "georvq_quality": {
+      "decoder_id": "e2309f95ff0d5cb4",
+      "bitstream_id": "47f3ac88b39c6ca9",
+      "release": {
+        "name": "golden",
+        "bitstream_id": "47f3ac88b39c6ca9",
+        "decoder_id": "e2309f95ff0d5cb4",
+        "uri": "hf://earth-compress/georvq-s2-v1",
+        "revision": null
+      },
+      "rungs": [
+        {
+          "tuple": [
+            8,
+            0
+          ],
+          "bits_window": 360,
+          "bits_px": 0.2777777777777778
+        },
+        {
+          "tuple": [
+            8,
+            1
+          ],
+          "bits_window": 828,
+          "bits_px": 0.6388888888888888
+        },
+        {
+          "tuple": [
+            8,
+            2
+          ],
+          "bits_window": 1296,
+          "bits_px": 1.0
+        },
+        {
+          "tuple": [
+            8,
+            3
+          ],
+          "bits_window": 1764,
+          "bits_px": 1.3611111111111112
+        },
+        {
+          "tuple": [
+            8,
+            4
+          ],
+          "bits_window": 2232,
+          "bits_px": 1.7222222222222223
+        },
+        {
+          "tuple": [
+            8,
+            5
+          ],
+          "bits_window": 2700,
+          "bits_px": 2.0833333333333335
+        },
+        {
+          "tuple": [
+            8,
+            6
+          ],
+          "bits_window": 3168,
+          "bits_px": 2.4444444444444446
+        },
+        {
+          "tuple": [
+            8,
+            7
+          ],
+          "bits_window": 3636,
+          "bits_px": 2.8055555555555554
+        },
+        {
+          "tuple": [
+            8,
+            8
+          ],
+          "bits_window": 4104,
+          "bits_px": 3.1666666666666665
+        }
+      ],
+      "fields": [
+        {
+          "name": "rmse_10m",
+          "count": 9,
+          "bits": 8
+        },
+        {
+          "name": "rmse_20m",
+          "count": 9,
+          "bits": 8
+        },
+        {
+          "name": "rmse_60m",
+          "count": 9,
+          "bits": 8
+        }
+      ],
+      "quality": {
+        "stats": [
+          "rmse_10m",
+          "rmse_20m",
+          "rmse_60m"
+        ],
+        "error": "RMSE in DN of the uint16 output against the source DN, over the window's valid pixels of one grid (rmse_10m: B02 B03 B04 B08; rmse_20m: B05 B06 B07 B8A B11 B12; rmse_60m: B01 B09 B10), all of the grid's bands pooled",
+        "encoding": "code = round(32 * (log10(e) + 2)) clipped to 0..255; 0 means e <= 0.01 DN",
+        "scale": 32.0,
+        "offset": 2.0,
+        "order": "per stat, one byte per rung in header rungs order",
+        "decode_precision": "fp32"
+      }
+    }
+  },
+  "dimension_names": [
+    "wy",
+    "wx",
+    "quality_byte"
+  ],
+  "zarr_format": 3,
+  "node_type": "array",
+  "storage_transformers": []
+}

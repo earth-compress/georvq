@@ -21,9 +21,11 @@ golden/s2_v1_tile.georvq.zarr is the crop written as an S2 v1 store with
 small chunks, read back through georvq.open.
 
 Everything is compared exactly. The hashes were recorded on CPU in fp32
-(cirrus, x86-64); a CPU with other vector kernels could produce
-different float bits, in which case the test reports the DN RMSE next to
-the recorded one. Re-record with
+(cirrus, x86-64) with torch using THREADS threads, which the tests set,
+because the float bits of the 60 m head's output were found to depend on
+the thread count (the uint16 output did not). A CPU with other vector
+kernels could produce different float bits, in which case the test
+reports the DN RMSE next to the recorded one. Re-record with
 
     python -m tests.test_s2_v1_bundle inputs   # needs the SAFE product
     python -m tests.test_s2_v1_bundle record
@@ -56,6 +58,7 @@ CKPT = os.environ.get(
 CHANNEL = os.environ.get("GEORVQ_S2_V1_CHANNEL",
                          "/data/georvq-releases/s2-v1/stats_channel.npz")
 GOLDEN_RUNGS = ((8, 0), (8, 1), (8, 4), (8, 8))
+THREADS = 8
 N = 144
 TILE_CHUNK_PX = {"base": 72, "tier1": 72}
 SAFE = ("/mnt/raid/data/s2get/Sentinel-2/MSI/L1C/2026/05/03/"
@@ -147,6 +150,14 @@ def _rmse(out, arrays):
         m = (out[g] != 0) & (a != 0)
         res[g] = float(np.sqrt(((out[g].astype(float) - a) ** 2)[m].mean()))
     return res
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _threads():
+    n = torch.get_num_threads()
+    torch.set_num_threads(THREADS)
+    yield
+    torch.set_num_threads(n)
 
 
 @pytest.fixture(scope="module")
@@ -319,6 +330,7 @@ def inputs():
 def record():
     import shutil
     torch.set_grad_enabled(False)
+    torch.set_num_threads(THREADS)
     codec = _bundle_codec()
     arrays, meta = _inputs()
     blk = codec.encode_block(arrays, stats=True)

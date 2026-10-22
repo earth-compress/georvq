@@ -1,0 +1,1878 @@
+{
+  "attributes": {
+    "georvq": {
+      "codec": {
+        "format": "georvq-s2/v1",
+        "bitstream_id": "47f3ac88b39c6ca9",
+        "decoder_id": "e2309f95ff0d5cb4",
+        "tiers": [
+          "1:128:8192:8",
+          "6:128:8192:8"
+        ],
+        "window": 36,
+        "bands": 13,
+        "min_depths": [
+          8,
+          0
+        ],
+        "mean_channel": {
+          "kind": "rvq-pca",
+          "bits": 256
+        },
+        "release": {
+          "name": "golden",
+          "bitstream_id": "47f3ac88b39c6ca9",
+          "decoder_id": "e2309f95ff0d5cb4",
+          "uri": "hf://earth-compress/georvq-s2-v1",
+          "revision": null
+        }
+      },
+      "product": {
+        "kind": "sentinel2-l1c",
+        "id": "S2C_MSIL1C_20260503T084641_N0512_R107_T37UDB_20260503T104912",
+        "source": "golden/S2C_MSIL1C_20260503T084641_N0512_R107_T37UDB_20260503T104912.SAFE",
+        "crs_wkt": "PROJCS[\"WGS 84 / UTM zone 37N\",GEOGCS[\"WGS 84\",DATUM[\"WGS_1984\",SPHEROID[\"WGS 84\",6378137,298.257223563,AUTHORITY[\"EPSG\",\"7030\"]],AUTHORITY[\"EPSG\",\"6326\"]],PRIMEM[\"Greenwich\",0,AUTHORITY[\"EPSG\",\"8901\"]],UNIT[\"degree\",0.0174532925199433,AUTHORITY[\"EPSG\",\"9122\"]],AUTHORITY[\"EPSG\",\"4326\"]],PROJECTION[\"Transverse_Mercator\"],PARAMETER[\"latitude_of_origin\",0],PARAMETER[\"central_meridian\",39],PARAMETER[\"scale_factor\",0.9996],PARAMETER[\"false_easting\",500000],PARAMETER[\"false_northing\",0],UNIT[\"metre\",1,AUTHORITY[\"EPSG\",\"9001\"]],AXIS[\"Easting\",EAST],AXIS[\"Northing\",NORTH],AUTHORITY[\"EPSG\",\"32637\"]]",
+        "epsg": 32637,
+        "transform": [
+          10.0,
+          0.0,
+          506520.0,
+          0.0,
+          -10.0,
+          6198600.0
+        ],
+        "width": 144,
+        "height": 144,
+        "count": 13,
+        "dtype": "uint16",
+        "nodata": 0,
+        "band_names": [
+          "B01",
+          "B02",
+          "B03",
+          "B04",
+          "B05",
+          "B06",
+          "B07",
+          "B08",
+          "B8A",
+          "B09",
+          "B10",
+          "B11",
+          "B12"
+        ],
+        "safe": "S2C_MSIL1C_20260503T084641_N0512_R107_T37UDB_20260503T104912.SAFE",
+        "processing_baseline": "05.12",
+        "spacecraft": "Sentinel-2C",
+        "sensing_start": "2026-05-03T08:46:41.024Z",
+        "product_uri": "S2C_MSIL1C_20260503T084641_N0512_R107_T37UDB_20260503T104912.SAFE",
+        "quantification_value": 10000.0,
+        "radio_add_offset": {
+          "B01": -1000,
+          "B02": -1000,
+          "B03": -1000,
+          "B04": -1000,
+          "B05": -1000,
+          "B06": -1000,
+          "B07": -1000,
+          "B08": -1000,
+          "B8A": -1000,
+          "B09": -1000,
+          "B10": -1000,
+          "B11": -1000,
+          "B12": -1000
+        },
+        "orientation": "north-up"
+      },
+      "rungs": [
+        {
+          "tuple": [
+            8,
+            0
+          ],
+          "bits_window": 360,
+          "bits_px": 0.2777777777777778
+        },
+        {
+          "tuple": [
+            8,
+            1
+          ],
+          "bits_window": 828,
+          "bits_px": 0.6388888888888888
+        },
+        {
+          "tuple": [
+            8,
+            2
+          ],
+          "bits_window": 1296,
+          "bits_px": 1.0
+        },
+        {
+          "tuple": [
+            8,
+            3
+          ],
+          "bits_window": 1764,
+          "bits_px": 1.3611111111111112
+        },
+        {
+          "tuple": [
+            8,
+            4
+          ],
+          "bits_window": 2232,
+          "bits_px": 1.7222222222222223
+        },
+        {
+          "tuple": [
+            8,
+            5
+          ],
+          "bits_window": 2700,
+          "bits_px": 2.0833333333333335
+        },
+        {
+          "tuple": [
+            8,
+            6
+          ],
+          "bits_window": 3168,
+          "bits_px": 2.4444444444444446
+        },
+        {
+          "tuple": [
+            8,
+            7
+          ],
+          "bits_window": 3636,
+          "bits_px": 2.8055555555555554
+        },
+        {
+          "tuple": [
+            8,
+            8
+          ],
+          "bits_window": 4104,
+          "bits_px": 3.1666666666666665
+        }
+      ],
+      "quality": {
+        "column": "quality",
+        "stats": [
+          "rmse_10m",
+          "rmse_20m",
+          "rmse_60m"
+        ],
+        "error": "RMSE in DN of the uint16 output against the source DN, over the window's valid pixels of one grid (rmse_10m: B02 B03 B04 B08; rmse_20m: B05 B06 B07 B8A B11 B12; rmse_60m: B01 B09 B10), all of the grid's bands pooled",
+        "encoding": "code = round(32 * (log10(e) + 2)) clipped to 0..255; 0 means e <= 0.01 DN",
+        "scale": 32.0,
+        "offset": 2.0,
+        "order": "per stat, one byte per rung in header rungs order",
+        "decode_precision": "fp32"
+      },
+      "output": {
+        "dtype": "uint16",
+        "nodata": 0,
+        "count": 13,
+        "band_names": [
+          "B01",
+          "B02",
+          "B03",
+          "B04",
+          "B05",
+          "B06",
+          "B07",
+          "B08",
+          "B8A",
+          "B09",
+          "B10",
+          "B11",
+          "B12"
+        ],
+        "grids": [
+          {
+            "name": "10m",
+            "factor": 1,
+            "count": 4,
+            "band_names": [
+              "B02",
+              "B03",
+              "B04",
+              "B08"
+            ],
+            "height": 144,
+            "width": 144,
+            "transform": [
+              10.0,
+              0.0,
+              506520.0,
+              0.0,
+              -10.0,
+              6198600.0
+            ]
+          },
+          {
+            "name": "20m",
+            "factor": 2,
+            "count": 6,
+            "band_names": [
+              "B05",
+              "B06",
+              "B07",
+              "B8A",
+              "B11",
+              "B12"
+            ],
+            "height": 72,
+            "width": 72,
+            "transform": [
+              20.0,
+              0.0,
+              506520.0,
+              0.0,
+              -20.0,
+              6198600.0
+            ]
+          },
+          {
+            "name": "60m",
+            "factor": 6,
+            "count": 3,
+            "band_names": [
+              "B01",
+              "B09",
+              "B10"
+            ],
+            "height": 24,
+            "width": 24,
+            "transform": [
+              60.0,
+              0.0,
+              506520.0,
+              0.0,
+              -60.0,
+              6198600.0
+            ]
+          }
+        ]
+      },
+      "licence": {
+        "spdx": null,
+        "name": "Copernicus Sentinel data terms",
+        "url": "https://sentinels.copernicus.eu/documents/247904/690755/Sentinel_Data_Legal_Notice",
+        "attribution": "Contains modified Copernicus Sentinel data 2026",
+        "changes": "lossy georvq encoding of the 13 L1C band images; the decoded values are approximations"
+      },
+      "format": "georvq-zarr",
+      "version": "0.5",
+      "status": "prototype",
+      "layout": {
+        "window_px": 36,
+        "window_order": "row-major",
+        "groups": [
+          {
+            "kind": "base",
+            "chunk_px": 72,
+            "chunk_windows": 2,
+            "columns": [
+              "base",
+              "mask"
+            ],
+            "chunk_grid": [
+              2,
+              2
+            ],
+            "empty_chunks": [
+              [
+                1,
+                1
+              ]
+            ]
+          },
+          {
+            "kind": "tier1",
+            "chunk_px": 72,
+            "chunk_windows": 2,
+            "columns": [
+              "tier1_1",
+              "tier1_2",
+              "tier1_3",
+              "tier1_4",
+              "tier1_5",
+              "tier1_6",
+              "tier1_7",
+              "tier1_8"
+            ],
+            "chunk_grid": [
+              2,
+              2
+            ],
+            "empty_chunks": [
+              [
+                1,
+                1
+              ]
+            ]
+          },
+          {
+            "kind": "quality",
+            "chunk_px": 72,
+            "chunk_windows": 2,
+            "columns": [
+              "quality"
+            ],
+            "chunk_grid": [
+              2,
+              2
+            ],
+            "empty_chunks": [
+              [
+                1,
+                1
+              ]
+            ]
+          }
+        ],
+        "mask": {
+          "column": "mask",
+          "kind": "base",
+          "chunks": [
+            [
+              0,
+              1
+            ],
+            [
+              1,
+              0
+            ]
+          ]
+        },
+        "columns": [
+          {
+            "name": "base",
+            "record_bytes": 45,
+            "fields": [
+              {
+                "name": "mean_rvq",
+                "count": 2,
+                "bits": 12
+              },
+              {
+                "name": "mean_pca_0",
+                "count": 1,
+                "bits": 10
+              },
+              {
+                "name": "mean_pca_1",
+                "count": 1,
+                "bits": 11
+              },
+              {
+                "name": "mean_pca_2",
+                "count": 2,
+                "bits": 10
+              },
+              {
+                "name": "mean_pca_4",
+                "count": 1,
+                "bits": 11
+              },
+              {
+                "name": "mean_pca_5",
+                "count": 3,
+                "bits": 10
+              },
+              {
+                "name": "mean_pca_8",
+                "count": 1,
+                "bits": 9
+              },
+              {
+                "name": "mean_pca_9",
+                "count": 1,
+                "bits": 10
+              },
+              {
+                "name": "mean_pca_10",
+                "count": 1,
+                "bits": 9
+              },
+              {
+                "name": "mean_pca_11",
+                "count": 1,
+                "bits": 10
+              },
+              {
+                "name": "mean_pca_12",
+                "count": 1,
+                "bits": 9
+              },
+              {
+                "name": "mean_pca_13",
+                "count": 2,
+                "bits": 10
+              },
+              {
+                "name": "mean_pca_15",
+                "count": 2,
+                "bits": 8
+              },
+              {
+                "name": "mean_pca_17",
+                "count": 1,
+                "bits": 7
+              },
+              {
+                "name": "mean_pca_18",
+                "count": 2,
+                "bits": 9
+              },
+              {
+                "name": "mean_pca_20",
+                "count": 2,
+                "bits": 7
+              },
+              {
+                "name": "mean_pca_22",
+                "count": 1,
+                "bits": 6
+              },
+              {
+                "name": "mean_pca_23",
+                "count": 2,
+                "bits": 8
+              },
+              {
+                "name": "mean_pca_25",
+                "count": 1,
+                "bits": 6
+              },
+              {
+                "name": "tier0",
+                "count": 8,
+                "bits": 13
+              }
+            ]
+          },
+          {
+            "name": "tier1_1",
+            "record_bytes": 59,
+            "fields": [
+              {
+                "name": "tier1",
+                "count": 36,
+                "bits": 13
+              }
+            ]
+          },
+          {
+            "name": "tier1_2",
+            "record_bytes": 59,
+            "fields": [
+              {
+                "name": "tier1",
+                "count": 36,
+                "bits": 13
+              }
+            ]
+          },
+          {
+            "name": "tier1_3",
+            "record_bytes": 59,
+            "fields": [
+              {
+                "name": "tier1",
+                "count": 36,
+                "bits": 13
+              }
+            ]
+          },
+          {
+            "name": "tier1_4",
+            "record_bytes": 59,
+            "fields": [
+              {
+                "name": "tier1",
+                "count": 36,
+                "bits": 13
+              }
+            ]
+          },
+          {
+            "name": "tier1_5",
+            "record_bytes": 59,
+            "fields": [
+              {
+                "name": "tier1",
+                "count": 36,
+                "bits": 13
+              }
+            ]
+          },
+          {
+            "name": "tier1_6",
+            "record_bytes": 59,
+            "fields": [
+              {
+                "name": "tier1",
+                "count": 36,
+                "bits": 13
+              }
+            ]
+          },
+          {
+            "name": "tier1_7",
+            "record_bytes": 59,
+            "fields": [
+              {
+                "name": "tier1",
+                "count": 36,
+                "bits": 13
+              }
+            ]
+          },
+          {
+            "name": "tier1_8",
+            "record_bytes": 59,
+            "fields": [
+              {
+                "name": "tier1",
+                "count": 36,
+                "bits": 13
+              }
+            ]
+          },
+          {
+            "name": "quality",
+            "record_bytes": 27,
+            "fields": [
+              {
+                "name": "rmse_10m",
+                "count": 9,
+                "bits": 8
+              },
+              {
+                "name": "rmse_20m",
+                "count": 9,
+                "bits": 8
+              },
+              {
+                "name": "rmse_60m",
+                "count": 9,
+                "bits": 8
+              }
+            ]
+          }
+        ],
+        "tiers": [
+          {
+            "name": "tier0",
+            "levels": 8,
+            "columns": [
+              "base"
+            ]
+          },
+          {
+            "name": "tier1",
+            "levels": 8,
+            "columns": [
+              "tier1_1",
+              "tier1_2",
+              "tier1_3",
+              "tier1_4",
+              "tier1_5",
+              "tier1_6",
+              "tier1_7",
+              "tier1_8"
+            ]
+          }
+        ],
+        "window_grid": [
+          4,
+          4
+        ],
+        "product_px": [
+          144,
+          144
+        ]
+      }
+    },
+    "georvq_aux": {
+      "safe": {
+        "name": "S2C_MSIL1C_20260503T084641_N0512_R107_T37UDB_20260503T104912.SAFE",
+        "band_files": {
+          "B01": "GRANULE/L1C_T37UDB_A003456_20260503T085142/IMG_DATA/T37UDB_20260503T084641_B01.jp2",
+          "B02": "GRANULE/L1C_T37UDB_A003456_20260503T085142/IMG_DATA/T37UDB_20260503T084641_B02.jp2",
+          "B03": "GRANULE/L1C_T37UDB_A003456_20260503T085142/IMG_DATA/T37UDB_20260503T084641_B03.jp2",
+          "B04": "GRANULE/L1C_T37UDB_A003456_20260503T085142/IMG_DATA/T37UDB_20260503T084641_B04.jp2",
+          "B05": "GRANULE/L1C_T37UDB_A003456_20260503T085142/IMG_DATA/T37UDB_20260503T084641_B05.jp2",
+          "B06": "GRANULE/L1C_T37UDB_A003456_20260503T085142/IMG_DATA/T37UDB_20260503T084641_B06.jp2",
+          "B07": "GRANULE/L1C_T37UDB_A003456_20260503T085142/IMG_DATA/T37UDB_20260503T084641_B07.jp2",
+          "B08": "GRANULE/L1C_T37UDB_A003456_20260503T085142/IMG_DATA/T37UDB_20260503T084641_B08.jp2",
+          "B8A": "GRANULE/L1C_T37UDB_A003456_20260503T085142/IMG_DATA/T37UDB_20260503T084641_B8A.jp2",
+          "B09": "GRANULE/L1C_T37UDB_A003456_20260503T085142/IMG_DATA/T37UDB_20260503T084641_B09.jp2",
+          "B10": "GRANULE/L1C_T37UDB_A003456_20260503T085142/IMG_DATA/T37UDB_20260503T084641_B10.jp2",
+          "B11": "GRANULE/L1C_T37UDB_A003456_20260503T085142/IMG_DATA/T37UDB_20260503T084641_B11.jp2",
+          "B12": "GRANULE/L1C_T37UDB_A003456_20260503T085142/IMG_DATA/T37UDB_20260503T084641_B12.jp2"
+        },
+        "jp2": {
+          "B01": {
+            "gml": true,
+            "width": 24,
+            "height": 24,
+            "tile_width": 24,
+            "tile_height": 24,
+            "components": 1,
+            "precision": 15,
+            "signed": false,
+            "progression": "LRCP",
+            "layers": 1,
+            "mct": 0,
+            "levels": 3,
+            "codeblock": [
+              16,
+              16
+            ],
+            "reversible": true,
+            "precincts": [
+              [
+                64,
+                512
+              ],
+              [
+                128,
+                512
+              ],
+              [
+                256,
+                512
+              ],
+              [
+                512,
+                512
+              ]
+            ]
+          },
+          "B02": {
+            "gml": true,
+            "width": 144,
+            "height": 144,
+            "tile_width": 144,
+            "tile_height": 144,
+            "components": 1,
+            "precision": 15,
+            "signed": false,
+            "progression": "LRCP",
+            "layers": 1,
+            "mct": 0,
+            "levels": 3,
+            "codeblock": [
+              16,
+              16
+            ],
+            "reversible": true,
+            "precincts": [
+              [
+                64,
+                512
+              ],
+              [
+                128,
+                512
+              ],
+              [
+                256,
+                512
+              ],
+              [
+                512,
+                512
+              ]
+            ]
+          },
+          "B03": {
+            "gml": true,
+            "width": 144,
+            "height": 144,
+            "tile_width": 144,
+            "tile_height": 144,
+            "components": 1,
+            "precision": 15,
+            "signed": false,
+            "progression": "LRCP",
+            "layers": 1,
+            "mct": 0,
+            "levels": 3,
+            "codeblock": [
+              16,
+              16
+            ],
+            "reversible": true,
+            "precincts": [
+              [
+                64,
+                512
+              ],
+              [
+                128,
+                512
+              ],
+              [
+                256,
+                512
+              ],
+              [
+                512,
+                512
+              ]
+            ]
+          },
+          "B04": {
+            "gml": true,
+            "width": 144,
+            "height": 144,
+            "tile_width": 144,
+            "tile_height": 144,
+            "components": 1,
+            "precision": 15,
+            "signed": false,
+            "progression": "LRCP",
+            "layers": 1,
+            "mct": 0,
+            "levels": 3,
+            "codeblock": [
+              16,
+              16
+            ],
+            "reversible": true,
+            "precincts": [
+              [
+                64,
+                512
+              ],
+              [
+                128,
+                512
+              ],
+              [
+                256,
+                512
+              ],
+              [
+                512,
+                512
+              ]
+            ]
+          },
+          "B05": {
+            "gml": true,
+            "width": 72,
+            "height": 72,
+            "tile_width": 72,
+            "tile_height": 72,
+            "components": 1,
+            "precision": 15,
+            "signed": false,
+            "progression": "LRCP",
+            "layers": 1,
+            "mct": 0,
+            "levels": 3,
+            "codeblock": [
+              16,
+              16
+            ],
+            "reversible": true,
+            "precincts": [
+              [
+                64,
+                512
+              ],
+              [
+                128,
+                512
+              ],
+              [
+                256,
+                512
+              ],
+              [
+                512,
+                512
+              ]
+            ]
+          },
+          "B06": {
+            "gml": true,
+            "width": 72,
+            "height": 72,
+            "tile_width": 72,
+            "tile_height": 72,
+            "components": 1,
+            "precision": 15,
+            "signed": false,
+            "progression": "LRCP",
+            "layers": 1,
+            "mct": 0,
+            "levels": 3,
+            "codeblock": [
+              16,
+              16
+            ],
+            "reversible": true,
+            "precincts": [
+              [
+                64,
+                512
+              ],
+              [
+                128,
+                512
+              ],
+              [
+                256,
+                512
+              ],
+              [
+                512,
+                512
+              ]
+            ]
+          },
+          "B07": {
+            "gml": true,
+            "width": 72,
+            "height": 72,
+            "tile_width": 72,
+            "tile_height": 72,
+            "components": 1,
+            "precision": 15,
+            "signed": false,
+            "progression": "LRCP",
+            "layers": 1,
+            "mct": 0,
+            "levels": 3,
+            "codeblock": [
+              16,
+              16
+            ],
+            "reversible": true,
+            "precincts": [
+              [
+                64,
+                512
+              ],
+              [
+                128,
+                512
+              ],
+              [
+                256,
+                512
+              ],
+              [
+                512,
+                512
+              ]
+            ]
+          },
+          "B08": {
+            "gml": true,
+            "width": 144,
+            "height": 144,
+            "tile_width": 144,
+            "tile_height": 144,
+            "components": 1,
+            "precision": 15,
+            "signed": false,
+            "progression": "LRCP",
+            "layers": 1,
+            "mct": 0,
+            "levels": 3,
+            "codeblock": [
+              16,
+              16
+            ],
+            "reversible": true,
+            "precincts": [
+              [
+                64,
+                512
+              ],
+              [
+                128,
+                512
+              ],
+              [
+                256,
+                512
+              ],
+              [
+                512,
+                512
+              ]
+            ]
+          },
+          "B8A": {
+            "gml": true,
+            "width": 72,
+            "height": 72,
+            "tile_width": 72,
+            "tile_height": 72,
+            "components": 1,
+            "precision": 15,
+            "signed": false,
+            "progression": "LRCP",
+            "layers": 1,
+            "mct": 0,
+            "levels": 3,
+            "codeblock": [
+              16,
+              16
+            ],
+            "reversible": true,
+            "precincts": [
+              [
+                64,
+                512
+              ],
+              [
+                128,
+                512
+              ],
+              [
+                256,
+                512
+              ],
+              [
+                512,
+                512
+              ]
+            ]
+          },
+          "B09": {
+            "gml": true,
+            "width": 24,
+            "height": 24,
+            "tile_width": 24,
+            "tile_height": 24,
+            "components": 1,
+            "precision": 15,
+            "signed": false,
+            "progression": "LRCP",
+            "layers": 1,
+            "mct": 0,
+            "levels": 3,
+            "codeblock": [
+              16,
+              16
+            ],
+            "reversible": true,
+            "precincts": [
+              [
+                64,
+                512
+              ],
+              [
+                128,
+                512
+              ],
+              [
+                256,
+                512
+              ],
+              [
+                512,
+                512
+              ]
+            ]
+          },
+          "B10": {
+            "gml": true,
+            "width": 24,
+            "height": 24,
+            "tile_width": 24,
+            "tile_height": 24,
+            "components": 1,
+            "precision": 15,
+            "signed": false,
+            "progression": "LRCP",
+            "layers": 1,
+            "mct": 0,
+            "levels": 3,
+            "codeblock": [
+              16,
+              16
+            ],
+            "reversible": true,
+            "precincts": [
+              [
+                64,
+                512
+              ],
+              [
+                128,
+                512
+              ],
+              [
+                256,
+                512
+              ],
+              [
+                512,
+                512
+              ]
+            ]
+          },
+          "B11": {
+            "gml": true,
+            "width": 72,
+            "height": 72,
+            "tile_width": 72,
+            "tile_height": 72,
+            "components": 1,
+            "precision": 15,
+            "signed": false,
+            "progression": "LRCP",
+            "layers": 1,
+            "mct": 0,
+            "levels": 3,
+            "codeblock": [
+              16,
+              16
+            ],
+            "reversible": true,
+            "precincts": [
+              [
+                64,
+                512
+              ],
+              [
+                128,
+                512
+              ],
+              [
+                256,
+                512
+              ],
+              [
+                512,
+                512
+              ]
+            ]
+          },
+          "B12": {
+            "gml": true,
+            "width": 72,
+            "height": 72,
+            "tile_width": 72,
+            "tile_height": 72,
+            "components": 1,
+            "precision": 15,
+            "signed": false,
+            "progression": "LRCP",
+            "layers": 1,
+            "mct": 0,
+            "levels": 3,
+            "codeblock": [
+              16,
+              16
+            ],
+            "reversible": true,
+            "precincts": [
+              [
+                64,
+                512
+              ],
+              [
+                128,
+                512
+              ],
+              [
+                256,
+                512
+              ],
+              [
+                512,
+                512
+              ]
+            ]
+          }
+        },
+        "meta_asset": "safe_meta"
+      }
+    },
+    "zarr_conventions": [
+      {
+        "schema_url": "https://raw.githubusercontent.com/zarr-conventions/proj/refs/tags/v0.1/schema.json",
+        "spec_url": "https://github.com/zarr-conventions/proj/blob/v0.1/README.md",
+        "uuid": "f17cb550-5864-4468-aeb7-f3180cfb622f",
+        "name": "proj",
+        "description": "Coordinate reference system information for geospatial data"
+      },
+      {
+        "schema_url": "https://raw.githubusercontent.com/zarr-conventions/spatial/refs/tags/v0.1/schema.json",
+        "spec_url": "https://github.com/zarr-conventions/spatial/blob/v0.1/README.md",
+        "uuid": "689b58e2-cf7b-45e0-9fff-9cfc0883d6b4",
+        "name": "spatial",
+        "description": "Spatial coordinate information"
+      }
+    ],
+    "proj:code": "EPSG:32637",
+    "proj:wkt2": "PROJCRS[\"WGS 84 / UTM zone 37N\",BASEGEOGCRS[\"WGS 84\",DATUM[\"World Geodetic System 1984\",ELLIPSOID[\"WGS 84\",6378137,298.257223563,LENGTHUNIT[\"metre\",1]]],PRIMEM[\"Greenwich\",0,ANGLEUNIT[\"degree\",0.0174532925199433]],ID[\"EPSG\",4326]],CONVERSION[\"UTM zone 37N\",METHOD[\"Transverse Mercator\",ID[\"EPSG\",9807]],PARAMETER[\"Latitude of natural origin\",0,ANGLEUNIT[\"degree\",0.0174532925199433],ID[\"EPSG\",8801]],PARAMETER[\"Longitude of natural origin\",39,ANGLEUNIT[\"degree\",0.0174532925199433],ID[\"EPSG\",8802]],PARAMETER[\"Scale factor at natural origin\",0.9996,SCALEUNIT[\"unity\",1],ID[\"EPSG\",8805]],PARAMETER[\"False easting\",500000,LENGTHUNIT[\"metre\",1],ID[\"EPSG\",8806]],PARAMETER[\"False northing\",0,LENGTHUNIT[\"metre\",1],ID[\"EPSG\",8807]]],CS[Cartesian,2],AXIS[\"easting\",east,ORDER[1],LENGTHUNIT[\"metre\",1]],AXIS[\"northing\",north,ORDER[2],LENGTHUNIT[\"metre\",1]],ID[\"EPSG\",32637]]",
+    "proj:projjson": {
+      "$schema": "https://proj.org/schemas/v0.7/projjson.schema.json",
+      "type": "ProjectedCRS",
+      "name": "WGS 84 / UTM zone 37N",
+      "base_crs": {
+        "type": "GeographicCRS",
+        "name": "WGS 84",
+        "datum_ensemble": {
+          "name": "World Geodetic System 1984 ensemble",
+          "members": [
+            {
+              "name": "World Geodetic System 1984 (Transit)",
+              "id": {
+                "authority": "EPSG",
+                "code": 1166
+              }
+            },
+            {
+              "name": "World Geodetic System 1984 (G730)",
+              "id": {
+                "authority": "EPSG",
+                "code": 1152
+              }
+            },
+            {
+              "name": "World Geodetic System 1984 (G873)",
+              "id": {
+                "authority": "EPSG",
+                "code": 1153
+              }
+            },
+            {
+              "name": "World Geodetic System 1984 (G1150)",
+              "id": {
+                "authority": "EPSG",
+                "code": 1154
+              }
+            },
+            {
+              "name": "World Geodetic System 1984 (G1674)",
+              "id": {
+                "authority": "EPSG",
+                "code": 1155
+              }
+            },
+            {
+              "name": "World Geodetic System 1984 (G1762)",
+              "id": {
+                "authority": "EPSG",
+                "code": 1156
+              }
+            },
+            {
+              "name": "World Geodetic System 1984 (G2139)",
+              "id": {
+                "authority": "EPSG",
+                "code": 1309
+              }
+            },
+            {
+              "name": "World Geodetic System 1984 (G2296)",
+              "id": {
+                "authority": "EPSG",
+                "code": 1383
+              }
+            }
+          ],
+          "ellipsoid": {
+            "name": "WGS 84",
+            "semi_major_axis": 6378137,
+            "inverse_flattening": 298.257223563
+          },
+          "accuracy": "2.0",
+          "id": {
+            "authority": "EPSG",
+            "code": 6326
+          }
+        },
+        "coordinate_system": {
+          "subtype": "ellipsoidal",
+          "axis": [
+            {
+              "name": "Geodetic latitude",
+              "abbreviation": "Lat",
+              "direction": "north",
+              "unit": "degree"
+            },
+            {
+              "name": "Geodetic longitude",
+              "abbreviation": "Lon",
+              "direction": "east",
+              "unit": "degree"
+            }
+          ]
+        },
+        "id": {
+          "authority": "EPSG",
+          "code": 4326
+        }
+      },
+      "conversion": {
+        "name": "UTM zone 37N",
+        "method": {
+          "name": "Transverse Mercator",
+          "id": {
+            "authority": "EPSG",
+            "code": 9807
+          }
+        },
+        "parameters": [
+          {
+            "name": "Latitude of natural origin",
+            "value": 0,
+            "unit": "degree",
+            "id": {
+              "authority": "EPSG",
+              "code": 8801
+            }
+          },
+          {
+            "name": "Longitude of natural origin",
+            "value": 39,
+            "unit": "degree",
+            "id": {
+              "authority": "EPSG",
+              "code": 8802
+            }
+          },
+          {
+            "name": "Scale factor at natural origin",
+            "value": 0.9996,
+            "unit": "unity",
+            "id": {
+              "authority": "EPSG",
+              "code": 8805
+            }
+          },
+          {
+            "name": "False easting",
+            "value": 500000,
+            "unit": "metre",
+            "id": {
+              "authority": "EPSG",
+              "code": 8806
+            }
+          },
+          {
+            "name": "False northing",
+            "value": 0,
+            "unit": "metre",
+            "id": {
+              "authority": "EPSG",
+              "code": 8807
+            }
+          }
+        ]
+      },
+      "coordinate_system": {
+        "subtype": "Cartesian",
+        "axis": [
+          {
+            "name": "Easting",
+            "abbreviation": "E",
+            "direction": "east",
+            "unit": "metre"
+          },
+          {
+            "name": "Northing",
+            "abbreviation": "N",
+            "direction": "north",
+            "unit": "metre"
+          }
+        ]
+      },
+      "scope": "Navigation and medium accuracy spatial referencing.",
+      "area": "Between 36\u00b0E and 42\u00b0E, northern hemisphere between equator and 84\u00b0N, onshore and offshore. Djibouti. Egypt. Eritrea. Ethiopia. Georgia. Iraq. Jordan. Kenya. Lebanon. Russian Federation. Saudi Arabia. Somalia. Sudan. Syria. T\u00fcrkiye (Turkey). Ukraine.",
+      "bbox": {
+        "south_latitude": 0,
+        "west_longitude": 36,
+        "north_latitude": 84,
+        "east_longitude": 42
+      },
+      "id": {
+        "authority": "EPSG",
+        "code": 32637
+      }
+    },
+    "spatial:dimensions": [
+      "y",
+      "x"
+    ],
+    "spatial:shape": [
+      144,
+      144
+    ],
+    "spatial:transform": [
+      10.0,
+      0.0,
+      506520.0,
+      0.0,
+      -10.0,
+      6198600.0
+    ],
+    "spatial:bbox": [
+      506520.0,
+      6197160.0,
+      507960.0,
+      6198600.0
+    ],
+    "spatial:registration": "pixel"
+  },
+  "zarr_format": 3,
+  "consolidated_metadata": {
+    "kind": "inline",
+    "must_understand": false,
+    "metadata": {
+      "assets": {
+        "attributes": {
+          "names": [
+            "safe_meta"
+          ]
+        },
+        "zarr_format": 3,
+        "consolidated_metadata": {
+          "kind": "inline",
+          "must_understand": false,
+          "metadata": {}
+        },
+        "node_type": "group"
+      },
+      "base": {
+        "shape": [
+          4,
+          4,
+          45
+        ],
+        "data_type": "uint8",
+        "chunk_grid": {
+          "name": "regular",
+          "configuration": {
+            "chunk_shape": [
+              2,
+              2,
+              45
+            ]
+          }
+        },
+        "chunk_key_encoding": {
+          "name": "default",
+          "configuration": {
+            "separator": "/"
+          }
+        },
+        "fill_value": 0,
+        "codecs": [
+          {
+            "name": "bytes"
+          }
+        ],
+        "attributes": {
+          "zarr_conventions": [
+            {
+              "schema_url": "https://raw.githubusercontent.com/zarr-conventions/proj/refs/tags/v0.1/schema.json",
+              "spec_url": "https://github.com/zarr-conventions/proj/blob/v0.1/README.md",
+              "uuid": "f17cb550-5864-4468-aeb7-f3180cfb622f",
+              "name": "proj",
+              "description": "Coordinate reference system information for geospatial data"
+            },
+            {
+              "schema_url": "https://raw.githubusercontent.com/zarr-conventions/spatial/refs/tags/v0.1/schema.json",
+              "spec_url": "https://github.com/zarr-conventions/spatial/blob/v0.1/README.md",
+              "uuid": "689b58e2-cf7b-45e0-9fff-9cfc0883d6b4",
+              "name": "spatial",
+              "description": "Spatial coordinate information"
+            }
+          ],
+          "proj:code": "EPSG:32637",
+          "spatial:dimensions": [
+            "wy",
+            "wx"
+          ],
+          "spatial:shape": [
+            4,
+            4
+          ],
+          "spatial:transform": [
+            360.0,
+            0.0,
+            506520.0,
+            0.0,
+            -360.0,
+            6198600.0
+          ],
+          "spatial:bbox": [
+            506520.0,
+            6197160.0,
+            507960.0,
+            6198600.0
+          ],
+          "spatial:registration": "pixel"
+        },
+        "dimension_names": [
+          "wy",
+          "wx",
+          "base_byte"
+        ],
+        "zarr_format": 3,
+        "node_type": "array",
+        "storage_transformers": []
+      },
+      "mask": {
+        "shape": [
+          144,
+          144
+        ],
+        "data_type": "bool",
+        "chunk_grid": {
+          "name": "regular",
+          "configuration": {
+            "chunk_shape": [
+              72,
+              72
+            ]
+          }
+        },
+        "chunk_key_encoding": {
+          "name": "default",
+          "configuration": {
+            "separator": "/"
+          }
+        },
+        "fill_value": true,
+        "codecs": [
+          {
+            "name": "bytes"
+          },
+          {
+            "name": "zstd",
+            "configuration": {
+              "level": 19,
+              "checksum": false
+            }
+          }
+        ],
+        "attributes": {
+          "zarr_conventions": [
+            {
+              "schema_url": "https://raw.githubusercontent.com/zarr-conventions/proj/refs/tags/v0.1/schema.json",
+              "spec_url": "https://github.com/zarr-conventions/proj/blob/v0.1/README.md",
+              "uuid": "f17cb550-5864-4468-aeb7-f3180cfb622f",
+              "name": "proj",
+              "description": "Coordinate reference system information for geospatial data"
+            },
+            {
+              "schema_url": "https://raw.githubusercontent.com/zarr-conventions/spatial/refs/tags/v0.1/schema.json",
+              "spec_url": "https://github.com/zarr-conventions/spatial/blob/v0.1/README.md",
+              "uuid": "689b58e2-cf7b-45e0-9fff-9cfc0883d6b4",
+              "name": "spatial",
+              "description": "Spatial coordinate information"
+            }
+          ],
+          "proj:code": "EPSG:32637",
+          "spatial:dimensions": [
+            "y",
+            "x"
+          ],
+          "spatial:shape": [
+            144,
+            144
+          ],
+          "spatial:transform": [
+            10.0,
+            0.0,
+            506520.0,
+            0.0,
+            -10.0,
+            6198600.0
+          ],
+          "spatial:bbox": [
+            506520.0,
+            6197160.0,
+            507960.0,
+            6198600.0
+          ],
+          "spatial:registration": "pixel"
+        },
+        "dimension_names": [
+          "y",
+          "x"
+        ],
+        "zarr_format": 3,
+        "node_type": "array",
+        "storage_transformers": []
+      },
+      "quality": {
+        "attributes": {
+          "decoders": [
+            "e2309f95ff0d5cb4"
+          ]
+        },
+        "zarr_format": 3,
+        "consolidated_metadata": {
+          "kind": "inline",
+          "must_understand": false,
+          "metadata": {}
+        },
+        "node_type": "group"
+      },
+      "tier1": {
+        "shape": [
+          4,
+          4,
+          8,
+          59
+        ],
+        "data_type": "uint8",
+        "chunk_grid": {
+          "name": "regular",
+          "configuration": {
+            "chunk_shape": [
+              4,
+              4,
+              8,
+              59
+            ]
+          }
+        },
+        "chunk_key_encoding": {
+          "name": "default",
+          "configuration": {
+            "separator": "/"
+          }
+        },
+        "fill_value": 0,
+        "codecs": [
+          {
+            "name": "sharding_indexed",
+            "configuration": {
+              "chunk_shape": [
+                2,
+                2,
+                1,
+                59
+              ],
+              "codecs": [
+                {
+                  "name": "bytes"
+                }
+              ],
+              "index_codecs": [
+                {
+                  "name": "bytes",
+                  "configuration": {
+                    "endian": "little"
+                  }
+                },
+                {
+                  "name": "crc32c"
+                }
+              ],
+              "index_location": "end"
+            }
+          }
+        ],
+        "attributes": {
+          "zarr_conventions": [
+            {
+              "schema_url": "https://raw.githubusercontent.com/zarr-conventions/proj/refs/tags/v0.1/schema.json",
+              "spec_url": "https://github.com/zarr-conventions/proj/blob/v0.1/README.md",
+              "uuid": "f17cb550-5864-4468-aeb7-f3180cfb622f",
+              "name": "proj",
+              "description": "Coordinate reference system information for geospatial data"
+            },
+            {
+              "schema_url": "https://raw.githubusercontent.com/zarr-conventions/spatial/refs/tags/v0.1/schema.json",
+              "spec_url": "https://github.com/zarr-conventions/spatial/blob/v0.1/README.md",
+              "uuid": "689b58e2-cf7b-45e0-9fff-9cfc0883d6b4",
+              "name": "spatial",
+              "description": "Spatial coordinate information"
+            }
+          ],
+          "proj:code": "EPSG:32637",
+          "spatial:dimensions": [
+            "wy",
+            "wx"
+          ],
+          "spatial:shape": [
+            4,
+            4
+          ],
+          "spatial:transform": [
+            360.0,
+            0.0,
+            506520.0,
+            0.0,
+            -360.0,
+            6198600.0
+          ],
+          "spatial:bbox": [
+            506520.0,
+            6197160.0,
+            507960.0,
+            6198600.0
+          ],
+          "spatial:registration": "pixel"
+        },
+        "dimension_names": [
+          "wy",
+          "wx",
+          "tier1_level",
+          "tier1_byte"
+        ],
+        "zarr_format": 3,
+        "node_type": "array",
+        "storage_transformers": []
+      },
+      "assets/safe_meta": {
+        "shape": [
+          28723
+        ],
+        "data_type": "uint8",
+        "chunk_grid": {
+          "name": "regular",
+          "configuration": {
+            "chunk_shape": [
+              28723
+            ]
+          }
+        },
+        "chunk_key_encoding": {
+          "name": "default",
+          "configuration": {
+            "separator": "/"
+          }
+        },
+        "fill_value": 0,
+        "codecs": [
+          {
+            "name": "bytes"
+          }
+        ],
+        "attributes": {
+          "georvq_asset": {
+            "media_type": "application/zip",
+            "filename": "S2C_MSIL1C_20260503T084641_N0512_R107_T37UDB_20260503T104912.SAFE.meta.zip",
+            "size": 28723,
+            "sha256": "4893c95c82bd39cd4265186c0e48ea3eff178e51cd1540b5591b5fa00a3ed231"
+          }
+        },
+        "dimension_names": [
+          "byte"
+        ],
+        "zarr_format": 3,
+        "node_type": "array",
+        "storage_transformers": []
+      },
+      "quality/e2309f95ff0d5cb4": {
+        "shape": [
+          4,
+          4,
+          27
+        ],
+        "data_type": "uint8",
+        "chunk_grid": {
+          "name": "regular",
+          "configuration": {
+            "chunk_shape": [
+              2,
+              2,
+              27
+            ]
+          }
+        },
+        "chunk_key_encoding": {
+          "name": "default",
+          "configuration": {
+            "separator": "/"
+          }
+        },
+        "fill_value": 0,
+        "codecs": [
+          {
+            "name": "bytes"
+          }
+        ],
+        "attributes": {
+          "zarr_conventions": [
+            {
+              "schema_url": "https://raw.githubusercontent.com/zarr-conventions/proj/refs/tags/v0.1/schema.json",
+              "spec_url": "https://github.com/zarr-conventions/proj/blob/v0.1/README.md",
+              "uuid": "f17cb550-5864-4468-aeb7-f3180cfb622f",
+              "name": "proj",
+              "description": "Coordinate reference system information for geospatial data"
+            },
+            {
+              "schema_url": "https://raw.githubusercontent.com/zarr-conventions/spatial/refs/tags/v0.1/schema.json",
+              "spec_url": "https://github.com/zarr-conventions/spatial/blob/v0.1/README.md",
+              "uuid": "689b58e2-cf7b-45e0-9fff-9cfc0883d6b4",
+              "name": "spatial",
+              "description": "Spatial coordinate information"
+            }
+          ],
+          "proj:code": "EPSG:32637",
+          "spatial:dimensions": [
+            "wy",
+            "wx"
+          ],
+          "spatial:shape": [
+            4,
+            4
+          ],
+          "spatial:transform": [
+            360.0,
+            0.0,
+            506520.0,
+            0.0,
+            -360.0,
+            6198600.0
+          ],
+          "spatial:bbox": [
+            506520.0,
+            6197160.0,
+            507960.0,
+            6198600.0
+          ],
+          "spatial:registration": "pixel",
+          "georvq_quality": {
+            "decoder_id": "e2309f95ff0d5cb4",
+            "bitstream_id": "47f3ac88b39c6ca9",
+            "release": {
+              "name": "golden",
+              "bitstream_id": "47f3ac88b39c6ca9",
+              "decoder_id": "e2309f95ff0d5cb4",
+              "uri": "hf://earth-compress/georvq-s2-v1",
+              "revision": null
+            },
+            "rungs": [
+              {
+                "tuple": [
+                  8,
+                  0
+                ],
+                "bits_window": 360,
+                "bits_px": 0.2777777777777778
+              },
+              {
+                "tuple": [
+                  8,
+                  1
+                ],
+                "bits_window": 828,
+                "bits_px": 0.6388888888888888
+              },
+              {
+                "tuple": [
+                  8,
+                  2
+                ],
+                "bits_window": 1296,
+                "bits_px": 1.0
+              },
+              {
+                "tuple": [
+                  8,
+                  3
+                ],
+                "bits_window": 1764,
+                "bits_px": 1.3611111111111112
+              },
+              {
+                "tuple": [
+                  8,
+                  4
+                ],
+                "bits_window": 2232,
+                "bits_px": 1.7222222222222223
+              },
+              {
+                "tuple": [
+                  8,
+                  5
+                ],
+                "bits_window": 2700,
+                "bits_px": 2.0833333333333335
+              },
+              {
+                "tuple": [
+                  8,
+                  6
+                ],
+                "bits_window": 3168,
+                "bits_px": 2.4444444444444446
+              },
+              {
+                "tuple": [
+                  8,
+                  7
+                ],
+                "bits_window": 3636,
+                "bits_px": 2.8055555555555554
+              },
+              {
+                "tuple": [
+                  8,
+                  8
+                ],
+                "bits_window": 4104,
+                "bits_px": 3.1666666666666665
+              }
+            ],
+            "fields": [
+              {
+                "name": "rmse_10m",
+                "count": 9,
+                "bits": 8
+              },
+              {
+                "name": "rmse_20m",
+                "count": 9,
+                "bits": 8
+              },
+              {
+                "name": "rmse_60m",
+                "count": 9,
+                "bits": 8
+              }
+            ],
+            "quality": {
+              "stats": [
+                "rmse_10m",
+                "rmse_20m",
+                "rmse_60m"
+              ],
+              "error": "RMSE in DN of the uint16 output against the source DN, over the window's valid pixels of one grid (rmse_10m: B02 B03 B04 B08; rmse_20m: B05 B06 B07 B8A B11 B12; rmse_60m: B01 B09 B10), all of the grid's bands pooled",
+              "encoding": "code = round(32 * (log10(e) + 2)) clipped to 0..255; 0 means e <= 0.01 DN",
+              "scale": 32.0,
+              "offset": 2.0,
+              "order": "per stat, one byte per rung in header rungs order",
+              "decode_precision": "fp32"
+            }
+          }
+        },
+        "dimension_names": [
+          "wy",
+          "wx",
+          "quality_byte"
+        ],
+        "zarr_format": 3,
+        "node_type": "array",
+        "storage_transformers": []
+      }
+    }
+  },
+  "node_type": "group"
+}

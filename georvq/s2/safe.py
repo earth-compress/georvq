@@ -119,6 +119,12 @@ def check_geometry(info) -> tuple:
     return epsg, tuple(t10)[:6], (h10, w10)
 
 
+def _band_name(b) -> str:
+    """MTD's physical band name ("B1", "B8A") as the image files name it
+    ("B01", "B8A")."""
+    return f"B{int(b[1:]):02d}" if b[1:].isdigit() else b
+
+
 def product_metadata(safe_dir) -> dict:
     """Facts from MTD_MSIL1C.xml: processing baseline, spacecraft, sensing
     start, tile id, the quantification value and each band's radiometric
@@ -132,7 +138,7 @@ def product_metadata(safe_dir) -> dict:
         m = re.search(rf"<{name}[^>]*>([^<]*)</{name}>", x)
         return m.group(1).strip() if m else None
 
-    ids = {m.group(1): m.group(2) for m in re.finditer(
+    ids = {m.group(1): _band_name(m.group(2)) for m in re.finditer(
         r'<Spectral_Information bandId="(\d+)" physicalBand="([^"]+)"', x)}
     offs = {ids.get(m.group(1), m.group(1)): int(m.group(2)) for m in
             re.finditer(r'<RADIO_ADD_OFFSET band_id="(\d+)">([-0-9]+)<', x)}

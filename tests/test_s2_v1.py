@@ -303,7 +303,7 @@ def test_safe_product_reads_the_bands(safe_dir):
     assert (p.height, p.width) == (N, N) and p.transform == T10
     assert p.crs.to_epsg() == 32637 and p.year == 2026
     assert p.product_meta["processing_baseline"] == "05.12"
-    assert p.product_meta["radio_add_offset"]["B04"] == -1000
+    assert p.product_meta["radio_add_offset"] == {b: -1000 for b in S.S2_ORDER}
     jp = p.aux["safe"]["jp2"]["B02"]
     assert jp["precision"] == 15 and jp["gml"] and jp["reversible"]
     assert list(p.aux["safe"]["band_files"]) == list(S.S2_ORDER)

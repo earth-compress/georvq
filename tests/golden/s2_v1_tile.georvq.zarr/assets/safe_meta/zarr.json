@@ -1,0 +1,40 @@
+{
+  "shape": [
+    28723
+  ],
+  "data_type": "uint8",
+  "chunk_grid": {
+    "name": "regular",
+    "configuration": {
+      "chunk_shape": [
+        28723
+      ]
+    }
+  },
+  "chunk_key_encoding": {
+    "name": "default",
+    "configuration": {
+      "separator": "/"
+    }
+  },
+  "fill_value": 0,
+  "codecs": [
+    {
+      "name": "bytes"
+    }
+  ],
+  "attributes": {
+    "georvq_asset": {
+      "media_type": "application/zip",
+      "filename": "S2C_MSIL1C_20260503T084641_N0512_R107_T37UDB_20260503T104912.SAFE.meta.zip",
+      "size": 28723,
+      "sha256": "4893c95c82bd39cd4265186c0e48ea3eff178e51cd1540b5591b5fa00a3ed231"
+    }
+  },
+  "dimension_names": [
+    "byte"
+  ],
+  "zarr_format": 3,
+  "node_type": "array",
+  "storage_transformers": []
+}
