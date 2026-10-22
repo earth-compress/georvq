@@ -230,6 +230,14 @@ def test_decoder_only_bundle(tiny, tmp_path):
         fb, _ = b.decode_field(ra["base"][0], tiers, r, va.numpy())
         assert torch.isfinite(fb).all()
         assert (fa - fb).abs().max() < 1e-2 * fa.abs().max()
+    # georvq.open takes it for a store written by its parent decoder
+    import georvq
+    from tests.test_ae_index import write_tile
+    store = str(tmp_path / "t.georvq.zarr")
+    write_tile(store, a, 32, 48)
+    with georvq.open(store, codec=b) as ds:
+        assert ds.read(quality="3-2-2").shape == (64, 32, 48)
+        assert ds.reader.quality_decoder is None
 
 
 # --------------------------------------------------------------------------
