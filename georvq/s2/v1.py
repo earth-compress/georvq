@@ -596,6 +596,12 @@ def main(argv=None):
     b.add_argument("out_dir")
     b.add_argument("--notes", default="")
     b.add_argument("--onnx", action="store_true")
+    x = sub.add_parser("index", help="stores -> GeoParquet tile index")
+    x.add_argument("stores", help="a directory of stores")
+    x.add_argument("out")
+    x.add_argument("--url-prefix", default="",
+                   help="prefix of each store's path relative to the "
+                        "directory (default none)")
     args = ap.parse_args(argv)
 
     def log(m):
@@ -605,6 +611,11 @@ def main(argv=None):
         meta = build_bundle(args.ckpt, args.channel_npz, args.out_dir,
                             notes=args.notes, onnx=args.onnx)
         print(json.dumps({k: meta[k] for k in ("bitstream_id", "decoder_id")}))
+        return 0
+    if args.cmd == "index":
+        from georvq.s2.index import build_index
+        t = build_index(args.stores, args.out, url_prefix=args.url_prefix)
+        print(json.dumps({"rows": t.num_rows, "out": args.out}))
         return 0
     if args.cmd == "reconstruct":
         out = reconstruct_safe(args.store, args.out_dir, quality=args.quality,

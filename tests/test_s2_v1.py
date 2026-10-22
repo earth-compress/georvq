@@ -518,3 +518,34 @@ def test_deblocked_window_matches_whole_product(codec, tmp_path):
                                          72 // f:144 // f]).sum())
     assert changed > 0
 
+
+def test_index(codec, tmp_path):
+    import pyarrow.parquet as pq
+    from georvq.inference.store_index import CORE
+    from georvq.s2.index import build_index
+    name = "S2C_MSIL1C_20260503T084641_N0512_R107_T37UDB_20260503T104912"
+    src = _Crop(synthetic_bands(N, seed=7))
+    src.product_id = name
+    src.product_meta = {"count": 13, "safe": name + ".SAFE",
+                        "spacecraft": "Sentinel-2C",
+                        "sensing_start": "2026-05-03T08:46:41.024Z",
+                        "processing_baseline": "05.12"}
+    root = tmp_path / "sample"
+    root.mkdir()
+    torch.set_grad_enabled(False)
+    try:
+        v1.encode_product(src, str(root / (name + ".georvq.zarr")), codec,
+                          chunk_px=CHUNK_PX, stats=False)
+    finally:
+        torch.set_grad_enabled(True)
+    out = str(tmp_path / "s2_georvq_index.parquet")
+    assert v1.main(["index", str(root), out]) == 0
+    t = pq.read_table(out)
+    assert t.schema.names[:len(CORE.names)] == CORE.names
+    row = t.to_pylist()[0]
+    assert row["path"] == name + ".georvq.zarr"
+    assert row["crs"] == "EPSG:32637" and row["product_id"] == name
+    assert (row["mgrs_tile"], row["relative_orbit"]) == ("37UDB", 107)
+    assert row["safe"] == name + ".SAFE" and row["spacecraft"] == "Sentinel-2C"
+    assert row["sensing_start"].year == 2026
+    assert b'"primary_column": "geometry"' in t.schema.metadata[b"geo"]
