@@ -49,7 +49,8 @@ md("""
 
 `DATA_ROOT` holds the coded stores (`annual/{year}/{zone}/{stem}.georvq.zarr`)
 and their index. It can be a local directory or an HTTP URL, and points
-at the published sample on Hugging Face. `STORAGE_OPTIONS` go to fsspec
+at the published sample on Hugging Face, or, while `STAGED` is set, at a
+local copy of the sample before it is uploaded. `STORAGE_OPTIONS` go to fsspec
 when the stores are read by URL, for example a token for a private
 repository. `SOURCE_ROOT`
 holds the source tiles, used here only for comparison; Source
@@ -67,9 +68,17 @@ slowly (a 1024 px window takes about 10 s to decode on 16 CPU threads).
 code("""
 from rasterio.windows import Window
 
-DATA_ROOT = "https://huggingface.co/datasets/earth-compress/georvq-ae-v2-sample/resolve/main"
+# ---- configuration: the only cell that names locations ----
+# STAGED = True reads the sample staged on cirrus before upload; set it to
+# False to read the published sample and the source tiles over HTTPS.
+STAGED = True
+if STAGED:
+    DATA_ROOT = "/data/georvq-releases/ae-v2/sample-0.5"
+    SOURCE_ROOT = "/data/AE-samples/tiles_full"
+else:
+    DATA_ROOT = "https://huggingface.co/datasets/earth-compress/georvq-ae-v2-sample/resolve/main"
+    SOURCE_ROOT = "https://data.source.coop/tge-labs/aef/v1/annual"
 STORAGE_OPTIONS = None    # e.g. {"headers": {"Authorization": "Bearer <token>"}}
-SOURCE_ROOT = "https://data.source.coop/tge-labs/aef/v1/annual"
 # local copies work the same way, e.g.
 # DATA_ROOT = "path/to/georvq-ae-v2-sample"
 # SOURCE_ROOT = "path/to/aef/v1/annual"
