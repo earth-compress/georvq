@@ -25,8 +25,8 @@ the mask (5 x 5 chunks per 10980 px tile; 1098 px of the 20 m grid and
   pooled RMSE would be set by the 10 m bands, and a reader of the 60 m
   bands wants their own error;
 - `assets/safe_meta`, a zip of everything in the SAFE but the 13 band
-  images (georvq.s2.safe.safe_meta_zip), so that `reconstruct_safe`
-  writes the product back.
+  images and the true-colour image TCI (georvq.s2.safe.safe_meta_zip),
+  so that `reconstruct_safe` writes the product back without TCI.
 
 Output is uint16 DN on the three native grids (header `output.grids`),
 in the convention of the input: the radiometric offset of processing
@@ -458,20 +458,24 @@ def reconstruct_safe(store, out_dir, quality=None, rows=STRIP_PX, log=None,
     product directory, `out_dir/<name>.SAFE`, which must not exist.
 
     The metadata zip is extracted first, so every file but the band
-    images (TCI, PVI, the QI_DATA masks, MTD_*.xml, manifest.safe,
-    AUX_DATA, DATASTRIP, HTML, rep_info) is the original's, byte for
-    byte. The bands are decoded strip by strip and each is written
-    losslessly as JPEG 2000 with the coding parameters of the original
-    image (tile size, resolution levels, progression, code-blocks,
-    precincts, 15-bit samples) and a GML box with the original's
-    georeferencing, under its original name. Decoded values above the
-    largest value the original's samples hold (32767 for 15 bits) are
-    clipped to it. In manifest.safe the size and checksum (with the
+    images (PVI, the QI_DATA masks, MTD_*.xml, manifest.safe, AUX_DATA,
+    DATASTRIP, HTML, rep_info) is the original's, byte for byte. The
+    true-colour image TCI is not kept by the store and not written; the
+    metadata files that list it (MTD_MSIL1C.xml, the HTML index) are
+    left as they were. The bands are decoded strip by strip and each is
+    written losslessly as JPEG 2000 with the coding parameters of the
+    original image (tile size, resolution levels, progression,
+    code-blocks, precincts, 15-bit samples) and a GML box with the
+    original's georeferencing, under its original name. Decoded values
+    above the largest value the original's samples hold (32767 for 15
+    bits) are clipped to it. In manifest.safe the size and checksum (with the
     algorithm it names, SHA3-256 or MD5) of each band image are
-    recomputed, and an XML comment after the declaration says that the
-    product is a georvq reconstruction at the given quality. A file
-    `GEORVQ_RECONSTRUCTION.json` at the product root records the store,
-    its bitstream and decoder ids, the quality, and the files changed.
+    recomputed, the entries of TCI (its dataObject and the contentUnit
+    pointing to it) are removed, and an XML comment after the
+    declaration says that the product is a georvq reconstruction at the
+    given quality. A file `GEORVQ_RECONSTRUCTION.json` at the product
+    root records the store, its bitstream and decoder ids, the quality,
+    and the files changed and omitted.
     `open_kw` go to georvq.open (bundle=, backend=, device=, ...)."""
     import georvq
     say = log or (lambda m: None)
@@ -511,14 +515,20 @@ def reconstruct_safe(store, out_dir, quality=None, rows=STRIP_PX, log=None,
                 if isinstance(quality, str) else "-".join(map(str, quality)))
         h = ds.header
         man = os.path.join(root, "manifest.safe")
+        omitted = []
         if os.path.exists(man):
             text = open(man, encoding="utf-8", newline="").read()
+            omitted = sorted(r for r in _safe.manifest_entries(text)
+                             if _safe.is_tci_file(r))
             note = (f"georvq reconstruction: the 13 band images in "
                     f"GRANULE/*/IMG_DATA were decoded from a georvq S2 v1 "
                     f"store (bitstream {h['codec']['bitstream_id']}, decoder "
                     f"{h['codec']['decoder_id']}) at quality {rung} and are "
                     f"lossy approximations of the originals; their sizes "
-                    f"and checksums below were recomputed. See {_safe.MARKER}.")
+                    f"and checksums below were recomputed. The true-colour "
+                    f"image TCI is not part of the reconstruction and its "
+                    f"entries were removed. See {_safe.MARKER}.")
+            text = _safe.drop_from_manifest(text, omitted)
             text = _safe.rewrite_manifest(text, root, written, note)
             with open(man, "w", encoding="utf-8", newline="") as f:
                 f.write(text)
@@ -531,11 +541,16 @@ def reconstruct_safe(store, out_dir, quality=None, rows=STRIP_PX, log=None,
             "release": h["codec"].get("release"),
             "quality": quality, "rung": rung,
             "band_images": sorted(written),
+            "omitted": omitted,
             "note": "The band images are lossy reconstructions decoded from "
                     "a georvq store; every other file is the original's, "
-                    "except manifest.safe, whose sizes and checksums of the "
-                    "band images were recomputed and which carries a comment "
-                    "saying so.",
+                    "except manifest.safe, whose sizes and "
+                    "checksums of the band images were recomputed, from "
+                    "which the entries of the omitted files were removed, "
+                    "and which carries a comment saying so. The omitted "
+                    "files (the true-colour image TCI) are not kept by the "
+                    "store; MTD_MSIL1C.xml and the HTML index of an ESA "
+                    "product still list TCI.",
             "licence": h.get("licence")}
         with open(os.path.join(root, _safe.MARKER), "w") as f:
             json.dump(marker, f, indent=1)

@@ -5,11 +5,13 @@ An L1C product (`<name>.SAFE`) holds one 100 km tile as 13 JPEG 2000
 band images under `GRANULE/<granule>/IMG_DATA`, at 10 m (B02 B03 B04
 B08, 10980 px), 20 m (B05 B06 B07 B8A B11 B12, 5490 px) and 60 m (B01
 B09 B10, 1830 px), each georeferenced by a GML box in the same UTM CRS
-with the same upper-left corner. Everything else (the true-colour image
-TCI, the preview PVI, the quality masks, the metadata XML,
+with the same upper-left corner. Everything else but the true-colour
+image TCI (the preview PVI, the quality masks, the metadata XML,
 `manifest.safe`, the HTML and schema files) is kept by a georvq S2
 store as one zip, `safe_meta_zip`, and restored by `reconstruct_safe`
-around band images decoded from the store.
+around band images decoded from the store. TCI, an 8-bit rendering of
+B04, B03 and B02 that is most of the zip's size when kept, is left out
+of the zip and of the reconstruction.
 
 This module needs numpy and rasterio (whose GDAL reads and writes the
 JPEG 2000 files through OpenJPEG); it does not import torch.
@@ -36,6 +38,7 @@ S2_ORDER = ("B01", "B02", "B03", "B04", "B05", "B06", "B07", "B08", "B8A",
 TILE_PX = 10980
 _BAND_FILE = re.compile(r"^GRANULE/[^/]+/IMG_DATA/[^/]+_(B0[1-9]|B1[0-2]|B8A)"
                         r"\.jp2$")
+_TCI_FILE = re.compile(r"^GRANULE/[^/]+/IMG_DATA/[^/]+_TCI\.jp2$")
 # files whose bytes are already compressed are stored in the zip as they are
 _STORED = (".jp2", ".png", ".jpg", ".jpeg", ".gif")
 _ZIP_TIME = (1980, 1, 1, 0, 0, 0)
@@ -280,14 +283,20 @@ def is_band_file(rel) -> bool:
     return bool(_BAND_FILE.match(rel))
 
 
+def is_tci_file(rel) -> bool:
+    """Whether a path relative to the SAFE root is the true-colour image
+    TCI, which a store does not keep."""
+    return bool(_TCI_FILE.match(rel))
+
+
 def safe_meta_zip(safe_dir) -> bytes:
-    """Everything in the SAFE but the 13 band images, as zip bytes:
-    every directory and file under the SAFE root, at its path relative to
-    the root (the root itself not included), in sorted order, with fixed
-    timestamps and permissions so that the same product always gives the
-    same bytes (for a given zlib). XML and other text is deflated at level
-    9; JPEG 2000, PNG and JPEG files are stored as they are. Symbolic
-    links are refused."""
+    """Everything in the SAFE but the 13 band images and TCI, as zip
+    bytes: every directory and other file under the SAFE root, at its
+    path relative to the root (the root itself not included), in sorted
+    order, with fixed timestamps and permissions so that the same product
+    always gives the same bytes (for a given zlib). XML and other text is
+    deflated at level 9; JPEG 2000, PNG and JPEG files are stored as they
+    are. Symbolic links are refused."""
     safe_dir = os.fspath(safe_dir)
     entries = []
     n_bands = 0
@@ -305,7 +314,7 @@ def safe_meta_zip(safe_dir) -> bytes:
             rel = os.path.relpath(p, safe_dir).replace(os.sep, "/")
             if is_band_file(rel):
                 n_bands += 1
-            else:
+            elif not is_tci_file(rel):
                 entries.append(rel)
     if n_bands != len(BANDS):
         raise ValueError(f"{safe_dir}: {n_bands} band images, expected "
@@ -416,3 +425,33 @@ def rewrite_manifest(text, safe_dir, files, comment) -> str:
     at = m.end() if m else 0
     nl = "\r\n" if "\r\n" in out[:at + 2] else "\n"
     return out[:at] + f"<!-- {comment} -->{nl}" + out[at:]
+
+
+def drop_from_manifest(text, files) -> str:
+    """manifest.safe text without the files `files` (paths relative to
+    the SAFE root): the dataObject that holds each file's byte stream,
+    and the contentUnit in the information package map that points to
+    that dataObject, are removed with the line break and indentation
+    before them. Nothing else in the text changes. Raises if a file is
+    not listed or its dataObject is referenced other than by one such
+    contentUnit."""
+    for rel in files:
+        obj = re.compile(
+            r'(?:\r?\n[ \t]*)?<dataObject\b[^>]*\bID="([^"]+)"[^>]*>'
+            r'(?:(?!</dataObject>).)*?<fileLocation\b[^>]*\bhref="\.?/?'
+            + re.escape(rel) + r'"(?:(?!</dataObject>).)*</dataObject>', re.S)
+        found = list(obj.finditer(text))
+        if len(found) != 1:
+            raise ValueError(f"manifest.safe lists {rel} {len(found)} times")
+        oid = found[0].group(1)
+        text = text[:found[0].start()] + text[found[0].end():]
+        unit = re.compile(
+            r'(?:\r?\n[ \t]*)?<xfdu:contentUnit\b[^>]*>\s*<dataObjectPointer'
+            r'\s+dataObjectID="' + re.escape(oid) + r'"\s*/>\s*'
+            r'</xfdu:contentUnit>')
+        text = unit.sub("", text)
+        if re.search(r'"' + re.escape(oid) + r'"', text):
+            raise ValueError(f"manifest.safe refers to {oid} ({rel}) other "
+                             "than by a contentUnit")
+    return text
+

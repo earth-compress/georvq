@@ -5,9 +5,10 @@ processing baseline 05.xx: the 13 band images and the true-colour image
 in GRANULE/<granule>/IMG_DATA, the preview and quality masks in QI_DATA,
 the metadata XML files, AUX_DATA, DATASTRIP, HTML, rep_info, an empty
 directory, and a manifest.safe listing every file with its size and
-SHA3-256 checksum, as ESA's products do. The XML files are short
-stand-ins written here, not copies of ESA's; the band images are JPEG
-2000 with a GML box, as in the products.
+SHA3-256 checksum in a dataObject, each pointed to by a contentUnit, as
+ESA's products do. The XML files are short stand-ins written here, not
+copies of ESA's; the band images are JPEG 2000 with a GML box, as in the
+products.
 """
 import hashlib
 import os
@@ -68,8 +69,11 @@ def _mtd(offset=-1000):
 
 
 def _manifest(root, files):
-    objs = []
+    objs, units = [], []
     for i, rel in enumerate(files):
+        units.append(f"""            <xfdu:contentUnit ID="unit_{i}" unitType="Data Unit">
+                <dataObjectPointer dataObjectID="obj_{i}"/>
+            </xfdu:contentUnit>""")
         p = os.path.join(root, rel)
         h = hashlib.sha3_256(open(p, "rb").read()).hexdigest().upper()
         objs.append(f"""        <dataObject ID="obj_{i}">
@@ -81,6 +85,11 @@ def _manifest(root, files):
     return ("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
             "<xfdu:XFDU xmlns:xfdu=\"urn:ccsds:schema:xfdu:1\" "
             "version=\"esa/safe/sentinel/1.1/sentinel-2/msi/archive_l1c_user_product\">\n"
+            "    <informationPackageMap>\n"
+            "        <xfdu:contentUnit unitType=\"Product_Level-1C\">\n"
+            + "\n".join(units) + "\n"
+            "        </xfdu:contentUnit>\n"
+            "    </informationPackageMap>\n"
             "    <dataObjectSection>\n" + "\n".join(objs) + "\n"
             "    </dataObjectSection>\n</xfdu:XFDU>\n")
 

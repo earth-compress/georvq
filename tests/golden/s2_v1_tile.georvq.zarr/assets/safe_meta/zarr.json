@@ -1,13 +1,13 @@
 {
   "shape": [
-    28723
+    13368
   ],
   "data_type": "uint8",
   "chunk_grid": {
     "name": "regular",
     "configuration": {
       "chunk_shape": [
-        28723
+        13368
       ]
     }
   },
@@ -27,8 +27,8 @@
     "georvq_asset": {
       "media_type": "application/zip",
       "filename": "S2C_MSIL1C_20260503T084641_N0512_R107_T37UDB_20260503T104912.SAFE.meta.zip",
-      "size": 28723,
-      "sha256": "4893c95c82bd39cd4265186c0e48ea3eff178e51cd1540b5591b5fa00a3ed231"
+      "size": 13368,
+      "sha256": "dfc80fb45e5e556a093dbd561e1b861a9f51380831b65784ad709ccdb919da91"
     }
   },
   "dimension_names": [

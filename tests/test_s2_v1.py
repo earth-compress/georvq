@@ -245,14 +245,15 @@ def test_safe_meta_zip(safe_dir, tmp_path):
     assert S.safe_meta_zip(safe_dir) == a
     names = zipfile.ZipFile(__import__("io").BytesIO(a)).namelist()
     assert names == sorted(names)
-    assert not any(S.is_band_file(n) for n in names)
-    assert any(n.endswith("_TCI.jp2") for n in names)
+    assert not any(S.is_band_file(n) or S.is_tci_file(n) for n in names)
+    assert not any(n.endswith("_TCI.jp2") for n in names)
     assert any(n.endswith("_PVI.jp2") for n in names)
     assert "AUX_DATA/" in names and "manifest.safe" in names
     out = str(tmp_path / "x.SAFE")
     S.unzip_meta(a, out)
     want = {k: v for k, v in _tree(safe_dir).items()
-            if not S.is_band_file(k.replace(os.sep, "/"))}
+            if not S.is_band_file(k.replace(os.sep, "/"))
+            and not S.is_tci_file(k.replace(os.sep, "/"))}
     assert _tree(out) == want
     with pytest.raises(FileExistsError):
         S.unzip_meta(a, out)
@@ -295,6 +296,30 @@ def test_manifest_rewrite(safe_dir, tmp_path):
         S.rewrite_manifest(text, d, ["GRANULE/nope.jp2"], "x")
 
 
+def test_manifest_drop(safe_dir):
+    import xml.etree.ElementTree as ET
+    text = open(os.path.join(safe_dir, "manifest.safe")).read()
+    ent = S.manifest_entries(text)
+    tci = [r for r in ent if S.is_tci_file(r)]
+    assert len(tci) == 1
+    new = S.drop_from_manifest(text, tci)
+    root = ET.fromstring(new)
+    assert S.manifest_entries(new) == {k: v for k, v in ent.items()
+                                       if k not in tci}
+    objs = {o.get("ID") for o in root.iter("dataObject")}
+    ptrs = [p.get("dataObjectID") for p in root.iter("dataObjectPointer")]
+    assert sorted(ptrs) == sorted(objs) and len(objs) == len(ent) - 1
+    assert text.count("\n") - new.count("\n") == 9 and "TCI" not in new
+    # the one-line layout of products of baselines before 04.00
+    flat = "".join(line.strip() for line in text.splitlines())
+    new = S.drop_from_manifest(flat, tci)
+    assert new == "".join(line.strip() for line in
+                          S.drop_from_manifest(text, tci).splitlines())
+    assert "TCI" not in new
+    with pytest.raises(ValueError, match="lists"):
+        S.drop_from_manifest(text, ["GRANULE/nope_TCI.jp2"])
+
+
 def test_safe_product_reads_the_bands(safe_dir):
     p = v1.SafeProduct(safe_dir)
     want = synthetic_bands(N)
@@ -322,11 +347,13 @@ def test_safe_round_trip(codec, safe_dir, tmp_path):
                                codec=codec)
     assert os.path.basename(root) == os.path.basename(safe_dir)
     a, b = _tree(safe_dir), _tree(root)
-    assert sorted(b) == sorted(list(a) + [S.MARKER])
+    tci = [k for k in a if S.is_tci_file(k.replace(os.sep, "/"))]
+    assert len(tci) == 1
+    assert sorted(b) == sorted([k for k in a if k not in tci] + [S.MARKER])
     files = S.band_files(safe_dir)
     bands = set(files.values())
     for k, v in a.items():
-        if k not in bands and k != "manifest.safe":
+        if k not in bands and k not in tci and k != "manifest.safe":
             assert b[k] == v, k
     want = direct_decode(codec, synthetic_bands(N), rung)
     for g, f, names in S.GRIDS:
@@ -347,12 +374,18 @@ def test_safe_round_trip(codec, safe_dir, tmp_path):
                 assert p[k] == q[k], (band, k)
     man = open(os.path.join(root, "manifest.safe")).read()
     assert "georvq reconstruction" in man.splitlines()[1]
-    for rel, (size, name, h) in S.manifest_entries(man).items():
+    import xml.etree.ElementTree as ET
+    ET.fromstring(man)
+    ent = S.manifest_entries(man)
+    assert sorted(ent) == sorted(k for k in b if not k.endswith("/") and k
+                                 not in ("manifest.safe", S.MARKER))
+    for rel, (size, name, h) in ent.items():
         f = os.path.join(root, rel)
         assert size == os.path.getsize(f) and h == S.file_checksum(f, name)
     marker = json.load(open(os.path.join(root, S.MARKER)))
     assert marker["quality"] == [3, 2] and sorted(marker["band_images"]) == \
         sorted(bands)
+    assert marker["omitted"] == tci
     with georvq.open(store, codec=codec) as ds:
         assert ds.assets["safe_meta"] == S.safe_meta_zip(safe_dir)
         assert ds.header["product"]["safe"] == os.path.basename(safe_dir)
