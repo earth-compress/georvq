@@ -52,8 +52,7 @@ import sys
 
 import numpy as np
 
-from georvq.inference.store_codec import (OnnxStoreCodec, ReleaseSpec,
-                                          StoreCodec, _as_arrays, _no_grad,
+from georvq.inference.store_codec import (ReleaseSpec, StoreCodec, _as_arrays, _no_grad,
                                           crs_from_epsg, cumulative,
                                           encode_product, quality_code)
 from georvq.s2 import safe as _safe
@@ -360,16 +359,19 @@ class S2V1Codec(StoreCodec):
         return res
 
 
-class S2V1OnnxCodec(OnnxStoreCodec):
-    spec = S2_V1
-
-    def __init__(self, onnx_dir, device="cpu", threads=None, spec=None):
-        raise NotImplementedError("S2 v1 has no ONNX export; use the torch "
-                                  "backend")
+def _onnx_codec(onnx_dir, device="cpu", threads=None, spec=None):
+    from georvq.s2.onnx import S2V1OnnxCodec
+    return S2V1OnnxCodec(onnx_dir, device=device, threads=threads, spec=spec)
 
 
-S2_V1 = S2_V1.with_(torch_codec=S2V1Codec, onnx_codec=S2V1OnnxCodec)
-S2V1Codec.spec = S2V1OnnxCodec.spec = S2_V1
+def _onnx_export(codec, out_dir, opset=18):
+    from georvq.s2.onnx import export_s2_onnx
+    return export_s2_onnx(codec, out_dir, opset)
+
+
+S2_V1 = S2_V1.with_(torch_codec=S2V1Codec, onnx_codec=_onnx_codec,
+                    onnx_export=_onnx_export)
+S2V1Codec.spec = S2_V1
 SPEC = S2_V1
 
 
@@ -548,10 +550,11 @@ def reconstruct_safe(store, out_dir, quality=None, rows=STRIP_PX, log=None,
 # bundles
 # --------------------------------------------------------------------------
 
-def build_bundle(ckpt, channel_npz, out_dir, notes="") -> dict:
-    """Bundle a training checkpoint and its statistics channel."""
+def build_bundle(ckpt, channel_npz, out_dir, notes="", onnx=False) -> dict:
+    """Bundle a training checkpoint and its statistics channel; `onnx`
+    adds the decoder's ONNX export (georvq.s2.onnx) under onnx/."""
     from georvq.inference.bundle import build_bundle as _build
-    return _build(ckpt, channel_npz, out_dir, S2_V1, notes=notes, onnx=False,
+    return _build(ckpt, channel_npz, out_dir, S2_V1, notes=notes, onnx=onnx,
                   extra={"licence_weights": WEIGHTS_LICENCE,
                          "training_data": TRAINING_DATA,
                          "licence_stores": "per store, in its header: "
@@ -587,7 +590,7 @@ def main(argv=None):
     r.add_argument("--quality", default=None,
                    help="a rung such as 8-4, or a bound such as "
                         "rmse_10m<=20 (default full depth)")
-    r.add_argument("--backend", default=None, choices=["torch"])
+    r.add_argument("--backend", default=None, choices=["torch", "onnx"])
     r.add_argument("--device", default=None)
     r.add_argument("--bundle", default=None)
     b = sub.add_parser("bundle", help="checkpoint + stats channel -> bundle")
@@ -595,6 +598,7 @@ def main(argv=None):
     b.add_argument("channel_npz")
     b.add_argument("out_dir")
     b.add_argument("--notes", default="")
+    b.add_argument("--onnx", action="store_true")
     args = ap.parse_args(argv)
 
     def log(m):
@@ -602,7 +606,7 @@ def main(argv=None):
 
     if args.cmd == "bundle":
         meta = build_bundle(args.ckpt, args.channel_npz, args.out_dir,
-                            notes=args.notes)
+                            notes=args.notes, onnx=args.onnx)
         print(json.dumps({k: meta[k] for k in ("bitstream_id", "decoder_id")}))
         return 0
     if args.cmd == "reconstruct":

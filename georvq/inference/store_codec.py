@@ -142,7 +142,9 @@ class ReleaseSpec:
 
     `channel_values` is the number of values the mean channel codes per
     window, by default the model's band count (S2 sends a mean and a
-    standard deviation per band).
+    standard deviation per band). `onnx_export(codec, out_dir, opset)`
+    replaces `export_onnx`'s stats_cond export for a release whose model
+    it does not fit, writing the directory `onnx_codec` loads.
 
     `check_model(model, channel)` raises ValueError for a model and
     channel the release cannot ship. `torch_codec` and `onnx_codec` are
@@ -190,6 +192,7 @@ class ReleaseSpec:
     raw_factors: Optional[tuple] = None
     output_grids: Optional[tuple] = None
     channel_values: Optional[int] = None
+    onnx_export: Optional[Callable] = None
 
     def with_(self, **kw) -> "ReleaseSpec":
         return dataclasses.replace(self, **kw)
@@ -625,6 +628,8 @@ def export_onnx(codec: StoreCodec, out_dir, opset=18) -> dict:
     tables, under the codec's bitstream id. Returns the meta dict."""
     from georvq.inference.onnx_stats import export_stats_onnx
     spec = codec.spec
+    if spec.onnx_export is not None:
+        return spec.onnx_export(codec, out_dir, opset)
     os.makedirs(out_dir, exist_ok=True)
     codec.channel.save(os.path.join(out_dir, ONNX_CHANNEL_NAME))
     extra = {spec.onnx_meta_key: {

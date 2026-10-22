@@ -356,3 +356,28 @@ def test_safe_round_trip(codec, safe_dir, tmp_path):
     with georvq.open(store, codec=codec) as ds:
         assert ds.assets["safe_meta"] == S.safe_meta_zip(safe_dir)
         assert ds.header["product"]["safe"] == os.path.basename(safe_dir)
+
+
+def test_onnx_decode_matches_torch(codec, tmp_path):
+    pytest.importorskip("onnxruntime")
+    pytest.importorskip("onnxscript")
+    from georvq.inference.store_codec import export_onnx, make_onnx_codec
+    arrays = synthetic_bands(N, seed=2)
+    out = str(tmp_path / "crop.georvq.zarr")
+    torch.set_grad_enabled(False)
+    try:
+        v1.encode_product(_Crop(arrays), out, codec, chunk_px=CHUNK_PX,
+                          stats=False)
+        meta = export_onnx(codec, str(tmp_path / "onnx"))
+    finally:
+        torch.set_grad_enabled(True)
+    assert meta["bitstream_id"] == codec.bitstream_id
+    oc = make_onnx_codec(v1.SPEC, str(tmp_path / "onnx"))
+    assert (oc.bitstream_id, oc.decoder_id) == (codec.bitstream_id,
+                                                codec.decoder_id)
+    for rung in [(3, 0), (3, 3)]:
+        with georvq.open(out, codec=codec) as a, georvq.open(out, codec=oc) as b:
+            ta, tb = a.read_grids(quality=rung), b.read_grids(quality=rung)
+        for g, _, _ in S.GRIDS:
+            d = np.abs(ta[g].astype(int) - tb[g].astype(int))
+            assert d.max() <= 1 and (d == 0).mean() > 0.99, (rung, g)
