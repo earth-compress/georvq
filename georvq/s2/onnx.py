@@ -8,9 +8,15 @@ needs (encoding stays with the torch codec):
   decoder's three grids denormalised by the decoded statistics (B, 26)
   and scaled to DN, as `S2V1Codec._forward` computes them;
 - `codebooks.npz`: the RVQ codebooks, looked up in numpy
-  (georvq.inference.onnx_stats.rvq_lookup_np);
+  (georvq.inference.onnx_stats.rvq_lookup_np), int8 as a release
+  bundle stores them (onnx_stats.save_books_np);
 - `mean_channel.npz`: the statistics channel's tables;
-- `meta.json`: format, ids, tiers, window, rungs and the channel's hash.
+- `meta.json`: format, ids, tiers, window, rungs, the channel's hash and
+  the names of the two files above.
+
+An export inside a release bundle (`in_bundle=True`) writes neither
+codebooks.npz nor mean_channel.npz and names the bundle's own,
+`../codebooks.npz` and `../mean_channel.npz`.
 
 Importing this module does not import torch; exporting does.
 """
@@ -28,11 +34,13 @@ CODEBOOKS_NAME = "codebooks.npz"
 CHANNEL_NAME = "mean_channel.npz"
 
 
-def export_s2_onnx(codec, out_dir, opset=18) -> dict:
-    """Export the decode side of an S2V1Codec to `out_dir`. Returns the
-    meta dict."""
+def export_s2_onnx(codec, out_dir, opset=18, in_bundle=False) -> dict:
+    """Export the decode side of an S2V1Codec to `out_dir`, naming the
+    bundle's codebooks and channel with `in_bundle`. Returns the meta
+    dict."""
     import torch
 
+    from georvq.inference.onnx_stats import save_books_np
     from georvq.inference.store_codec import channel_sha
     from georvq.s2.v1 import GRIDS, MAX_VALUE
     os.makedirs(out_dir, exist_ok=True)
@@ -72,11 +80,12 @@ def export_s2_onnx(codec, out_dir, opset=18) -> dict:
         output_names=[f"dn_{g}" for g, _, _ in GRIDS],
         dynamic_shapes=({0: batch}, {0: batch}, {0: batch}, {0: batch}),
         opset_version=opset, dynamo=True)
-    books = {f"cb_t{i}_l{j}": lev.codebook.weight.detach().float().cpu()
-             .numpy() for i, rvq in enumerate(model.rvqs)
-             for j, lev in enumerate(rvq.levels)}
-    np.savez(os.path.join(out_dir, CODEBOOKS_NAME), **books)
-    codec.channel.save(os.path.join(out_dir, CHANNEL_NAME))
+    if in_bundle:
+        books, chan = "../" + CODEBOOKS_NAME, "../" + CHANNEL_NAME
+    else:
+        books, chan = CODEBOOKS_NAME, CHANNEL_NAME
+        save_books_np(model, os.path.join(out_dir, CODEBOOKS_NAME))
+        codec.channel.save(os.path.join(out_dir, CHANNEL_NAME))
     meta = {"format": FORMAT, "codec_format": codec.spec.codec_format,
             "window": codec.window, "bands": codec.bands,
             "tiers": [{"grid": sp.grid, "dim": sp.dim, "codes": sp.codes,
@@ -84,7 +93,7 @@ def export_s2_onnx(codec, out_dir, opset=18) -> dict:
             "bitstream_id": codec.bitstream_id,
             "decoder_id": codec.decoder_id,
             "rungs": [list(r) for r in codec.rungs],
-            "mean_channel": CHANNEL_NAME,
+            "mean_channel": chan, "codebooks": books,
             "mean_channel_sha": channel_sha(codec.channel), "opset": opset}
     with open(os.path.join(out_dir, META_NAME), "w") as f:
         json.dump(meta, f, indent=1)
@@ -103,6 +112,7 @@ class S2V1OnnxCodec:
 
         from georvq.config import TierSpec
         from georvq.inference.mean_codec import load_channel
+        from georvq.inference.onnx_stats import export_file, load_books_np
         from georvq.inference.records import tier_names
         from georvq.inference.store_codec import channel_sha
         from georvq.s2 import v1
@@ -113,7 +123,7 @@ class S2V1OnnxCodec:
                 meta.get("codec_format") != self.spec.codec_format:
             raise ValueError(f"{onnx_dir}: not an ONNX export of "
                              f"{self.spec.codec_format}")
-        self.channel = load_channel(os.path.join(onnx_dir, meta["mean_channel"]))
+        self.channel = load_channel(export_file(onnx_dir, meta["mean_channel"]))
         if channel_sha(self.channel) != meta["mean_channel_sha"]:
             raise ValueError(f"{onnx_dir}: statistics channel tables do not "
                              "match the export's record of them")
@@ -127,9 +137,9 @@ class S2V1OnnxCodec:
         self.bitstream_id = meta["bitstream_id"]
         self.decoder_id = meta["decoder_id"]
         self.bf16 = False
-        z = np.load(os.path.join(onnx_dir, CODEBOOKS_NAME))
-        self.books = [[z[f"cb_t{i}_l{j}"] for j in range(sp.depth)]
-                      for i, sp in enumerate(self.specs)]
+        self.books = load_books_np(
+            export_file(onnx_dir, meta.get("codebooks", CODEBOOKS_NAME)),
+            [sp.depth for sp in self.specs])
         providers = ["CPUExecutionProvider"]
         if device.startswith("cuda"):
             providers = ["CUDAExecutionProvider"] + providers

@@ -32,8 +32,9 @@ def build_bundle(ckpt, mean_npz, out_dir, notes="", onnx=False) -> dict:
                                 onnx=onnx)
 
 
-def write_decoder_bundle(bundle_dir, out_dir, verify=True) -> dict:
-    """The decoder-only float16 variant of the bundle at `bundle_dir`
+def write_decoder_bundle(bundle_dir, out_dir=None, verify=True) -> dict:
+    """The decoder-only bundle of the full bundle at `bundle_dir`, in
+    `out_dir` (default `bundle_dir/decoder`); build_bundle writes it
     (georvq.inference.bundle.write_decoder_bundle)."""
     return _bundle.write_decoder_bundle(bundle_dir, out_dir, AE_V2,
                                         verify=verify)

@@ -45,13 +45,16 @@ def is_trusted(uri, trusted=TRUSTED_RELEASES) -> bool:
     return _br.is_trusted(uri, trusted)
 
 
-def download_bundle(uri, revision, bitstream_id, cache_dir=None) -> str:
-    return _br.download_bundle(uri, revision, bitstream_id, AE_V2, cache_dir)
+def download_bundle(uri, revision, bitstream_id, cache_dir=None,
+                    full=False) -> str:
+    return _br.download_bundle(uri, revision, bitstream_id, AE_V2, cache_dir,
+                               full=full)
 
 
 def locate_bundle(header, cache_dir=None, trust_remote=False,
-                  download=True) -> str:
-    return _br.locate_bundle(header, AE_V2, cache_dir, trust_remote, download)
+                  download=True, full=False) -> str:
+    return _br.locate_bundle(header, AE_V2, cache_dir, trust_remote, download,
+                             full=full)
 
 
 def load_from_bundle(bundle_dir, bitstream_id, backend, device, bf16=None,

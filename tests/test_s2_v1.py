@@ -46,6 +46,7 @@ def tiny_cfg():
         "model": {"window": WIN, "bands": 13,
                   "tiers": ["1:16:32:3", "6:8:32:3"], "min_depths": [3, 0],
                   "ff_ratio": 2.0, "tokenizer": {"dim": 16, "depth": 1},
+                  "vq": {"book_bits": 8},
                   "decoder": {"dim": 32, "depth": 1, "heads": 4,
                               "head_feat": 8}},
         "log": {"run_tag": "s2v1test", "wandb": False}})
@@ -54,7 +55,10 @@ def tiny_cfg():
 def tiny_codec():
     cfg = tiny_cfg()
     torch.manual_seed(0)
-    return v1.S2V1Codec(build_model(cfg, "cpu"), tiny_channel())
+    model = build_model(cfg, "cpu")
+    for rvq in model.rvqs:
+        rvq.project_books()
+    return v1.S2V1Codec(model, tiny_channel())
 
 
 @pytest.fixture(scope="module")
@@ -410,6 +414,13 @@ def test_onnx_decode_matches_torch(codec, tmp_path):
         torch.set_grad_enabled(True)
     assert meta["bitstream_id"] == codec.bitstream_id
     oc = make_onnx_codec(v1.SPEC, str(tmp_path / "onnx"))
+    # the export stores the int8 books, and they are the model's bit for bit
+    with np.load(tmp_path / "onnx" / "codebooks.npz") as z:
+        assert z["rvqs.0.levels.0.q"].dtype == np.int8
+    for books, rvq in zip(oc.books, codec.model.rvqs):
+        for b, lev in zip(books, rvq.levels):
+            w = lev.codebook.weight.detach().numpy()
+            assert np.array_equal(b.view(np.int32), w.view(np.int32))
     assert (oc.bitstream_id, oc.decoder_id) == (codec.bitstream_id,
                                                 codec.decoder_id)
     for rung in [(3, 0), (3, 3)]:
@@ -446,15 +457,19 @@ def test_decoder_only_bundle(codec, tmp_path):
     assert fm["variant"] == "full" and fm["release"] == "s2-v1"
     assert fm["licence_weights"] == "Apache-2.0"
     assert fm["licence_stores"] == v1.STORES_LICENCE
-    assert "float32 codebooks" in open(full / "README.md").read()
-    dec = tmp_path / "dec"
-    meta = v1.write_decoder_bundle(str(full), str(dec))
-    assert meta["variant"] == "decoder-fp16"
-    assert meta["bitstream_id"] == fm["bitstream_id"]
-    assert meta["parent_decoder_id"] == fm["decoder_id"] != meta["decoder_id"]
-    with np.load(dec / "weights.npz", allow_pickle=False) as z:
+    assert fm["book_bits"] == 8 and fm["decoder_bundle"] == "decoder"
+    assert "8-bit codebooks" in open(full / "README.md").read()
+    dec = full / "decoder"
+    meta = json.load(open(dec / "bundle.json"))
+    assert meta["variant"] == "decoder" and meta["onnx"] is None
+    assert (meta["bitstream_id"], meta["decoder_id"]) == (
+        fm["bitstream_id"], fm["decoder_id"])
+    with np.load(dec / "weights.npz", allow_pickle=False) as z, \
+            np.load(full / "weights.npz", allow_pickle=False) as zf:
         assert not any(k.startswith("tokenizer.") for k in z.files)
-        assert all(z[k].dtype != np.float32 for k in z.files)
+        assert set(z.files) < set(zf.files)
+        assert all(np.array_equal(z[k], zf[k]) and z[k].dtype == zf[k].dtype
+                   for k in z.files)
     a, b = v1.load_bundle(str(full)), v1.load_bundle(str(dec))
     assert b.decode_only and not a.decode_only
     store = str(tmp_path / "crop.georvq.zarr")
@@ -468,12 +483,14 @@ def test_decoder_only_bundle(codec, tmp_path):
                               chunk_px=CHUNK_PX)
     finally:
         torch.set_grad_enabled(True)
+    # the same decoder: same reads, and the store's quality is served
     with georvq.open(store, codec=a) as da, georvq.open(store, codec=b) as db:
-        assert db.reader.quality_decoder is None
+        assert db.reader.quality_decoder == fm["decoder_id"]
         ta, tb = da.read_grids(quality=(3, 3)), db.read_grids(quality=(3, 3))
+        qa = da.read_grids(quality="rmse_10m<=1000")
+        qb = db.read_grids(quality="rmse_10m<=1000")
     for g, _, _ in S.GRIDS:
-        d = np.abs(ta[g].astype(int) - tb[g].astype(int))
-        assert d.max() <= 2 and (d == 0).mean() > 0.9, g
+        assert np.array_equal(ta[g], tb[g]) and np.array_equal(qa[g], qb[g])
 
 
 def test_deblocked_window_matches_whole_product(codec, tmp_path):

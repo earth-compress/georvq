@@ -26,6 +26,13 @@ inside the cache and is moved to its cache entry only after its
 bundle.json bitstream id and the file hashes it records have been
 checked. A store without `codec.release` resolves through 1 and 2 only.
 
+A release publishes its full bundle at `uri` and the decoder-only
+bundle, with the same ids, in `uri/decoder` (georvq.inference.bundle).
+Reading with torch downloads only the decoder-only bundle, or, from a
+revision without one, the full bundle's files other than its ONNX
+export. The ONNX backend and encoding (`full=True`) need the full
+bundle, which replaces a cache entry that holds less.
+
 `resolve_codec` loads the located bundle for a backend: the torch
 codec through `georvq.inference.bundle.load_bundle(verify=True)`, or the
 ONNX codec from the export a bundle holds under `onnx/`, whose recorded
@@ -46,6 +53,10 @@ import tempfile
 
 ENV_CACHE = "GEORVQ_CACHE"
 ONNX_DIR = "onnx"
+DECODER_DIR = "decoder"
+FULL, DECODER = "full", "decoder"
+# the files of a bundle the torch backend reads, besides bundle.json
+FILES = ("weights.npz", "codebooks.npz", "mean_channel.npz", "config.json")
 
 _ID = re.compile(r"[0-9A-Za-z_-]{1,64}")
 _HF_PART = re.compile(r"[A-Za-z0-9][\w.-]*")
@@ -147,6 +158,23 @@ def check_files(bundle_dir, meta, names=None):
                               f"bundle.json records {rec['sha256']}. {redo}")
 
 
+def torch_files(meta) -> list:
+    """The files bundle.json records that the torch backend reads: all
+    but the ONNX export's."""
+    sub = (meta.get("onnx") or ONNX_DIR) + "/"
+    return [n for n in meta["files"] if not n.startswith(sub)]
+
+
+def serves(bundle_dir, meta, full=False) -> bool:
+    """Whether the bundle at `bundle_dir` holds what a reader needs: the
+    files the torch backend reads, or with `full` the whole full bundle
+    (encoder and ONNX export)."""
+    if full and meta.get("variant", FULL) != FULL:
+        return False
+    names = list(meta["files"]) if full else torch_files(meta)
+    return all(os.path.isfile(os.path.join(bundle_dir, n)) for n in names)
+
+
 def check_bundle(bundle_dir, spec, bitstream_id, found_by) -> dict:
     """bundle.json of `bundle_dir`, refused unless it is a bundle of the
     release for `bitstream_id`. `found_by` says where the directory came
@@ -181,10 +209,13 @@ def is_trusted(uri, trusted) -> bool:
     return any(fnmatch.fnmatchcase(f"hf://{repo_id}", p) for p in trusted)
 
 
-def download_bundle(uri, revision, bitstream_id, spec, cache_dir=None) -> str:
+def download_bundle(uri, revision, bitstream_id, spec, cache_dir=None,
+                    full=False) -> str:
     """Download the bundle at `uri`/`revision` into the cache entry for
-    `bitstream_id` and return the entry. The trust check is the
-    caller's."""
+    `bitstream_id` and return the entry: the decoder-only bundle in
+    `uri/decoder`, or the full bundle's files without its ONNX export
+    when the revision has none, or with `full` the whole full bundle. An
+    existing entry is replaced. The trust check is the caller's."""
     repo_id, sub = parse_hf_uri(uri)
     try:
         from huggingface_hub import snapshot_download
@@ -197,11 +228,14 @@ def download_bundle(uri, revision, bitstream_id, spec, cache_dir=None) -> str:
     os.makedirs(parent, exist_ok=True)
     staging = tempfile.mkdtemp(prefix=f".{bitstream_id}-", dir=parent)
     at = f"{uri}@{revision or 'default branch'}"
-    try:
+    pre = f"{sub}/" if sub else ""
+    root = os.path.join(staging, sub) if sub else staging
+
+    def fetch(patterns):
         try:
             snapshot_download(repo_id=repo_id, repo_type="model",
                               revision=revision, local_dir=staging,
-                              allow_patterns=[f"{sub}/*"] if sub else None)
+                              allow_patterns=patterns)
         except Exception as err:
             # offline, 401/404 from a private or missing repository, 5xx,
             # timeouts: huggingface_hub, httpx and OSError types alike
@@ -211,10 +245,29 @@ def download_bundle(uri, revision, bitstream_id, spec, cache_dir=None) -> str:
                 f"{type(err).__name__}: {err}. A private repository needs a "
                 "Hugging Face token: run `hf auth login` or set HF_TOKEN. "
                 + _how_to_provide(spec, bitstream_id, cache_dir)) from err
-        src = os.path.join(staging, sub) if sub else staging
+
+    top = [pre + n for n in ("bundle.json",) + FILES]
+    try:
+        src = None
+        if not full:
+            fetch([f"{pre}{DECODER_DIR}/*"])
+            dec = os.path.join(root, DECODER_DIR)
+            if os.path.isfile(os.path.join(dec, "bundle.json")):
+                src = dec
+        if src is None:
+            fetch(top + ([f"{pre}{ONNX_DIR}/*"] if full else []))
+            src = root
         meta = check_bundle(src, spec, bitstream_id, f"downloaded from {at}")
-        check_files(src, meta)
+        if full and meta.get("variant", FULL) != FULL:
+            raise BundleError(f"the bundle at {at} is not a full bundle")
+        check_files(src, meta, None if full or meta.get("variant") == DECODER
+                    else torch_files(meta))
         shutil.rmtree(os.path.join(src, ".cache"), ignore_errors=True)
+        if src != root:
+            shutil.rmtree(os.path.join(staging, ".cache"), ignore_errors=True)
+        if os.path.isdir(entry):
+            # an entry that holds less than this download is replaced
+            os.replace(entry, os.path.join(staging, ".old"))
         try:
             os.replace(src, entry)
         except OSError:
@@ -231,11 +284,13 @@ def download_bundle(uri, revision, bitstream_id, spec, cache_dir=None) -> str:
 # --------------------------------------------------------------------------
 
 def locate_bundle(header, spec, cache_dir=None, trust_remote=False,
-                  download=True) -> str:
+                  download=True, full=False) -> str:
     """Directory of the bundle for the store whose header is `header`,
     found through the release's environment variable, the cache, or
-    (with `download`) the release's uri. Raises BundleError when none is
-    found or the one found is for another bitstream."""
+    (with `download`) the release's uri. `full` asks for the full bundle
+    (encoder and ONNX export); otherwise any bundle the torch backend can
+    read will do. Raises BundleError when none is found or the one found
+    is for another bitstream."""
     bid = file_bitstream_id(header)
     env = os.environ.get(spec.env_bundle) if spec.env_bundle else None
     if env:
@@ -243,8 +298,12 @@ def locate_bundle(header, spec, cache_dir=None, trust_remote=False,
         return env
     entry = bundle_path(bid, cache_dir)
     if os.path.isfile(os.path.join(entry, "bundle.json")):
-        check_bundle(entry, spec, bid, "in the bundle cache")
-        return entry
+        meta = check_bundle(entry, spec, bid, "in the bundle cache")
+        # a cached entry missing a file it records is reported when
+        # loaded, except that an entry holding less than the full bundle
+        # asked for is replaced by a download of it
+        if not full or not download or serves(entry, meta, full=True):
+            return entry
     rel = file_release(header)
     if rel is None or not rel.get("uri"):
         raise BundleError(f"no bundle for bitstream {bid} is cached and the "
@@ -260,7 +319,8 @@ def locate_bundle(header, spec, cache_dir=None, trust_remote=False,
             f"trusted patterns {list(spec.trusted)}. Pass "
             "trust_remote=True to download it from there. "
             + _how_to_provide(spec, bid, cache_dir))
-    return download_bundle(uri, rel.get("revision"), bid, spec, cache_dir)
+    return download_bundle(uri, rel.get("revision"), bid, spec, cache_dir,
+                           full=full)
 
 
 def default_backend() -> str:
@@ -294,8 +354,11 @@ def load_from_bundle(bundle_dir, spec, bitstream_id, backend, device,
                 "onnx backend cannot use it. Use backend='torch', pass "
                 "onnx_dir= with an export_onnx directory, or build the "
                 "bundle with build_bundle(..., onnx=True).")
+        # the export and, for one inside the bundle, the bundle's books
+        # and channel, which its meta.json names as ../<file>
         check_files(bundle_dir, meta,
-                    [n for n in meta["files"] if n.startswith(sub + "/")])
+                    [n for n in meta["files"] if n.startswith(sub + "/")
+                     or n in ("codebooks.npz", "mean_channel.npz")])
         from georvq.inference.store_codec import make_onnx_codec
         return make_onnx_codec(spec, os.path.join(bundle_dir, sub),
                                device=device, threads=threads)
@@ -315,7 +378,8 @@ def resolve_codec(header, spec, bundle=None, backend=None, device=None,
     if bundle is not None:
         path, how = os.fspath(bundle), "given as bundle="
     else:
-        path = locate_bundle(header, spec, cache_dir, trust_remote)
+        path = locate_bundle(header, spec, cache_dir, trust_remote,
+                             full=backend == "onnx")
         how = "located for the file"
     with _quiet():
         return load_from_bundle(path, spec, bid, backend, device, bf16=bf16,

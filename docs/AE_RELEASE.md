@@ -37,8 +37,7 @@ Note: this information only makes sense if you are familiar with the georvq code
 - The `bitstream_id` is `f6ad2ff121a473df` and the `decoder_id` is
   `d9b0af741f66b682`. A store records the `bitstream_id` and `decoder_id`
   it was encoded with, and a reader holding a different codec refuses to
-  decode it, unless that codec is the decoder-only variant of the
-  store's decoder.
+  decode it.
 - Decoding runs on PyTorch, on CPU or CUDA. Decoder passes run in bf16
   on CUDA by default (`--fp32` or `bf16=False` turns this off) and in
   fp32 on CPU, whilst encoder passes always run in fp32. Decode can also

@@ -54,7 +54,7 @@ TILE = os.path.join(HERE, "golden/s2_v1_tile.georvq.zarr")
 LOCAL_BUNDLE = "/data/georvq-releases/s2-v1/bundle"
 CKPT = os.environ.get(
     "GEORVQ_S2_V1_CKPT", "/home/ali/projects/georvq-release-format/"
-    "checkpoints/beta_arch_w36/frozen_42500.pt")
+    "checkpoints/s2_v1/s2_v1.pt")
 CHANNEL = os.environ.get("GEORVQ_S2_V1_CHANNEL",
                          "/data/georvq-releases/s2-v1/stats_channel.npz")
 GOLDEN_RUNGS = ((8, 0), (8, 1), (8, 4), (8, 8))

@@ -558,6 +558,9 @@ def main(argv=None):
     f.add_argument("--uri", default=RELEASE_URI,
                    help="release to download a bitstream id from")
     f.add_argument("--revision", default=None)
+    f.add_argument("--full", action="store_true",
+                   help="the full bundle (encoder and ONNX export), which "
+                        "encoding needs; default the decoder-only bundle")
     cache_args(f)
 
     i = sub.add_parser("info", help="header summary and array sizes")
@@ -596,7 +599,8 @@ def main(argv=None):
     if args.cmd == "fetch":
         try:
             header = _fetch_header(args.target, args.uri, args.revision)
-            print(locate_bundle(header, args.cache_dir, args.trust_remote))
+            print(locate_bundle(header, args.cache_dir, args.trust_remote,
+                                full=args.full))
         except (BundleError, FileNotFoundError) as err:
             print(err, file=sys.stderr)
             return 1

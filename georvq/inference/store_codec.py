@@ -146,9 +146,10 @@ class ReleaseSpec:
 
     `channel_values` is the number of values the mean channel codes per
     window, by default the model's band count (S2 sends a mean and a
-    standard deviation per band). `onnx_export(codec, out_dir, opset)`
-    replaces `export_onnx`'s stats_cond export for a release whose model
-    it does not fit, writing the directory `onnx_codec` loads.
+    standard deviation per band). `onnx_export(codec, out_dir, opset,
+    in_bundle=False)` replaces `export_onnx`'s stats_cond export for a
+    release whose model it does not fit, writing the directory
+    `onnx_codec` loads.
 
     `check_model(model, channel)` raises ValueError for a model and
     channel the release cannot ship. `torch_codec` and `onnx_codec` are
@@ -449,7 +450,8 @@ class StoreCodec:
         if self.decode_only:
             raise RuntimeError("this codec was loaded from a decoder-only "
                                "bundle, which has no encoder weights; encode "
-                               "with the full bundle")
+                               "with the full bundle (the release's "
+                               "repository root, or `fetch --full`)")
 
     def header_quality(self) -> dict:
         s = self.spec
@@ -644,24 +646,32 @@ def channel_sha(channel) -> str:
     return h.hexdigest()[:16]
 
 
-def export_onnx(codec: StoreCodec, out_dir, opset=18) -> dict:
+def export_onnx(codec: StoreCodec, out_dir, opset=18, in_bundle=False) -> dict:
     """Export a StoreCodec for `OnnxStoreCodec`: the stats_cond graphs and
     codebooks (georvq.inference.onnx_stats) and the mean channel's
-    tables, under the codec's bitstream id. Returns the meta dict."""
+    tables, under the codec's bitstream id. With `in_bundle` the export
+    is the onnx/ directory of a release bundle and names the bundle's
+    codebooks.npz and mean_channel.npz instead of writing copies.
+    Returns the meta dict."""
     from georvq.inference.onnx_stats import export_stats_onnx
     spec = codec.spec
     if spec.onnx_export is not None:
-        return spec.onnx_export(codec, out_dir, opset)
+        return spec.onnx_export(codec, out_dir, opset, in_bundle=in_bundle)
     os.makedirs(out_dir, exist_ok=True)
-    codec.channel.save(os.path.join(out_dir, ONNX_CHANNEL_NAME))
+    if in_bundle:
+        chan = "../" + ONNX_CHANNEL_NAME
+    else:
+        chan = ONNX_CHANNEL_NAME
+        codec.channel.save(os.path.join(out_dir, ONNX_CHANNEL_NAME))
     extra = {spec.onnx_meta_key: {
-        "format": spec.codec_format, "mean_channel": ONNX_CHANNEL_NAME,
+        "format": spec.codec_format, "mean_channel": chan,
         "mean_channel_sha": channel_sha(codec.channel),
         "min_depths": list(codec.model.cfg.min_depths),
         "rungs": [list(r) for r in codec.rungs]}}
     meta = export_stats_onnx(codec.model, out_dir,
                              extra_id=codec.channel.id_state(),
-                             meta_extra=extra, opset=opset)
+                             meta_extra=extra, opset=opset,
+                             books=not in_bundle)
     if meta["bitstream_id"] != codec.bitstream_id:
         raise RuntimeError(f"export bitstream id {meta['bitstream_id']} != "
                            f"codec {codec.bitstream_id}")
@@ -679,7 +689,7 @@ class OnnxStoreCodec:
     def __init__(self, onnx_dir, device="cpu", threads=None, spec=None):
         from georvq.config import TierSpec
         from georvq.inference.mean_codec import load_channel
-        from georvq.inference.onnx_stats import OnnxStatsCodec
+        from georvq.inference.onnx_stats import OnnxStatsCodec, export_file
         self.spec = spec = spec or type(self).spec
         if spec is None:
             raise ValueError("an OnnxStoreCodec needs a ReleaseSpec")
@@ -689,7 +699,7 @@ class OnnxStoreCodec:
         if rel is None or rel.get("format") != spec.codec_format:
             raise ValueError(f"{onnx_dir}: not an ONNX export of "
                              f"{spec.codec_format}")
-        self.channel = load_channel(os.path.join(onnx_dir, rel["mean_channel"]))
+        self.channel = load_channel(export_file(onnx_dir, rel["mean_channel"]))
         if channel_sha(self.channel) != rel["mean_channel_sha"]:
             raise ValueError(f"{onnx_dir}: mean channel tables do not match "
                              "the export's record of them")

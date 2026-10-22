@@ -343,9 +343,9 @@ def _onnx_codec(onnx_dir, device="cpu", threads=None, spec=None):
     return S2V1OnnxCodec(onnx_dir, device=device, threads=threads, spec=spec)
 
 
-def _onnx_export(codec, out_dir, opset=18):
+def _onnx_export(codec, out_dir, opset=18, in_bundle=False):
     from georvq.s2.onnx import export_s2_onnx
-    return export_s2_onnx(codec, out_dir, opset)
+    return export_s2_onnx(codec, out_dir, opset, in_bundle=in_bundle)
 
 
 S2_V1 = S2_V1.with_(torch_codec=S2V1Codec, onnx_codec=_onnx_codec,
@@ -552,8 +552,9 @@ def build_bundle(ckpt, channel_npz, out_dir, notes="", onnx=False) -> dict:
                   extra={"licence_stores": STORES_LICENCE})
 
 
-def write_decoder_bundle(bundle_dir, out_dir, verify=True) -> dict:
-    """The decoder-only float16 variant of the bundle at `bundle_dir`
+def write_decoder_bundle(bundle_dir, out_dir=None, verify=True) -> dict:
+    """The decoder-only bundle of the full bundle at `bundle_dir`, in
+    `out_dir` (default `bundle_dir/decoder`); build_bundle writes it
     (georvq.inference.bundle.write_decoder_bundle)."""
     from georvq.inference.bundle import write_decoder_bundle as _write
     return _write(bundle_dir, out_dir, S2_V1, verify=verify)
@@ -577,7 +578,8 @@ def main(argv=None):
     e = sub.add_parser("encode", help="SAFE products -> stores")
     e.add_argument("out_dir")
     e.add_argument("safe", nargs="+")
-    e.add_argument("--bundle", required=True)
+    e.add_argument("--bundle", required=True,
+                   help="the full bundle (`georvq s2 fetch --full`)")
     e.add_argument("--device", default=None)
     e.add_argument("--no-quality", action="store_true")
     e.add_argument("--batch", type=int, default=256)
@@ -601,6 +603,16 @@ def main(argv=None):
     b.add_argument("out_dir")
     b.add_argument("--notes", default="")
     b.add_argument("--onnx", action="store_true")
+    f = sub.add_parser("fetch", help="find or download the bundle of a store "
+                                     "or bitstream id; prints its directory")
+    f.add_argument("target", help="a store (path or URL) or a bitstream id")
+    f.add_argument("--uri", default=RELEASE_URI,
+                   help="release to download a bitstream id from")
+    f.add_argument("--revision", default=None)
+    f.add_argument("--full", action="store_true",
+                   help="the full bundle (encoder and ONNX export), which "
+                        "encoding needs; default the decoder-only bundle")
+    f.add_argument("--cache-dir", default=None)
     x = sub.add_parser("index", help="stores -> GeoParquet tile index")
     x.add_argument("stores", help="a directory of stores")
     x.add_argument("out")
@@ -616,6 +628,22 @@ def main(argv=None):
         meta = build_bundle(args.ckpt, args.channel_npz, args.out_dir,
                             notes=args.notes, onnx=args.onnx)
         print(json.dumps({k: meta[k] for k in ("bitstream_id", "decoder_id")}))
+        return 0
+    if args.cmd == "fetch":
+        from georvq.inference.bundle_resolve import BundleError, locate_bundle
+        from georvq.inference.records import RecordReader
+        t = args.target
+        try:
+            if os.path.exists(t) or "://" in t:
+                header = RecordReader(t).header
+            else:
+                header = {"codec": {"bitstream_id": t, "release": {
+                    "uri": args.uri, "revision": args.revision}}}
+            print(locate_bundle(header, S2_V1, args.cache_dir,
+                                full=args.full))
+        except (BundleError, FileNotFoundError) as err:
+            print(err, file=sys.stderr)
+            return 1
         return 0
     if args.cmd == "index":
         from georvq.s2.index import build_index

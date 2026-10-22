@@ -90,10 +90,8 @@ def open(store, *, codec=None, bundle=None, backend=None, device=None,
     want_did = header["codec"].get("decoder_id")
 
     def checked(c):
-        # a decoder-only variant of the store's decoder is accepted
-        parent = (getattr(c, "bundle", None) or {}).get("parent_decoder_id")
-        if not force and want_did and want_did not in (
-                getattr(c, "decoder_id", None), parent):
+        if not force and want_did and want_did != getattr(c, "decoder_id",
+                                                          None):
             raise ValueError(
                 f"{store}: encoded with decoder {want_did}, the codec given "
                 f"holds decoder {c.decoder_id}; pass force=True to decode "

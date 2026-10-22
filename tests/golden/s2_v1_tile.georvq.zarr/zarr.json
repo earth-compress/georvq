@@ -3,7 +3,7 @@
     "georvq": {
       "codec": {
         "format": "georvq-s2/v1",
-        "bitstream_id": "47f3ac88b39c6ca9",
+        "bitstream_id": "9bfbc0c72d526ad7",
         "decoder_id": "e2309f95ff0d5cb4",
         "tiers": [
           "1:128:8192:8",
@@ -21,7 +21,7 @@
         },
         "release": {
           "name": "golden",
-          "bitstream_id": "47f3ac88b39c6ca9",
+          "bitstream_id": "9bfbc0c72d526ad7",
           "decoder_id": "e2309f95ff0d5cb4",
           "uri": "hf://earth-compress/georvq-s2-v1",
           "revision": null
@@ -1563,10 +1563,10 @@
           "spatial:registration": "pixel",
           "georvq_quality": {
             "decoder_id": "e2309f95ff0d5cb4",
-            "bitstream_id": "47f3ac88b39c6ca9",
+            "bitstream_id": "9bfbc0c72d526ad7",
             "release": {
               "name": "golden",
-              "bitstream_id": "47f3ac88b39c6ca9",
+              "bitstream_id": "9bfbc0c72d526ad7",
               "decoder_id": "e2309f95ff0d5cb4",
               "uri": "hf://earth-compress/georvq-s2-v1",
               "revision": null

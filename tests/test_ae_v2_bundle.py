@@ -205,22 +205,26 @@ def test_tampered_bundle_is_refused(tiny, tmp_path):
 
 def test_decoder_only_bundle(tiny, tmp_path):
     from georvq.ae.v2_bundle import write_decoder_bundle
-    d = tmp_path / "dec"
-    meta = write_decoder_bundle(tiny["dir"], d)
+    d = tiny["dir"] / "decoder"
+    meta = json.load(open(d / "bundle.json"))
     full = json.load(open(tiny["dir"] / "bundle.json"))
-    assert meta["variant"] == "decoder-fp16" and full["variant"] == "full"
-    assert meta["bitstream_id"] == full["bitstream_id"]
-    assert meta["parent_decoder_id"] == full["decoder_id"]
-    assert meta["decoder_id"] != full["decoder_id"]
+    assert meta["variant"] == "decoder" and full["variant"] == "full"
+    assert full["decoder_bundle"] == "decoder"
+    assert (meta["bitstream_id"], meta["decoder_id"]) == (
+        full["bitstream_id"], full["decoder_id"])
+    again = write_decoder_bundle(tiny["dir"], tmp_path / "again")
+    assert {k: v for k, v in again.items() if k != "files"} == \
+        {k: v for k, v in meta.items() if k != "files"}
     with np.load(d / "weights.npz", allow_pickle=False) as z:
         assert not any(k.startswith(("tokenizer.", "stats_enc.", "stem."))
                        for k in z.files)
-        assert all(z[k].dtype != np.float32 for k in z.files)
+        assert all(z[k].dtype == np.float32 for k in z.files
+                   if z[k].dtype.kind == "f")
     for n in ("codebooks.npz", "mean_channel.npz", "config.json"):
         assert open(d / n, "rb").read() == open(tiny["dir"] / n, "rb").read()
     a, b = load_bundle(tiny["dir"]), load_bundle(d)
     assert b.decode_only and not a.decode_only
-    assert b.decoder_id == meta["decoder_id"]
+    assert b.decoder_id == a.decoder_id == meta["decoder_id"]
     with pytest.raises(RuntimeError, match="decoder-only"):
         b.encode_windows(tiny["raw"])
     ra, _, va = a.encode_windows(tiny["raw"], stats=False)
@@ -228,16 +232,16 @@ def test_decoder_only_bundle(tiny, tmp_path):
     for r in [(1, 0, 0), (3, 2, 2)]:
         fa, _ = a.decode_field(ra["base"][0], tiers, r, va.numpy())
         fb, _ = b.decode_field(ra["base"][0], tiers, r, va.numpy())
-        assert torch.isfinite(fb).all()
-        assert (fa - fb).abs().max() < 1e-2 * fa.abs().max()
-    # georvq.open takes it for a store written by its parent decoder
+        assert torch.equal(fa, fb)
+    # georvq.open reads a store with it, quality values included
     import georvq
     from tests.test_ae_index import write_tile
     store = str(tmp_path / "t.georvq.zarr")
     write_tile(store, a, 32, 48)
-    with georvq.open(store, codec=b) as ds:
-        assert ds.read(quality="3-2-2").shape == (64, 32, 48)
-        assert ds.reader.quality_decoder is None
+    with georvq.open(store, codec=b) as db, georvq.open(store, codec=a) as da:
+        assert db.reader.quality_decoder == a.decoder_id
+        assert np.array_equal(db.read(quality="3-2-2"),
+                              da.read(quality="3-2-2"))
 
 
 # --------------------------------------------------------------------------

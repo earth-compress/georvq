@@ -106,17 +106,28 @@ def _cache_with(tiny, tmp_path, bundle=None):
     return root, entry
 
 
-def _fake_hub(source, calls):
-    """A snapshot_download that copies `source` into local_dir (below
-    the first allow pattern's directory, when there is one)."""
+def _fake_hub(source, calls, sub=""):
+    """A snapshot_download over a repository holding the bundle directory
+    `source` at `sub`: it copies into local_dir the files whose path in
+    the repository matches an allow pattern (every file without one)."""
+    import fnmatch
+    files = {}
+    for d, _, names in os.walk(source):
+        for n in names:
+            p = os.path.join(d, n)
+            rel = os.path.relpath(p, source).replace(os.sep, "/")
+            files[(sub + "/" if sub else "") + rel] = p
+
     def snapshot_download(repo_id, repo_type=None, revision=None,
                           local_dir=None, allow_patterns=None, **kw):
         calls.append({"repo_id": repo_id, "repo_type": repo_type,
                       "revision": revision, "allow_patterns": allow_patterns})
-        dst = local_dir
-        if allow_patterns:
-            dst = os.path.join(local_dir, allow_patterns[0].rsplit("/", 1)[0])
-        shutil.copytree(source, dst, dirs_exist_ok=True)
+        for rel, p in files.items():
+            if allow_patterns is None or any(fnmatch.fnmatch(rel, pat)
+                                             for pat in allow_patterns):
+                dst = os.path.join(local_dir, rel)
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                shutil.copyfile(p, dst)
         return local_dir
     return snapshot_download
 
@@ -214,12 +225,15 @@ def test_trusted_release_is_downloaded_into_the_cache(tiny, tmp_path,
     root = tmp_path / "cache"
     with georvq.open(tiny["released"], cache_dir=root) as ds:
         assert np.array_equal(ds.read(quality=RUNG), tiny["want"])
+    # only the decoder-only bundle is downloaded to read
     assert calls == [{"repo_id": "earth-compress/georvq-ae-v2",
                       "repo_type": "model", "revision": "abc123",
-                      "allow_patterns": None}]
+                      "allow_patterns": ["decoder/*"]}]
     entry = root / "bundles" / tiny["bid"]
-    assert json.loads((entry / "bundle.json").read_text())["bitstream_id"] \
-        == tiny["bid"]
+    meta = json.loads((entry / "bundle.json").read_text())
+    assert meta["bitstream_id"] == tiny["bid"] and meta["variant"] == "decoder"
+    assert sorted(os.listdir(entry)) == sorted(
+        ["README.md", "bundle.json"] + list(v2_resolve._br.FILES))
     assert sorted(p.name for p in entry.parent.iterdir()) == [tiny["bid"]]
     # the second open finds the cache entry
     with georvq.open(tiny["released"], cache_dir=root) as ds:
@@ -232,17 +246,18 @@ def test_release_below_the_repository_root(tiny, tmp_path, monkeypatch):
                        uri="hf://earth-compress/bundles/ae/v2")
     calls = []
     monkeypatch.setattr(huggingface_hub, "snapshot_download",
-                        _fake_hub(tiny["bundle"], calls))
+                        _fake_hub(tiny["bundle"], calls, sub="ae/v2"))
     with georvq.open(f, cache_dir=tmp_path / "c", device="cpu") as ds:
         assert np.array_equal(ds.read(quality=RUNG), tiny["want"])
     assert calls[0]["repo_id"] == "earth-compress/bundles"
-    assert calls[0]["allow_patterns"] == ["ae/v2/*"]
+    assert calls[0]["allow_patterns"] == ["ae/v2/decoder/*"]
+    assert len(calls) == 1
 
 
 def test_tampered_download_is_not_cached(tiny, tmp_path, monkeypatch):
     bad = tmp_path / "bad"
     shutil.copytree(tiny["bundle"], bad)
-    with open(bad / "mean_channel.npz", "ab") as fh:
+    with open(bad / "decoder" / "mean_channel.npz", "ab") as fh:
         fh.write(b"\0")
     monkeypatch.setattr(huggingface_hub, "snapshot_download",
                         _fake_hub(bad, []))
@@ -251,6 +266,61 @@ def test_tampered_download_is_not_cached(tiny, tmp_path, monkeypatch):
         with pytest.raises(BundleError, match="sha256"):
             ds.read()
     assert list((root / "bundles").iterdir()) == []
+
+
+def test_revision_without_a_decoder_bundle(tiny, onnx_bundle, tmp_path,
+                                           monkeypatch):
+    """A revision published before the decoder-only bundle: reading
+    fetches the full bundle's files but its ONNX export, and the onnx
+    backend then fetches the whole full bundle in place of that entry."""
+    out, _ = onnx_bundle
+    old = tmp_path / "old"
+    shutil.copytree(out, old, ignore=shutil.ignore_patterns("decoder"))
+    calls = []
+    monkeypatch.setattr(huggingface_hub, "snapshot_download",
+                        _fake_hub(old, calls))
+    root = tmp_path / "cache"
+    with georvq.open(tiny["released"], cache_dir=root, device="cpu") as ds:
+        assert np.array_equal(ds.read(quality=RUNG), tiny["want"])
+    entry = root / "bundles" / tiny["bid"]
+    assert [c["allow_patterns"] for c in calls] == [
+        ["decoder/*"], ["bundle.json", *v2_resolve._br.FILES]]
+    assert not (entry / "onnx").exists()
+    with georvq.open(tiny["released"], cache_dir=root, backend="onnx") as ds:
+        assert isinstance(ds.codec, v2.AEV2OnnxCodec)
+        ds.read(quality=RUNG)
+    assert calls[-1]["allow_patterns"] == [
+        "bundle.json", *v2_resolve._br.FILES, "onnx/*"]
+    assert (entry / "onnx" / "decoder.onnx").exists()
+    with georvq.open(tiny["released"], cache_dir=root, device="cpu") as ds:
+        assert np.array_equal(ds.read(quality=RUNG), tiny["want"])
+    assert len(calls) == 3
+
+
+def test_fetch_full_for_encoding(tiny, onnx_bundle, tmp_path, monkeypatch,
+                                 capsys):
+    out, _ = onnx_bundle
+    calls = []
+    monkeypatch.setattr(huggingface_hub, "snapshot_download",
+                        _fake_hub(out, calls))
+    root = tmp_path / "cache"
+    entry = root / "bundles" / tiny["bid"]
+    assert v2.main(["fetch", str(tiny["released"]),
+                    "--cache-dir", str(root)]) == 0
+    assert json.loads((entry / "bundle.json").read_text())["variant"] == \
+        "decoder"
+    with pytest.raises(RuntimeError, match="decoder-only"):
+        load_bundle(entry).encode_windows(np.zeros((1, 64, 16, 16), np.int8))
+    assert v2.main(["fetch", str(tiny["released"]), "--full",
+                    "--cache-dir", str(root)]) == 0
+    assert capsys.readouterr().out.split() == [str(entry)] * 2
+    meta = json.loads((entry / "bundle.json").read_text())
+    assert meta["variant"] == "full" and (entry / "onnx").is_dir()
+    assert not load_bundle(entry).decode_only
+    # the ONNX export reads the bundle's own books and channel
+    assert not (entry / "onnx" / "codebooks.npz").exists()
+    assert not (entry / "onnx" / "mean_channel.npz").exists()
+    assert len(calls) == 2
 
 
 def test_file_without_a_release(tiny, tmp_path):
