@@ -1,83 +1,39 @@
-# beta_arch_w36 at step 42,500 with int8 codebooks, and its decoder
-# fine-tuned on the codes those books assign: a candidate S2 release
-# model whose int8 books are used for both encoding and decoding
-# (model.vq.book_bits: 8, as AE v2 and Tessera), kept as the fallback
-# while s2_v2 is trained from scratch with int8 books.
+# S2 v1, the Sentinel-2 L1C release model: beta_arch_w36 at step 42,500
+# with its codebooks on the int8 grid (model.vq.book_bits 8, as AE v2 and
+# Tessera). The frozen checkpoint is checkpoints/s2_v1/s2_v1.pt, copied
+# read-only to /data/georvq-releases/s2-v1/s2_v1.pt with its sha256.
 #
-#   sbatch scratch/s2-int8/jobs/s2_v1.sbatch      (in the release-format
-#   worktree; cpus 16, mem 150G, signal B:USR1@300)
+# The model was trained with float32 codebooks (beta_arch_w36.yaml, which
+# leaves book_bits unset). After training, each of its 16 books was
+# snapped once onto the 8-bit grid by QuantizedBookVQ.project_book (per
+# codeword a max-abs scale and integers in [-127, 127]), book_bits was set
+# to 8 in the embedded config, and every other tensor was copied
+# unchanged; there was no further training. Snapping changed the books by
+# 0.64% relative RMS (0.64 to 0.65% per book). Every book converts to int8
+# and a float32 scale and back bit for bit, so a release bundle stores
+# exactly the books the model uses, and a QuantizedBookVQ in eval mode
+# assigns codes with them. The script that did this, make_int8_ckpt.py,
+# is kept with the release notes (scratch/release-plan/phase3c/ on the
+# main checkout).
 #
-# The base model was trained with float32 books. Decoding its codes with
-# the books rounded to int8 moves decodes by about 1 DN, but assigning
-# codes with the int8 books changes 8.5% of the fine-tier codes at 8-8 and
-# moves decodes by 13 to 43 DN on average (up to 9% of the codec's RMSE)
-# (scratch/s2-bookquant on the main checkout, job 1521). Retraining the
-# books would change the bitstream for nothing in return, so the encoder
-# and the books stay as they are, and only the decoder learns the codes
-# the int8 books give.
+# Scored with the 256-bit statistics channel on the trainer's validation
+# windows (scratch/s2-final/score_s2.py, GPU jobs 1523 and 1524, results
+# in scratch/release-plan/phase3c/scores/ref_fp32.json and int8_pre.json
+# on the main checkout), the int8 books give a DN RMSE within 0.63% of
+# the float32 books in every band at every rung from 8-0 to 8-8 (worst
+# B10 at 8-2, 1.0063 times), and the mean over bands is unchanged to
+# 0.03 DN (173.21 against 173.18 at 8-0, 43.84 against 43.84 at 8-8). The
+# codes do change, since assignment uses the int8 books.
 #
-# init_from is that checkpoint with each codebook projected once onto its
-# 8-bit grid by QuantizedBookVQ.project_book (per-codeword max-abs scale,
-# integers in [-127, 127]), the embedded config set to book_bits 8, and
-# everything else copied (scratch/s2-int8/make_int8_ckpt.py). Every book
-# converts to int8 and a float32 scale and back bit for bit, so the bundle
-# stores exactly the books the model uses.
-#
-# train.decoder_only holds the encoder and the books in eval mode with no
-# gradient, so there are no EMA updates, resets, k-means init or
-# projections, and the commitment loss is dropped. A QuantizedBookVQ in
-# eval mode assigns with its stored weights, which are the int8 books, so
-# training and validation see the codes a release encoder writes.
-# vq.warmup_steps is 0 so that the loaded books are never refitted.
-#
-# Depth sampling: the coarse tier always at 8 levels and the fine tier
-# uniform over 0..8 (nested, min_depths [8, 0], full_frac 0), as the
-# stable decoder-only runs of beta_arch_w36_dec used, so that every rung
-# of the shipped ladder from 8-0 to 8-8 is trained.
-#
-# lr 5e-5 peak, after 500 steps at lr 0 (optim.lr0_steps) that fill the
-# fresh AdamW's moment estimates before any weight moves, and a 1000-step
-# linear warmup, then cosine to zero at the last step. 2e-4 diverged in an
-# earlier decoder-only run of this model and 5e-5 was stable (job 1147).
-# AdamW weight decay 0.01 as the base run.
-#
-# bf16 autocast for the decoder (inherited train.amp); quantisation runs
-# in float32 outside it. Batch 16384 windows, which the decoder-only stage
-# fits in about 57 GB of the 80 GB card since the frozen encoder and books
-# carry no gradients. Grad clip 0.25 (vq.clip_norm), as every recent S2
-# run. No batch ramp, which only served the base run's unquantised warmup.
-#
-# 12,000 steps, 197M windows, about 8.7 hours at the 2.6 s per step job
-# 1147 measured. The decoder starts from a model trained on nearly the
-# same codes, so it has only to adapt to the 8.5% that changed. Snapshots
-# of model.pt are copied every 2000 steps by the job's watcher.
-#
-# The collapse guard is off: it watches the unquantised ceiling, which a
-# decoder trained only on quantised latents is expected to lose.
+# This preset is beta_arch_w36's with book_bits 8. Apart from log.run_tag
+# (beta_arch_w36 in the checkpoint), it equals the checkpoint's embedded
+# config. Training from it would train with int8 books from the start,
+# which is not how the release model was made.
 inherit: beta_arch_w36.yaml
 
 model:
-  depth_sampling: nested
-  min_depths: [8, 0]
-  full_frac: 0.0
   vq:
     book_bits: 8
-    warmup_steps: 0
-    clip_norm: 0.25
-
-train:
-  decoder_only: true
-  init_from: /home/ali/projects/georvq-release-format/checkpoints/s2_v1_int8/frozen_42500_int8.pt
-  steps: 12000
-  batch_windows: 16384
-  batch_ramp: null
-  guard_drop: null
-  optim: {lr: 5.0e-5, wd: 0.01, warmup: 1000, lr0_steps: 500,
-          schedule: cosine}
-  save_interval: 2000
 
 log:
   run_tag: s2_v1
-
-eval:
-  recon_tuples: ["8-0", "8-1", "8-2", "8-4", "8-8"]
