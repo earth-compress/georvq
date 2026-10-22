@@ -316,3 +316,44 @@ def test_bundle_round_trip(built):
     assert meta["format"] == "georvq-test/v1-bundle"
     assert meta["mean_channel"] == {"kind": "uniform", "bits": 32}
     assert [tuple(r["tuple"]) for r in meta["rungs"]][0] == (1, 0, 0, 0)
+
+
+_CRS_PROBE = """
+import json, sys, threading
+import numpy as np
+import rasterio
+from georvq.inference.store_codec import crs_from_epsg
+
+def write():
+    with rasterio.open(sys.argv[1], "w", driver="GTiff", height=2, width=2,
+                       count=1, dtype="uint8", crs="EPSG:32629",
+                       transform=rasterio.Affine(10, 0, 0, 0, -10, 0)) as ds:
+        ds.write(np.ones((1, 2, 2), np.uint8))
+
+if sys.argv[2] == "read-first":
+    t = threading.Thread(target=write)
+    t.start()
+    t.join()
+    with rasterio.open(sys.argv[1]) as ds:
+        ds.crs
+print(json.dumps(crs_from_epsg(32653).to_dict(projjson=True), sort_keys=True))
+"""
+
+
+def test_crs_from_epsg_does_not_depend_on_earlier_reads(tmp_path):
+    """Reading a GeoTIFF first leaves WGS 84 cached as a plain datum in
+    the thread's PROJ context, which changed the Tessera golden store's
+    PROJJSON when its test ran after another that opened a landmask. Each
+    case runs in a fresh interpreter, since the cache lives as long as the
+    thread."""
+    import subprocess
+    import sys
+    env = dict(os.environ, PYTHONPATH=os.pathsep.join(
+        [os.path.dirname(os.path.dirname(georvq.__file__))]
+        + os.environ.get("PYTHONPATH", "").split(os.pathsep)))
+    out = [subprocess.run([sys.executable, "-c", _CRS_PROBE,
+                           str(tmp_path / "t.tif"), case], env=env,
+                          check=True, capture_output=True, text=True).stdout
+           for case in ("clean", "read-first")]
+    assert out[0] == out[1]
+    assert "datum_ensemble" in json.loads(out[0])["base_crs"]

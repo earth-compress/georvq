@@ -58,7 +58,8 @@ import warnings
 import numpy as np
 
 from georvq.inference.store_codec import (OnnxStoreCodec, ReleaseSpec,
-                                          StoreCodec, encode_product)
+                                          StoreCodec, crs_from_epsg,
+                                          encode_product)
 
 XNORM = 32.0          # georvq.sources.tessera.TesseraSource.XNORM
 SCALE_MAX = 1.0       # georvq.sources.tessera.TesseraSource.SCALE_MAX
@@ -362,7 +363,6 @@ class GeotesseraTile:
 
     def __init__(self, year, lon, lat, root=TESSERA_BUCKET, landmask=None,
                  cache_dir=None, check_rule=True, source_root=None):
-        from rasterio.crs import CRS
         self.year, self.lon, self.lat = int(year), float(lon), float(lat)
         name = tile_name(lon, lat)
         root = root.rstrip("/") + "/"
@@ -404,7 +404,7 @@ class GeotesseraTile:
             raise ValueError(f"{name} {self.year}: {self.height}x{self.width} "
                              f"pixels, its {how} gives {shape}")
         self.georef = how
-        self.crs = CRS.from_epsg(epsg)
+        self.crs = crs_from_epsg(epsg)
         self.transform = t
         self.orientation = "north-up"
         self.product_id = f"{self.year}/{name}"

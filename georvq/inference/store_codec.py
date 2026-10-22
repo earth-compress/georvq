@@ -692,6 +692,38 @@ class ProductSource(Protocol):
         ...
 
 
+def crs_from_epsg(epsg):
+    """A rasterio CRS for an EPSG code that does not depend on what the
+    process has read before.
+
+    GDAL keeps one PROJ context per thread, and PROJ caches the objects it
+    builds from its database in that context. Reading a GeoTIFF whose
+    geokeys name datum EPSG:6326 caches WGS 84 as a plain datum, after
+    which `CRS.from_epsg` on the same thread builds the WGS 84 UTM zones
+    on that datum instead of the datum ensemble, and their PROJJSON and
+    WKT2 differ. Building the CRS on a new thread gives it a fresh
+    context, so a store header written from it is the same whatever was
+    opened earlier in the process.
+    """
+    import threading
+
+    from rasterio.crs import CRS
+    out = {}
+
+    def build():
+        try:
+            out["crs"] = CRS.from_epsg(epsg)
+        except Exception as e:      # re-raised on the calling thread
+            out["err"] = e
+
+    t = threading.Thread(target=build)
+    t.start()
+    t.join()
+    if "err" in out:
+        raise out["err"]
+    return out["crs"]
+
+
 def projjson(crs):
     if crs is None:
         return None
