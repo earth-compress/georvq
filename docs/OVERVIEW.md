@@ -66,7 +66,7 @@ checkpoint exactly.
 | `georvq/inference/` | Source-agnostic deployment code: `api.py` Codec/Packet, `stats_codec.py`, `mean_codec.py` the `stats_cond` channel on the wire, `release.py` bitstream/decoder ids, `records.py` the release container (record layout, Zarr writer, zarr-python reader, record cache), `store_codec.py` a release's codec over the container (`ReleaseSpec`, `StoreCodec`, `encode_product`), `store_dataset.py` the rasterio-like reader, `bundle.py` and `bundle_resolve.py` release bundles and finding them, `store_index.py` per-store facts for a tile index, `bitpack.py` fixed-width records, `onnx_stats.py` ONNX for transmitted-mean models |
 | `georvq/ae/` | The AlphaEarth release codec: `v2.py` (the release's `ReleaseSpec`, the GeoTIFF tile reader, `encode_tile`, CLI), `v2_bundle.py`, `v2_resolve.py` (finding the bundle a store names), `index.py`. See `docs/AE_RELEASE.md` |
 | `georvq/tessera/` | The Tessera release codec, holding Tessera-specific policy: `v2.py` (the release's `ReleaseSpec`, the geotessera tile reader, `encode_tile`, bundles, the tile index, CLI), `io.py` (`prep` of geotessera arrays). See `docs/TESSERA_RELEASE.md` |
-| `georvq/s2/` | The Sentinel-2 L1C release codec: `v1.py` (the release's `ReleaseSpec` on three output grids, the SAFE product reader, `encode_safe`, `reconstruct_safe`, bundles, CLI), `safe.py` (band images, the metadata zip, JPEG 2000 writing, `manifest.safe` checksums) |
+| `georvq/s2/` | The Sentinel-2 L1C release codec: `v1.py` (the release's `ReleaseSpec` on three output grids, the SAFE product reader, `encode_safe`, `reconstruct_safe`, bundles, CLI), `safe.py` (band images, the metadata zip, JPEG 2000 writing, `manifest.safe` checksums), `deblock.py` (the optional client-side seam deblocker, `read_deblocked`) |
 | `scripts/` | Thin drivers over the above (train, store builders, eval, release builds); `scripts/viz/` panel/GIF styling and builders |
 | `analysis/` | Source-characterisation and codec-diagnostic probes (`analysis/README.md`) |
 | `lab/` | The findings ledger and kept experiments (`lab/README.md`); the maintainer's TODO queue |
@@ -268,7 +268,9 @@ A new dataset needs a builder, a `Source` adapter and a preset, and
 
 A better decoder or a post-decode enhancement can be added freely under
 the bitstream contract (`docs/BITSTREAM.md`). The seam deblocker
-(`georvq/model/deblock.py`, exploratory and not shipped) is a worked
+(`georvq/model/deblock.py`, exploratory; its S2 variant in
+`georvq/sources/s2_deblock.py` is offered with the S2 release as an
+optional client-side step outside the codec) is a worked
 example, and its canonical recipe shows one rule such work has to
 follow: a post-processor whose output depends on the tiling must freeze
 that tiling into the decoder identity.

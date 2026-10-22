@@ -475,3 +475,46 @@ def test_decoder_only_bundle(codec, tmp_path):
         d = np.abs(ta[g].astype(int) - tb[g].astype(int))
         assert d.max() <= 2 and (d == 0).mean() > 0.9, g
 
+
+def test_deblocked_window_matches_whole_product(codec, tmp_path):
+    from georvq.s2 import deblock as D
+    from georvq.sources.s2_deblock import S2BoundaryDeblocker, deblock_s2_mosaic
+    store = str(tmp_path / "crop.georvq.zarr")
+    torch.set_grad_enabled(False)
+    try:
+        v1.encode_product(_Crop(synthetic_bands(N, seed=6)), store, codec,
+                          chunk_px=CHUNK_PX, stats=False)
+        torch.manual_seed(1)
+        net = S2BoundaryDeblocker(width=8, cond_dim=8, depth=3,
+                                  window=WIN).eval()
+        for p in net.parameters():          # not the identity
+            p.add_(0.05 * torch.randn_like(p))
+        recipe = {"frame": 72, "halo": 36}
+        entry = {"recipe": recipe, "trained_against": {
+            "bitstream_id": codec.bitstream_id,
+            "decoder_id": codec.decoder_id}}
+        with georvq.open(store, codec=codec) as ds:
+            full = ds.read_grids(quality="3-2")
+            x = {g: torch.from_numpy(a.astype(np.float32) / D.SCALE)[None]
+                 for g, a in full.items()}
+            y = deblock_s2_mosaic(net, x, torch.tensor([[3, 2]]), recipe)
+            got = D.read_deblocked(ds, (net, entry), ((36, 108), (72, 144)),
+                                   quality="3-2")
+            with pytest.raises(ValueError, match="fixed rung"):
+                D.read_deblocked(ds, (net, entry), quality="rmse_10m<=5")
+            bad = dict(entry, trained_against={"bitstream_id": "x",
+                                               "decoder_id": codec.decoder_id})
+            with pytest.raises(ValueError, match="trained against"):
+                D.read_deblocked(ds, (net, bad), ((0, 36), (0, 36)), "3-2")
+    finally:
+        torch.set_grad_enabled(True)
+    changed = 0
+    for g, f, _ in S.GRIDS:
+        a = y[g][0].numpy() * D.SCALE
+        want = np.where((full[g] != 0).any(0), np.clip(np.rint(a), 1, 65535),
+                        0).astype(np.uint16)[:, 36 // f:108 // f, 72 // f:144 // f]
+        assert np.array_equal(got[g], want), g
+        changed += int((want != full[g][:, 36 // f:108 // f,
+                                         72 // f:144 // f]).sum())
+    assert changed > 0
+
