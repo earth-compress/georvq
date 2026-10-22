@@ -23,6 +23,7 @@ import os
 RELEASES = {
     "georvq-ae/v2": "georvq.ae.v2",
     "georvq-tessera/v2": "georvq.tessera.v2",
+    "georvq-s2/v1": "georvq.s2.v1",
 }
 
 
@@ -38,7 +39,7 @@ def spec_for(codec_format):
 def open(store, *, codec=None, bundle=None, backend=None, device=None,
          quality=None, bf16=None, threads=None, cache_dir=None,
          trust_remote=False, force=False, storage_options=None, cache=None,
-         cache_bytes=None, trace=None, **options):
+         cache_bytes=None, trace=None, grid=None, **options):
     """Open a georvq store as a rasterio-like read-only dataset.
 
     `store` is a local path, a URL zarr-python opens through fsspec
@@ -64,6 +65,10 @@ def open(store, *, codec=None, bundle=None, backend=None, device=None,
       patterns.
     - `storage_options` (for fsspec), `cache`, `cache_bytes`, `trace`:
       as for georvq.inference.records.RecordReader.
+    - `grid`: for a store whose bands lie on several grids (S2's 10, 20
+      and 60 m), the grid the dataset shows (default the first); the
+      others are reached with `ds.grid(name)`, and `ds.read_grids`
+      decodes them all at once.
     - any further keyword is an output option of the store's release
       (its `output_options`, for example Tessera's `units`)."""
     from georvq.inference.records import (HEADER_KEY, _is_group,
@@ -108,7 +113,7 @@ def open(store, *, codec=None, bundle=None, backend=None, device=None,
     ds = StoreDataset(group, spec, codec=None if codec is None else
                       checked(codec), resolver=None if codec is not None
                       else resolver, quality=quality, options=options,
-                      **reader_kw)
+                      grid=grid, **reader_kw)
     if not _is_group(store):
         ds.reader.source = ds.name = os.fspath(store)
     if bundle is not None and codec is None:

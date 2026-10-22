@@ -82,6 +82,24 @@ Major TOM Core-S2L1C -- CC-BY-SA 4.0 (LICENSES/CC-BY-SA-4.0.txt)
   These files are shared under the same licence.
 
 
+Copernicus Sentinel-2 L1C products (ESA) -- Copernicus Sentinel data
+terms (https://sentinels.copernicus.eu/documents/247904/690755/Sentinel_Data_Legal_Notice)
+
+  Contains modified Copernicus Sentinel data 2026.
+
+  Files:
+    tests/golden/s2_v1_tile_inputs.npz
+        a 144 x 144 px crop (10 m; 72 px at 20 m, 24 px at 60 m) of the
+        13 bands of S2C_MSIL1C_20260503T084641_N0512_R107_T37UDB_20260503T104912.
+    tests/golden/s2_v1_golden.npz
+        codes and decode hashes of that crop under the georvq S2 v1 codec.
+    tests/golden/s2_v1_tile.georvq.zarr
+        that crop encoded with the georvq S2 v1 codec (lossy), with a
+        stand-in SAFE metadata zip built by tests/s2_safe_fixture.py.
+  Changes: the crop was cut from the band images; encoded files are
+  lossy encodings of it.
+
+
 ERA5 (ECMWF, Copernicus Climate Change Service) -- CC-BY 4.0
 (LICENSES/CC-BY-4.0.txt)
 

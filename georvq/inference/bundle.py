@@ -7,7 +7,9 @@ Layout of a bundle directory:
     codebooks.npz     per RVQ level, `<prefix>.q` (K, D) int8 and
                       `<prefix>.scale` (K,) float32, with
                       codebook = float32(q) * scale exactly, and
-                      q = -128 standing for -0.0
+                      q = -128 standing for -0.0; for a model trained
+                      with float32 books (vq.book_bits unset),
+                      `<prefix>.weight` (K, D) float32 instead
     mean_channel.npz  the mean channel's tables (georvq.inference.
                       mean_codec; its kind is recorded in bundle.json)
     config.json       the model's resolved Config
@@ -140,9 +142,6 @@ def write_bundle(out_dir, model, cfg, channel, spec, source=None, notes="",
     model's ONNX export under onnx/, so that one bundle serves both
     backends."""
     bits = cfg.model.vq.book_bits
-    if not bits:
-        raise ValueError("a bundle stores int codebooks; the model has "
-                         "fp32 books (vq.book_bits is unset)")
     codec = make_codec(spec, model, channel)   # checks the model and bands
     os.makedirs(out_dir, exist_ok=True)
     sd = model.state_dict()
@@ -152,8 +151,11 @@ def write_bundle(out_dir, model, cfg, channel, spec, source=None, notes="",
                if k not in book_keys and not _is_training_state(k)}
     books = {}
     for p in prefixes:
-        q, s = book_to_int(sd[p + BOOK_SUFFIX], bits)
-        books[p + ".q"], books[p + ".scale"] = q, s
+        if bits:
+            q, s = book_to_int(sd[p + BOOK_SUFFIX], bits)
+            books[p + ".q"], books[p + ".scale"] = q, s
+        else:
+            books[p + ".weight"] = _numpy(sd[p + BOOK_SUFFIX].float())
     np.savez(os.path.join(out_dir, "weights.npz"), **weights)
     np.savez(os.path.join(out_dir, "codebooks.npz"), **books)
     channel.save(os.path.join(out_dir, "mean_channel.npz"))
@@ -173,7 +175,7 @@ def write_bundle(out_dir, model, cfg, channel, spec, source=None, notes="",
         "window": codec.window, "bands": codec.bands,
         "tiers": [str(sp) for sp in codec.specs],
         "min_depths": list(cfg.model.min_depths),
-        "book_bits": int(bits),
+        "book_bits": int(bits) if bits else None,
         "mean_channel": {"kind": channel.kind,
                          "bits": int(channel.cost_bits())},
         "rungs": codec.header_rungs(),
@@ -232,7 +234,11 @@ def load_model(bundle_dir, spec, device="cpu", verify=True):
     with np.load(os.path.join(bundle_dir, "codebooks.npz"),
                  allow_pickle=False) as z:
         for p in _book_keys(model):
-            sd[p + BOOK_SUFFIX] = book_from_int(z[p + ".q"], z[p + ".scale"])
+            if p + ".weight" in z.files:
+                sd[p + BOOK_SUFFIX] = torch.from_numpy(z[p + ".weight"])
+            else:
+                sd[p + BOOK_SUFFIX] = book_from_int(z[p + ".q"],
+                                                    z[p + ".scale"])
     missing, unexpected = model.load_state_dict(sd, strict=False)
     if unexpected or any(not _is_training_state(k) for k in missing):
         raise KeyError(f"{bundle_dir}: unexpected {sorted(unexpected)}, "
