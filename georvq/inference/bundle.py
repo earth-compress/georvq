@@ -19,7 +19,23 @@ Layout of a bundle directory:
 bundle.json records the sha256 of every file but itself and the README,
 those under onnx/ included, and names the ONNX directory under "onnx"
 (null without one). Its `format` and `codec_format` are the release's
-(`ReleaseSpec.bundle_format`, `codec_format`).
+(`ReleaseSpec.bundle_format`, `codec_format`); `release` and
+`release_uri` name the release, `licence_weights` and `licence_stores`
+give the licence of the weights and of the stores they code, and
+`training_data` the data the model was trained on.
+
+`variant` is "full" for the bundle above. `write_decoder_bundle` makes a
+second, smaller artefact from a full bundle, `variant` "decoder-fp16":
+the decoder-side tensors of weights.npz in float16 and the encoder's
+left out, with codebooks.npz, mean_channel.npz and config.json
+unchanged and no ONNX export. Its bitstream_id is the full bundle's,
+since the codebooks and the mean channel are the same bytes, and its
+decoder_id is computed from the float16 weights widened to float32, as
+the loader runs them, so it differs from the full bundle's
+(`parent_decoder_id`). Decoding with it differs from the full bundle's
+decode by the rounding of the decoder weights; quality values stored
+in a store were measured with the full bundle's decoder and are not
+served for it. Its codec has `decode_only` set and refuses to encode.
 
 Everything is stored as plain numpy arrays and JSON, and the loader
 reads the arrays with `allow_pickle=False`, so loading a bundle runs no
@@ -54,6 +70,10 @@ from georvq.inference.store_codec import export_onnx, make_codec
 
 BUNDLE_VERSION = 1
 FILES = ("weights.npz", "codebooks.npz", "mean_channel.npz", "config.json")
+FULL, DECODER_FP16 = "full", "decoder-fp16"
+# state-dict prefixes only the encoder side reads: the stem and tokenizer,
+# the encoder's mean embedding and the rate model
+ENCODER_PREFIXES = ("stem.", "tokenizer.", "stats_enc.", "rate.")
 TRAINING_STATE = ("ema_count", "ema_sum", "ema_sse", "step", "initialized")
 BOOK_SUFFIX = ".codebook.weight"
 # a scale found by the search is at most this many ulps from max|w| / qmax
@@ -168,6 +188,11 @@ def write_bundle(out_dir, model, cfg, channel, spec, source=None, notes="",
     payload = {
         "format": spec.bundle_format, "version": BUNDLE_VERSION,
         "codec_format": spec.codec_format,
+        "variant": FULL,
+        "release": spec.name, "release_uri": spec.release_uri,
+        "licence_weights": spec.weights_licence,
+        "licence_stores": spec.licence,
+        "training_data": spec.training_data,
         "bitstream_id": codec.bitstream_id,
         "decoder_id": codec.decoder_id,
         "window": codec.window, "bands": codec.bands,
@@ -224,16 +249,32 @@ def load_model(bundle_dir, spec, device="cpu", verify=True):
     with open(os.path.join(bundle_dir, "config.json")) as f:
         cfg = Config.model_validate(migrate(json.load(f)))
     model = build_model(cfg, "cpu")
+    variant = meta.get("variant", FULL)
+    if variant not in (FULL, DECODER_FP16):
+        raise ValueError(f"{bundle_dir}: unknown bundle variant {variant!r}")
     sd = {}
     with np.load(os.path.join(bundle_dir, "weights.npz"),
                  allow_pickle=False) as z:
         for k in z.files:
-            sd[k] = torch.from_numpy(z[k])
+            t = torch.from_numpy(z[k])
+            if variant == DECODER_FP16 and t.dtype == torch.float16:
+                t = t.float()
+            sd[k] = t
     with np.load(os.path.join(bundle_dir, "codebooks.npz"),
                  allow_pickle=False) as z:
         for p in _book_keys(model):
             sd[p + BOOK_SUFFIX] = book_from_int(z[p + ".q"], z[p + ".scale"])
     missing, unexpected = model.load_state_dict(sd, strict=False)
+    if variant == DECODER_FP16:
+        # the encoder is not shipped: its tensors are NaN, so that a use
+        # the decode_only guard misses cannot produce plausible codes
+        enc = [k for k in missing if k.startswith(ENCODER_PREFIXES)]
+        with torch.no_grad():
+            own = model.state_dict()
+            for k in enc:
+                if own[k].is_floating_point():
+                    own[k].fill_(float("nan"))
+        missing = [k for k in missing if k not in enc]
     if unexpected or any(not _is_training_state(k) for k in missing):
         raise KeyError(f"{bundle_dir}: unexpected {sorted(unexpected)}, "
                        f"missing {sorted(k for k in missing if not _is_training_state(k))}")
@@ -252,6 +293,7 @@ def load_bundle(bundle_dir, spec, device="cpu", bf16=None, verify=True):
     channel = load_channel(os.path.join(bundle_dir, "mean_channel.npz"),
                            (meta.get("mean_channel") or {}).get("kind"))
     codec = make_codec(spec, model, channel, bf16=bf16)
+    codec.decode_only = meta.get("variant", FULL) != FULL
     if verify:
         for key in ("bitstream_id", "decoder_id"):
             if getattr(codec, key) != meta[key]:
@@ -260,3 +302,130 @@ def load_bundle(bundle_dir, spec, device="cpu", bf16=None, verify=True):
                                  f"records {meta[key]}")
     codec.bundle = meta
     return codec
+
+
+def write_decoder_bundle(bundle_dir, out_dir, spec, verify=True) -> dict:
+    """Write the decoder-only float16 variant of the full bundle at
+    `bundle_dir` to `out_dir` (see the module docstring). Raises if a
+    decoder tensor does not fit float16. Returns its bundle.json
+    payload."""
+    import shutil
+
+    from georvq.inference.release import decoder_id
+    meta = read_bundle_meta(bundle_dir, spec)
+    if meta.get("variant", FULL) != FULL:
+        raise ValueError(f"{bundle_dir}: not a full bundle")
+    if verify:
+        check_files(bundle_dir, meta, [n for n in meta["files"]
+                                       if not n.startswith(ONNX_DIR + "/")])
+    os.makedirs(out_dir, exist_ok=True)
+    half = {}
+    with np.load(os.path.join(bundle_dir, "weights.npz"),
+                 allow_pickle=False) as z:
+        for k in z.files:
+            if k.startswith(ENCODER_PREFIXES):
+                continue
+            a = z[k]
+            if a.dtype == np.float32:
+                h = a.astype(np.float16)
+                if not np.isfinite(h[np.isfinite(a)]).all():
+                    raise ValueError(f"{k}: values outside the float16 range")
+                a = h
+            half[k] = a
+    np.savez(os.path.join(out_dir, "weights.npz"), **half)
+    for n in FILES[1:]:
+        shutil.copyfile(os.path.join(bundle_dir, n), os.path.join(out_dir, n))
+    payload = {k: v for k, v in meta.items()
+               if k not in ("files", "onnx", "decoder_id")}
+    for k, v in (("release", spec.name), ("release_uri", spec.release_uri),
+                 ("licence_weights", spec.weights_licence),
+                 ("licence_stores", spec.licence),
+                 ("training_data", spec.training_data)):
+        payload.setdefault(k, v)
+    payload.update({
+        "variant": DECODER_FP16, "weights_dtype": "float16",
+        "parent_decoder_id": meta["decoder_id"], "onnx": None,
+        "files": {n: {"bytes": os.path.getsize(os.path.join(out_dir, n)),
+                      "sha256": sha256_file(os.path.join(out_dir, n))}
+                  for n in FILES}})
+    # the decoder id of the weights as the loader widens them
+    payload["decoder_id"] = None
+    with open(os.path.join(out_dir, "bundle.json"), "w") as f:
+        json.dump(payload, f, indent=1)
+    model, _ = load_model(out_dir, spec, "cpu", verify=False)
+    payload["decoder_id"] = decoder_id(model)
+    with open(os.path.join(out_dir, "bundle.json"), "w") as f:
+        json.dump(payload, f, indent=1)
+    if spec.bundle_readme is not None:
+        with open(os.path.join(out_dir, "README.md"), "w") as f:
+            f.write(spec.bundle_readme(payload))
+    return payload
+
+
+def bundle_readme(meta, title, about, usage) -> str:
+    """The README of a bundle, the same for every release: `title`, an
+    `about` paragraph, the licences, ids, tiers, rung table and files
+    from bundle.json, and `usage`, a Python example."""
+    tiers = "\n".join(f"- {t}" for t in meta["tiers"])
+    rows = "\n".join(
+        f"| {'-'.join(map(str, r['tuple']))} | {r['bits_window']} | "
+        f"{r['bits_px']:.4f} |" for r in meta["rungs"])
+    size = sum(f["bytes"] for f in meta["files"].values())
+    src = meta.get("source") or {}
+    stores = meta.get("licence_stores")
+    if isinstance(stores, dict):
+        stores = (f"{stores.get('spdx') or stores.get('name')} "
+                  f"({stores.get('attribution')})")
+    lic = f"The weights are licensed {meta.get('licence_weights')}."
+    if meta.get("training_data"):
+        lic += f" The model was trained on {meta['training_data']}."
+    if stores:
+        lic += f" The stores this bundle decodes are licensed {stores}."
+    if meta.get("variant", FULL) == DECODER_FP16:
+        kind = (f"This is the decoder-only variant: the decoder weights in "
+                f"float16 and no encoder, so it can read stores but not "
+                f"write them. Its decoder_id `{meta['decoder_id']}` differs "
+                f"from the full bundle's (`{meta['parent_decoder_id']}`), "
+                f"and quality values stored by the full bundle's decoder "
+                f"are not served with it.")
+    else:
+        kind = "This is the full bundle: encoder and decoder in float32."
+    onnx = (f"\n`{meta['onnx']}/` holds the ONNX export used by the "
+            "torch-free backend (`backend=\"onnx\"`).\n"
+            if meta.get("onnx") else "")
+    return f"""# {title}
+
+{about}
+
+{kind}
+
+{lic}
+
+- bitstream_id `{meta['bitstream_id']}`, decoder_id `{meta['decoder_id']}`
+- window {meta['window']} px, {meta['bands']} bands
+- source checkpoint {src.get('checkpoint')} at step {src.get('step')}
+
+Tiers (grid:dim:codes:depth), with {meta['book_bits']}-bit codebooks:
+
+{tiers}
+
+Every window also carries its mean, {meta['mean_channel']['bits']} bits
+through the {meta['mean_channel']['kind']} mean channel. The rate of each
+rung below includes it.
+
+| rung | bits/window | bits/px |
+|---|---|---|
+{rows}
+
+Files ({size / 1e6:.1f} MB): `weights.npz` (model tensors), `codebooks.npz`
+(per level an int8 `q` and a float32 per-codeword `scale`, codebook =
+q * scale, with q = -128 standing for -0.0), `mean_channel.npz`,
+`config.json`, `bundle.json`. All arrays load with `allow_pickle=False`.
+{onnx}
+```python
+{usage.strip()}
+```
+
+`load_bundle` checks the file hashes and recomputes both ids from the
+loaded tensors.
+"""

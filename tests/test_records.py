@@ -28,10 +28,9 @@ CHUNK = {"base": 64, "mid": 16, "fine": 8}
 TRANSFORM = (10.0, 0.0, 500000.0, 0.0, -10.0, 4000000.0)
 DID = "0123456789abcdef"
 HEADER = {"codec": {"bitstream_id": "test", "decoder_id": DID},
-          "product": {"kind": "synthetic", "height": H, "width": W},
+          "product": {"kind": "synthetic", "height": H, "width": W,
+                      "epsg": 32633},
           "rungs": []}
-CRS = {"type": "ProjectedCRS", "name": "WGS 84 / UTM zone 33N",
-       "id": {"authority": "EPSG", "code": 32633}}
 FULL = (3, 2, 3)
 
 
@@ -58,7 +57,7 @@ def _write(path, order="sequential", valid=None, by_tier=False, aux=None,
     vals = _values(lay, h, w)
     header = dict(HEADER, product=dict(HEADER["product"], height=h, width=w))
     wr = R.RecordWriter(path, header, lay, "synthetic-1", TRANSFORM, h, w,
-                        crs=CRS, aux=aux, consolidated=consolidated)
+                        aux=aux, consolidated=consolidated)
     gh, gw = wr.window_grid
     jobs = [(i, j) for i in range(0, gh, step) for j in range(0, gw, step + 2)]
     if order == "shuffled":
@@ -199,7 +198,8 @@ def test_header_and_attributes(tmp_path, mask):
     assert hdr["layout"]["mask"] == {"column": "mask", "kind": "base",
                                      "chunks": [[0, 0]]}
     assert g.attrs["georvq_aux"] == {"tags": {"a": 1}}
-    assert g.attrs["proj:projjson"] == CRS
+    assert g.attrs["proj:code"] == "EPSG:32633"
+    assert "proj:projjson" not in g.attrs
     assert g.attrs["spatial:transform"] == list(TRANSFORM)
     assert g["base"].attrs["spatial:transform"] == [40.0, 0.0, 500000.0, 0.0,
                                                     -40.0, 4000000.0]

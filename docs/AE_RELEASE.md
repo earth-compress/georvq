@@ -53,8 +53,9 @@ placed at the path that mirrors the source tile's path
 
 A tile index, `aef_georvq_index.parquet`, is the place to find which
 coded store covers an area and how many bytes it costs at each rate. It
-has the source index's columns with paths to the coded stores, plus each
-store's `bitstream_id` and bytes per rung. It is built by
+has the columns every georvq index has (the store's path, product id,
+CRS, bounds and footprint, `bitstream_id`, sizes and bytes per rung),
+followed by the source index's columns (its `path` as `source_path`). It is built by
 `scripts/build_ae_index.py` (`georvq/ae/index.py`) and published with the
 stores, and the sample's index is in the
 [sample dataset](https://huggingface.co/datasets/earth-compress/georvq-ae-v2-sample).

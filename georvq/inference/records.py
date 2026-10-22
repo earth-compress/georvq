@@ -404,7 +404,11 @@ def _spatial(dims, shape, transform):
             "spatial:registration": "pixel"}
 
 
-def _crs_attrs(product, projjson):
+def _crs_attrs(product):
+    """The proj: convention's `proj:code` and `proj:wkt2` of a header's
+    product. PROJJSON is left out: the convention requires only one of
+    the three, and PROJ's PROJJSON text for the same CRS varies with the
+    PROJ version and with what the process has read before."""
     out = {}
     if product.get("epsg"):
         out["proj:code"] = f"EPSG:{int(product['epsg'])}"
@@ -415,8 +419,6 @@ def _crs_attrs(product, projjson):
             out["proj:wkt2"] = pyproj.CRS.from_wkt(wkt).to_wkt("WKT2_2019")
         except ImportError:
             pass
-    if projjson:
-        out["proj:projjson"] = projjson
     return out
 
 
@@ -448,15 +450,16 @@ class RecordWriter:
     header: the codec, product, rungs and quality entries of the
     `georvq` attribute; with a quality column, `codec.decoder_id` names
     the decoder it was measured with. transform: the north-up affine
-    (a, b, c, d, e, f) of the coded pixel grid. crs: PROJJSON dict, or
-    None if unknown. aux: a JSON string or JSON-able object stored under
+    (a, b, c, d, e, f) of the coded pixel grid. The CRS attributes
+    (`proj:code`, `proj:wkt2`) are taken from the header's `product`
+    (`epsg`, `crs_wkt`). aux: a JSON string or JSON-able object stored under
     `georvq_aux`. assets: {name: (bytes, media_type, filename)}, files
     stored in the `assets` group. consolidated: add zarr-python's
     consolidated metadata, which saves readers a request per array on
     open."""
 
     def __init__(self, path, header: dict, layout: Layout, product_id: str,
-                 transform, height: int, width: int, crs=None, aux=None,
+                 transform, height: int, width: int, aux=None,
                  consolidated=True, assets=None):
         clash = [k for k in _WRITER_KEYS if k in header]
         if clash:
@@ -467,7 +470,6 @@ class RecordWriter:
         self.product_id = str(product_id)
         self.transform = [float(v) for v in transform[:6]]
         self.height, self.width = int(height), int(width)
-        self.crs = crs
         self.aux = aux if aux is None or not isinstance(aux, str) else json.loads(aux)
         self.consolidated = bool(consolidated)
         self.assets = {}
@@ -607,7 +609,7 @@ class RecordWriter:
         lay = self.layout
         gy, gx = self.window_grid
         H, Wd = self.height, self.width
-        crs = _crs_attrs(header.get("product") or {}, self.crs)
+        crs = _crs_attrs(header.get("product") or {})
         conv = {"zarr_conventions": [PROJ_CONVENTION, SPATIAL_CONVENTION],
                 **({"proj:code": crs["proj:code"]} if "proj:code" in crs else {})}
         win_attrs = {**conv, **_spatial(("wy", "wx"), (gy, gx), _window_transform(

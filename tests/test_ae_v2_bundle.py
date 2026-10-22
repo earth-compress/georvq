@@ -203,6 +203,35 @@ def test_tampered_bundle_is_refused(tiny, tmp_path):
         load_bundle(d)
 
 
+def test_decoder_only_bundle(tiny, tmp_path):
+    from georvq.ae.v2_bundle import write_decoder_bundle
+    d = tmp_path / "dec"
+    meta = write_decoder_bundle(tiny["dir"], d)
+    full = json.load(open(tiny["dir"] / "bundle.json"))
+    assert meta["variant"] == "decoder-fp16" and full["variant"] == "full"
+    assert meta["bitstream_id"] == full["bitstream_id"]
+    assert meta["parent_decoder_id"] == full["decoder_id"]
+    assert meta["decoder_id"] != full["decoder_id"]
+    with np.load(d / "weights.npz", allow_pickle=False) as z:
+        assert not any(k.startswith(("tokenizer.", "stats_enc.", "stem."))
+                       for k in z.files)
+        assert all(z[k].dtype != np.float32 for k in z.files)
+    for n in ("codebooks.npz", "mean_channel.npz", "config.json"):
+        assert open(d / n, "rb").read() == open(tiny["dir"] / n, "rb").read()
+    a, b = load_bundle(tiny["dir"]), load_bundle(d)
+    assert b.decode_only and not a.decode_only
+    assert b.decoder_id == meta["decoder_id"]
+    with pytest.raises(RuntimeError, match="decoder-only"):
+        b.encode_windows(tiny["raw"])
+    ra, _, va = a.encode_windows(tiny["raw"], stats=False)
+    tiers = [ra[n].transpose(1, 0, 2) for n in a.names[1:]]
+    for r in [(1, 0, 0), (3, 2, 2)]:
+        fa, _ = a.decode_field(ra["base"][0], tiers, r, va.numpy())
+        fb, _ = b.decode_field(ra["base"][0], tiers, r, va.numpy())
+        assert torch.isfinite(fb).all()
+        assert (fa - fb).abs().max() < 1e-2 * fa.abs().max()
+
+
 # --------------------------------------------------------------------------
 # golden decode of the released bundle
 # --------------------------------------------------------------------------

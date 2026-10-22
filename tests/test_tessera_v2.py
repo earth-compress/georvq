@@ -219,8 +219,9 @@ def test_georvq_open_reads_like_a_direct_decode(tiny, tmp_path, monkeypatch):
     np.testing.assert_allclose(model_units * v2.XNORM, got, rtol=1e-6)
     meta = json.load(open(tiny["bundle"] / "bundle.json"))
     assert meta["licence_stores"]["spdx"] == "CC-BY-SA-4.0"
-    assert meta["licence_weights"].startswith("TODO")
-    assert "TODO(maintainer)" in open(tiny["bundle"] / "README.md").read()
+    assert meta["licence_weights"] == "Apache-2.0"
+    assert meta["variant"] == "full" and meta["release"] == "tessera-v2"
+    assert "licensed Apache-2.0" in open(tiny["bundle"] / "README.md").read()
 
 
 def test_index_joins_the_manifest(tiny, tmp_path):
@@ -236,6 +237,11 @@ def test_index_joins_the_manifest(tiny, tmp_path):
     t = v2.build_index(os.path.dirname(os.path.dirname(tiny["store"])), man)
     assert t.num_rows == 1 and t.column("grid_path").to_pylist() == ["a"]
     assert t.column("rungs").to_pylist()[0][0]["rung"] == "2-0-0"
+    from georvq.inference.store_index import CORE
+    assert t.schema.names[:len(CORE)] == CORE.names
+    (r,) = t.to_pylist()
+    assert r["crs"] == "EPSG:32633" and r["release"] == "tessera-v2"
+    assert r["product_id"] == "2024/grid_17.25_46.75"
     root = os.path.dirname(os.path.dirname(tiny["store"]))
     for prefix, want in (("", "2024/grid_17.25_46.75.georvq.zarr"),
                          ("https://h/x/", "https://h/x/2024/grid_17.25_46.75"

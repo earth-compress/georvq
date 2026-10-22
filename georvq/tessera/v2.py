@@ -76,6 +76,9 @@ STRIP_PX = 2048
 TESSERA_BUCKET = "https://s3.us-west-2.amazonaws.com/tessera-embeddings/v1/"
 EMBEDDINGS_DIR = "global_0.1_degree_representation"
 LANDMASK_DIR = "global_0.1_degree_tiff_all"
+TRAINING_DATA = ("TESSERA v1 embeddings (CC-BY-SA 4.0), Energy and "
+                 "Environment Group, Department of Computer Science and "
+                 "Technology, University of Cambridge, via geotessera")
 LICENCE = {
     "spdx": "CC-BY-SA-4.0",
     "url": "https://creativecommons.org/licenses/by-sa/4.0/",
@@ -173,57 +176,21 @@ def _check_model(model, channel):
 
 
 def _bundle_readme(meta) -> str:
-    tiers = "\n".join(f"- {t}" for t in meta["tiers"])
-    rows = "\n".join(
-        f"| {'-'.join(map(str, r['tuple']))} | {r['bits_window']} | "
-        f"{r['bits_px']:.4f} |" for r in meta["rungs"])
-    size = sum(f["bytes"] for f in meta["files"].values())
-    src = meta.get("source") or {}
-    onnx = (f"\n`{meta['onnx']}/` holds the ONNX export used by the torch-free "
-            "backend (`backend=\"onnx\"`).\n" if meta.get("onnx") else "")
-    return f"""# georvq Tessera v2 bundle
-
-<!-- TODO(maintainer): the licence of these weights is undecided
-(Apache-2.0, as the AE v2 weights, or CC-BY-SA-4.0, as the TESSERA
-embeddings they were trained on). Choose one before publishing, and
-state it here and in NOTICE. -->
-
-Licence of the weights: **TODO, undecided (Apache-2.0 or CC-BY-SA-4.0)**.
-The stores this bundle decodes are derived from the TESSERA embeddings
-and are licensed CC-BY-SA 4.0 (TESSERA embeddings, Energy and
-Environment Group, Department of Computer Science and Technology,
-University of Cambridge, via geotessera).
-
-Decoder and encoder for geotessera tiles stored as georvq Zarr stores
-(`{meta['codec_format']}`, see docs/GEORVQ_ZARR.md).
-
-- bitstream_id `{meta['bitstream_id']}`, decoder_id `{meta['decoder_id']}`
-- window {meta['window']} px, {meta['bands']} bands
-- source checkpoint {src.get('checkpoint')} at step {src.get('step')}
-
-Tiers (grid:dim:codes:depth), with {meta['book_bits']}-bit codebooks:
-
-{tiers}
-
-Every window also carries its mean, {meta['mean_channel']['bits']} bits
-through the {meta['mean_channel']['kind']} mean channel. The rate of each
-rung below includes it.
-
-| rung | bits/window | bits/px |
-|---|---|---|
-{rows}
-
-Files ({size / 1e6:.1f} MB): `weights.npz` (model tensors), `codebooks.npz`
-(per level an int8 `q` and a float32 per-codeword `scale`, codebook =
-q * scale, with q = -128 standing for -0.0), `mean_channel.npz`,
-`config.json`, `bundle.json`. All arrays load with `allow_pickle=False`.
-{onnx}
-```python
+    from georvq.inference.bundle import bundle_readme
+    return bundle_readme(
+        meta, "georvq Tessera v2 bundle",
+        "Decoder and encoder for geotessera tiles stored as georvq Zarr "
+        f"stores\n(`{meta['codec_format']}`, see docs/GEORVQ_ZARR.md).",
+        """
 import georvq
-ds = georvq.open("2024/grid_17.25_46.75.georvq.zarr")
-a = ds.read(quality="20-13-0")       # (128, H, W) float32
-```
-"""
+with georvq.open("2024/grid_17.25_46.75.georvq.zarr") as ds:
+    a = ds.read(quality="20-13-0")       # (128, H, W) float32
+
+from georvq.tessera import v2
+codec = v2.load_bundle("bundle_dir", device="cuda")
+tile = v2.GeotesseraTile(2024, 17.25, 46.75)
+v2.encode_tile(tile, "grid_17.25_46.75.georvq.zarr", codec)
+""")
 
 
 TESSERA_V2 = ReleaseSpec(
@@ -237,10 +204,12 @@ TESSERA_V2 = ReleaseSpec(
     release_uri=RELEASE_URI, env_bundle=ENV_BUNDLE,
     chunk_px=(BASE_CHUNK_PX, MID_CHUNK_PX, FINE_CHUNK_PX), strip_px=STRIP_PX,
     quality_stats=("mean", "p99"), quality_error=rel_l2,
+    quality_name="rel_l2",
     quality_error_text="||decoded - source|| / ||source|| per valid pixel "
                        "(relative L2 of the 128-band vector), decoded float "
                        "field against the prepared source",
-    check_model=_check_model, bundle_readme=_bundle_readme, licence=LICENCE)
+    check_model=_check_model, bundle_readme=_bundle_readme, licence=LICENCE,
+    training_data=TRAINING_DATA)
 
 
 class TesseraV2Codec(StoreCodec):
@@ -462,10 +431,14 @@ def encode_tile(tile: GeotesseraTile, out_path, codec: StoreCodec,
 def build_bundle(ckpt, mean_npz, out_dir, notes="", onnx=False) -> dict:
     """Bundle a training checkpoint and its mean channel tables."""
     from georvq.inference.bundle import build_bundle as _build
-    return _build(ckpt, mean_npz, out_dir, TESSERA_V2, notes=notes, onnx=onnx,
-                  extra={"licence_stores": LICENCE,
-                         "licence_weights": "TODO: undecided (Apache-2.0 or "
-                                            "CC-BY-SA-4.0)"})
+    return _build(ckpt, mean_npz, out_dir, TESSERA_V2, notes=notes, onnx=onnx)
+
+
+def write_decoder_bundle(bundle_dir, out_dir, verify=True) -> dict:
+    """The decoder-only float16 variant of the bundle at `bundle_dir`
+    (georvq.inference.bundle.write_decoder_bundle)."""
+    from georvq.inference.bundle import write_decoder_bundle as _write
+    return _write(bundle_dir, out_dir, TESSERA_V2, verify=verify)
 
 
 def load_bundle(bundle_dir, device="cpu", bf16=None, verify=True):
@@ -474,22 +447,24 @@ def load_bundle(bundle_dir, device="cpu", bf16=None, verify=True):
 
 
 def build_index(stores, manifest, out_path=None, url_prefix=None, root=None):
-    """Index of Tessera v2 stores joined to geotessera's manifest
-    (`manifest.parquet`, one row per (year, lon, lat) tile) on (year,
-    lon_i, lat_i): the manifest's columns, `path` (the store, `url_prefix`
+    """Index of Tessera v2 stores: the columns every release's index has
+    (georvq.inference.store_index), followed by the row of geotessera's
+    manifest (`manifest.parquet`, one row per (year, lon, lat) tile)
+    joined on (year, lon_i, lat_i). `path` is the store, `url_prefix`
     joined to its path relative to `root` when given, or that relative
-    path alone when `url_prefix` is ""), and the store facts of georvq.inference.store_index.tile_record. Writes Parquet to
-    `out_path` when given; returns the table."""
+    path alone when `url_prefix` is "". Rows follow the stores' order.
+    Writes GeoParquet to `out_path` when given; returns the table."""
     import pyarrow as pa
     import pyarrow.parquet as pq
     from georvq.inference.records import RecordReader
-    from georvq.inference.store_index import find_stores, tile_record
+    from georvq.inference.store_index import (find_stores, index_table,
+                                              tile_record)
     if isinstance(stores, (str, os.PathLike)) and os.path.isdir(stores) \
             and not os.fspath(stores).rstrip("/").endswith(".georvq.zarr"):
         root = stores if root is None else root
         stores = find_stores(stores)
     stores = [os.fspath(f) for f in stores]
-    rows, keys = [], []
+    paths, recs, keys = [], [], []
     for f in stores:
         p = RecordReader(f).header["product"]
         if p.get("kind") != KIND:
@@ -499,15 +474,13 @@ def build_index(stores, manifest, out_path=None, url_prefix=None, root=None):
         if key in keys:
             raise ValueError(f"{f}: a second store for {key}")
         keys.append(key)
-        rec = tile_record(f)
+        recs.append(tile_record(f))
         path = os.path.abspath(f)
         if url_prefix is not None:
             prefix = url_prefix.rstrip("/")
             path = (prefix + "/" if prefix else "") + os.path.relpath(
                 f, os.fspath(root)).replace(os.sep, "/")
-        rows.append({"path": path, **{k: rec[k] for k in (
-            "bitstream_id", "decoder_id", "store_bytes", "metadata_bytes",
-            "quality_bytes", "rungs")}})
+        paths.append(path)
     years = sorted({k[0] for k in keys})
     man = pq.read_table(manifest, filters=[("year", "in", years)])
     ty = {c: man.schema.field(c).type for c in ("year", "lon_i", "lat_i")}
@@ -520,20 +493,11 @@ def build_index(stores, manifest, out_path=None, url_prefix=None, root=None):
                           for c in ("year", "lon_i", "lat_i")]))
         missing = [k for k in keys if k not in found]
         raise ValueError(f"tiles not in {manifest}: {missing}")
-    joined = joined.sort_by("_row")
-    order = joined.column("_row").to_pylist()
-    joined = joined.drop(["_row"])
-    for c in ("path", "bitstream_id", "decoder_id", "store_bytes",
-              "metadata_bytes", "quality_bytes"):
-        joined = joined.append_column(c, pa.array([rows[i][c] for i in order]))
-    rung_t = pa.list_(pa.struct([("rung", pa.string()),
-                                 ("bits_px", pa.float64()),
-                                 ("bytes", pa.int64())]))
-    joined = joined.append_column("rungs", pa.array(
-        [rows[i]["rungs"] for i in order], rung_t))
+    joined = joined.sort_by("_row").drop(["_row"]).replace_schema_metadata(None)
+    out = index_table(paths, recs, joined)
     if out_path is not None:
-        pq.write_table(joined, out_path, compression="zstd")
-    return joined
+        pq.write_table(out, out_path, compression="zstd")
+    return out
 
 
 # --------------------------------------------------------------------------

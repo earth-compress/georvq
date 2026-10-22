@@ -125,16 +125,22 @@ class ReleaseSpec:
     the valid pixels of a window, of the per-pixel error
     `quality_error(out, x)` ((B, C, W, W) decoded field and prepared
     source -> (B, W, W)); "mean" and "p<N>" (a percentile) are known.
-    `quality_error_text` and `quality_encoding_text` describe them in the
-    header, and `quality_scale`, `quality_offset` and `quality_floor` set
-    the log code.
+    `quality_name` is a short name of that error written into the
+    header's `quality.name` (AE "1 - cos", Tessera "rel_l2"), so that a
+    client can tell releases' statistics apart without parsing
+    `quality_error_text`; `quality_error_text` and
+    `quality_encoding_text` describe them in the header, and
+    `quality_scale`, `quality_offset` and `quality_floor` set the log
+    code.
 
     `check_model(model, channel)` raises ValueError for a model and
     channel the release cannot ship. `torch_codec` and `onnx_codec` are
     the codec classes a resolved bundle is loaded as (StoreCodec and
     OnnxStoreCodec by default). `bundle_readme(meta)` returns the text of
     a bundle's README. `licence` is written into each store's header when
-    given."""
+    given. `weights_licence` (an SPDX id) and `training_data` (a sentence
+    naming the data the model was trained on and its licence) are
+    recorded in the release's bundle.json."""
 
     name: str
     codec_format: str
@@ -153,6 +159,8 @@ class ReleaseSpec:
     check_raw: Optional[Callable] = None
     release_uri: Optional[str] = None
     trusted: tuple = ("hf://earth-compress/*",)
+    weights_licence: str = "Apache-2.0"
+    training_data: Optional[str] = None
     env_bundle: Optional[str] = None
     chunk_px: tuple = (8192, 8192, 2048)
     strip_px: int = 1024
@@ -165,6 +173,7 @@ class ReleaseSpec:
     quality_scale: float = Q_SCALE
     quality_offset: float = Q_OFFSET
     quality_floor: float = Q_FLOOR
+    quality_name: Optional[str] = None
     output_options: dict = field(default_factory=dict)
     band_names: Optional[tuple] = None
     check_model: Optional[Callable] = None
@@ -320,9 +329,12 @@ class StoreCodec:
     """A stats_cond model with its mean channel, as the records of a
     release's stores. Encoder passes run in fp32; decoder passes run in
     bf16 on CUDA unless `bf16=False` (on CPU always fp32). `spec` defaults
-    to the class's own (a release's subclass sets it)."""
+    to the class's own (a release's subclass sets it). A codec loaded
+    from a decoder-only bundle has `decode_only` set and refuses to
+    encode, since the bundle holds no encoder weights."""
 
     spec: ReleaseSpec = None
+    decode_only = False
 
     def __init__(self, model, channel, bf16=None, rungs=None, spec=None):
         from georvq.inference.api import Codec
@@ -395,7 +407,8 @@ class StoreCodec:
 
     def header_quality(self) -> dict:
         s = self.spec
-        return {"column": "quality", "stats": list(s.quality_stats),
+        name = {} if s.quality_name is None else {"name": s.quality_name}
+        return {"column": "quality", **name, "stats": list(s.quality_stats),
                 "error": s.quality_error_text,
                 "encoding": s.quality_encoding_text,
                 "scale": s.quality_scale, "offset": s.quality_offset,
@@ -410,6 +423,10 @@ class StoreCodec:
         each (B, ..., W, W). Returns ({group: (levels, B, n_values)}, x,
         valid) with x, valid the prepared device input."""
         import torch
+        if self.decode_only:
+            raise RuntimeError("this codec was loaded from a decoder-only "
+                               "bundle, which has no encoder weights; encode "
+                               "with the full bundle")
         dev = self.device
         x, valid = self.spec.prep(self.model, _as_arrays(raw), dev)
         mu = self.model.patch_stats(x, valid).float().cpu().numpy()
@@ -724,16 +741,6 @@ def crs_from_epsg(epsg):
     return out["crs"]
 
 
-def projjson(crs):
-    if crs is None:
-        return None
-    try:
-        return crs.to_dict(projjson=True)
-    except (TypeError, AttributeError):
-        from pyproj import CRS
-        return CRS.from_wkt(crs.to_wkt()).to_json_dict()
-
-
 def release_record(codec, name, uri, revision=None) -> dict | None:
     """The header's `codec.release` for a store coded by `codec`; None
     when `name` is None."""
@@ -785,7 +792,7 @@ def encode_product(src: ProductSource, out_path, codec: StoreCodec,
     lay = codec.layout(quality=stats, chunk_px=chunk_px)
     aux = src.aux
     w = RecordWriter(out_path, header, lay, src.product_id,
-                     list(src.transform)[:6], H, Wd, crs=projjson(src.crs),
+                     list(src.transform)[:6], H, Wd,
                      aux=aux if aux is None or isinstance(aux, str)
                      else json.dumps(aux, default=str), assets=assets)
     t_read = t_enc = t_write = 0.0

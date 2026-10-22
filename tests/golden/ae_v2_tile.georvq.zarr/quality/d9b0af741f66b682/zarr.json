@@ -300,6 +300,7 @@
         }
       ],
       "quality": {
+        "name": "1 - cos",
         "stats": [
           "mean",
           "p99"

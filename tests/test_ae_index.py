@@ -19,6 +19,7 @@ from georvq.config import load_config  # noqa: E402
 from georvq.factory import build_model  # noqa: E402
 from georvq.inference.mean_codec import RVQPCAMeanChannel  # noqa: E402
 from georvq.inference.records import RecordReader  # noqa: E402
+from georvq.inference.store_index import CORE  # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WIN = 16
@@ -57,7 +58,7 @@ def tiny_codec():
     return v2.AEV2Codec(model, channel)
 
 
-def write_tile(path, codec, h, w, seed=0, stats=True):
+def write_tile(path, codec, h, w, seed=0, stats=True, crs="EPSG:32633"):
     """Encode a random bottom-up int8 tile to `path`; returns the source."""
     from rasterio.transform import Affine
     rng = np.random.default_rng(seed)
@@ -66,7 +67,7 @@ def write_tile(path, codec, h, w, seed=0, stats=True):
     src = os.path.splitext(os.path.splitext(path)[0])[0] + ".tif"
     t = Affine(10.0, 0.0, 500000.0, 0.0, 10.0, 4000000.0)
     with rasterio.open(src, "w", driver="GTiff", width=w, height=h, count=64,
-                       dtype="int8", nodata=v2.NODATA, crs="EPSG:32633",
+                       dtype="int8", nodata=v2.NODATA, crs=crs,
                        transform=t) as ds:
         ds.write(a)
     v2.encode_tile(src, path, codec, stats=stats, chunk_px=CHUNK_PX, strip_px=WIN)
@@ -123,7 +124,8 @@ def tree(tmp_path_factory):
         d = root / y / z
         d.mkdir(parents=True, exist_ok=True)
         f = d / f"{pid}.georvq.zarr"
-        write_tile(str(f), codec, h, w, seed=i, stats=i != 1)
+        write_tile(str(f), codec, h, w, seed=i, stats=i != 1,
+                   crs=f"EPSG:326{z[:2]}")
         files.append(str(f))
     src = tmp / "aef_index.parquet"
     source_index(src, TILES)
@@ -136,9 +138,10 @@ def test_rows_match_the_source_index(tree):
                     url_prefix="https://host/aef/v2/")
     src = pq.read_table(tree["src"])
     assert t.num_rows == len(TILES)
-    src_cols = src.schema.names
-    assert t.schema.names[:len(src_cols) + 1] == (
-        src_cols[:3] + ["source_path"] + src_cols[3:])
+    src_cols = [c for c in src.schema.names
+                if c not in ("crs", "geom", "geom_bbox")]
+    assert t.schema.names == CORE.names + [
+        "source_path" if c == "path" else c for c in src_cols]
     by_src = {r["path"]: r for r in src.to_pylist()}
     want = {f"{SRC_PREFIX}/{y}/{z}/{p}.tiff": f"https://host/aef/v2/{y}/{z}/"
             f"{p}.georvq.zarr" for y, z, p, *_ in TILES}
@@ -151,6 +154,11 @@ def test_rows_match_the_source_index(tree):
                 assert r[c] == s[c], c
         assert r["bitstream_id"] == tree["codec"].bitstream_id
         assert r["decoder_id"] == tree["codec"].decoder_id
+        assert r["crs"] == s["crs"] and r["release"] == "ae-v2"
+        assert r["source_url"].endswith(".tif")
+        b = r["bounds"]
+        assert (b["xmin"], b["xmax"]) == (500000.0, 500000.0 + 10 * r["width"])
+        assert r["bbox"]["xmin"] < r["bbox"]["xmax"]
     # source order
     src_order = [s["path"] for s in src.to_pylist()]
     idx = [src_order.index(r["source_path"]) for r in rows]
@@ -214,13 +222,17 @@ def test_geoparquet_metadata(tree):
     geo = json.loads(pq.read_schema(out).metadata[b"geo"])
     assert set(pq.read_schema(out).metadata) == {b"geo"}
     gc = geo["columns"][geo["primary_column"]]
-    assert geo["primary_column"] == "geom" and geo["version"] == "1.1.0"
+    assert geo["primary_column"] == "geometry" and geo["version"] == "1.1.0"
     assert gc["encoding"] == "WKB"
-    assert gc["covering"]["bbox"] == {k: ["geom_bbox", k]
+    assert gc["covering"]["bbox"] == {k: ["bbox", k]
                                       for k in ("xmin", "ymin", "xmax", "ymax")}
-    bb = t.column("geom_bbox").to_pylist()
+    bb = t.column("bbox").to_pylist()
     assert gc["bbox"] == [min(b["xmin"] for b in bb), min(b["ymin"] for b in bb),
                           max(b["xmax"] for b in bb), max(b["ymax"] for b in bb)]
+    for g, b in zip(t.column("geometry").to_pylist(), bb):
+        xy = np.frombuffer(g[13:], "<f8").reshape(-1, 2)
+        assert len(xy) == 4 * 20 + 1 and (xy[0] == xy[-1]).all()
+        assert xy[:, 0].min() == b["xmin"] and xy[:, 1].max() == b["ymax"]
 
 
 def test_unknown_or_repeated_products_raise(tree):

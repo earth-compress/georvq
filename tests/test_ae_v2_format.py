@@ -45,7 +45,7 @@ H, WD, WIN = 200, 168, 16
 CHUNK_PX = {"base": 128, "mid": 64, "fine": 32}
 BITSTREAM_ID, DECODER_ID = "0123456789abcdef", "fedcba9876543210"
 # attributes whose text comes from GDAL, PROJ or rasterio
-ENV_KEYS = ("proj:wkt2", "proj:projjson", "crs_wkt")
+ENV_KEYS = ("proj:wkt2", "crs_wkt")
 AUX_KEYS = ["band_tags", "block_shapes", "descriptions", "image_structure",
             "orientation", "overviews", "profile", "tags"]
 

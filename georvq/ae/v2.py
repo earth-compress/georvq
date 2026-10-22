@@ -89,6 +89,16 @@ Q_SCALE, Q_OFFSET, Q_FLOOR = _sc.Q_SCALE, _sc.Q_OFFSET, _sc.Q_FLOOR
 ONNX_CHANNEL_NAME = _sc.ONNX_CHANNEL_NAME
 
 _GDAL_ENV = {"GDAL_NUM_THREADS": "ALL_CPUS"}
+TRAINING_DATA = ("the AlphaEarth Foundations Satellite Embedding dataset "
+                 "(CC-BY 4.0), produced by Google and Google DeepMind")
+LICENCE = {
+    "spdx": "CC-BY-4.0",
+    "url": "https://creativecommons.org/licenses/by/4.0/",
+    "attribution": "The AlphaEarth Foundations Satellite Embedding dataset "
+                   "is produced by Google and Google DeepMind.",
+    "changes": "lossy georvq encoding of the int8 embeddings; the decoded "
+               "values are approximations",
+}
 
 
 # --------------------------------------------------------------------------
@@ -156,53 +166,22 @@ def _cos_error(out, x):
 
 
 def _bundle_readme(meta) -> str:
-    tiers = "\n".join(f"- {t}" for t in meta["tiers"])
-    rows = "\n".join(
-        f"| {'-'.join(map(str, r['tuple']))} | {r['bits_window']} | "
-        f"{r['bits_px']:.4f} |" for r in meta["rungs"])
-    size = sum(f["bytes"] for f in meta["files"].values())
-    src = meta.get("source") or {}
-    onnx = (f"\n`{meta['onnx']}/` holds the ONNX export used by the torch-free "
-            "backend (`backend=\"onnx\"`).\n" if meta.get("onnx") else "")
-    return f"""# georvq AE v2 bundle
-
-Decoder and encoder for AlphaEarth annual tiles stored as georvq
-Zarr stores (`{meta['codec_format']}`, see docs/GEORVQ_ZARR.md).
-
-- bitstream_id `{meta['bitstream_id']}`, decoder_id `{meta['decoder_id']}`
-- window {meta['window']} px, {meta['bands']} bands
-- source checkpoint {src.get('checkpoint')} at step {src.get('step')}
-
-Tiers (grid:dim:codes:depth), with {meta['book_bits']}-bit codebooks:
-
-{tiers}
-
-Every window also carries its mean, {meta['mean_channel']['bits']} bits
-through the RVQ-PCA mean channel. The rate of each rung below includes
-it.
-
-| rung | bits/window | bits/px |
-|---|---|---|
-{rows}
-
-Files ({size / 1e6:.1f} MB): `weights.npz` (model tensors), `codebooks.npz`
-(per level an int8 `q` and a float32 per-codeword `scale`, codebook =
-q * scale, with q = -128 standing for -0.0), `mean_channel.npz`,
-`config.json`, `bundle.json`. All arrays load with `allow_pickle=False`.
-{onnx}
-```python
+    from georvq.inference.bundle import bundle_readme
+    return bundle_readme(
+        meta, "georvq AE v2 bundle",
+        "Decoder and encoder for AlphaEarth Foundations annual embedding "
+        "tiles stored as georvq\nZarr stores "
+        f"(`{meta['codec_format']}`, see docs/GEORVQ_ZARR.md).",
+        """
 import georvq
+with georvq.open("tile.georvq.zarr") as ds:     # finds this bundle
+    a = ds.read(quality="8-8-2")              # int8 (64, H, W)
+
 from georvq.ae import v2
 from georvq.ae.v2_bundle import load_bundle
-codec = load_bundle("bundle_v2", device="cuda")
+codec = load_bundle("bundle_dir", device="cuda")
 v2.encode_tile("tile.tif", "tile.georvq.zarr", codec)
-with georvq.open("tile.georvq.zarr", codec=codec) as ds:
-    a = ds.read(quality="8-8-2")
-```
-
-`load_bundle` checks the file hashes and recomputes both ids from the
-loaded tensors.
-"""
+""")
 
 
 AE_V2 = ReleaseSpec(
@@ -215,11 +194,13 @@ AE_V2 = ReleaseSpec(
     release_uri=RELEASE_URI, trusted=TRUSTED_RELEASES, env_bundle=ENV_BUNDLE,
     chunk_px=(BASE_CHUNK_PX, MID_CHUNK_PX, FINE_CHUNK_PX), strip_px=STRIP_PX,
     quality_stats=QUALITY_STATS, quality_error=_cos_error,
+    quality_name="1 - cos",
     quality_error_text="1 - cos(decoded, source) per valid pixel, decoded "
                        "float field against the prepared source",
     quality_encoding_text="code = round(32 * (log10(e) + 6)) clipped to "
                           "0..255; 0 means e <= 1e-6",
-    check_model=_check_model, bundle_readme=_bundle_readme)
+    check_model=_check_model, bundle_readme=_bundle_readme, licence=LICENCE,
+    training_data=TRAINING_DATA)
 
 
 class AEV2Codec(StoreCodec):
@@ -324,6 +305,20 @@ def _source_meta(ds) -> dict:
             "image_structure": ds.tags(ns="IMAGE_STRUCTURE")}
 
 
+def _header_crs(crs):
+    """The CRS a store header records for a source CRS: the one
+    `crs_from_epsg` builds for its EPSG code when the two are equal, as
+    every release's headers do, and the source's own otherwise."""
+    if crs is None:
+        return None
+    epsg = crs.to_epsg()
+    if epsg is not None:
+        built = _sc.crs_from_epsg(epsg)
+        if built == crs:
+            return built
+    return crs
+
+
 class GeoTiffTile:
     """An AE tile, an open rasterio dataset, as a
     georvq.inference.store_codec.ProductSource: north-up strips of its
@@ -341,7 +336,7 @@ class GeoTiffTile:
         self.bottom_up = ds.transform.e > 0
         self.transform = (flip_rows(ds.transform, ds.height) if self.bottom_up
                           else ds.transform)
-        self.crs = ds.crs
+        self.crs = _header_crs(ds.crs)
         meta = _source_meta(ds)
         self.orientation = meta["orientation"]
         self.aux = json.dumps(meta, default=str)

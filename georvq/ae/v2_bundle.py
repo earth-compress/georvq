@@ -32,6 +32,13 @@ def build_bundle(ckpt, mean_npz, out_dir, notes="", onnx=False) -> dict:
                                 onnx=onnx)
 
 
+def write_decoder_bundle(bundle_dir, out_dir, verify=True) -> dict:
+    """The decoder-only float16 variant of the bundle at `bundle_dir`
+    (georvq.inference.bundle.write_decoder_bundle)."""
+    return _bundle.write_decoder_bundle(bundle_dir, out_dir, AE_V2,
+                                        verify=verify)
+
+
 def load_model(bundle_dir, device="cpu", verify=True):
     """(model, bundle.json payload) of a bundle, the model in eval mode.
     `verify` checks the file hashes recorded in bundle.json."""

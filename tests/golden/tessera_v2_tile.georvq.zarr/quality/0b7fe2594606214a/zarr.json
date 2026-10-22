@@ -471,6 +471,7 @@
         }
       ],
       "quality": {
+        "name": "rel_l2",
         "stats": [
           "mean",
           "p99"

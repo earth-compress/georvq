@@ -261,6 +261,7 @@
       ],
       "quality": {
         "column": "quality",
+        "name": "1 - cos",
         "stats": [
           "mean",
           "p99"
@@ -277,6 +278,12 @@
         "nodata": -128,
         "count": 64,
         "band_names": null
+      },
+      "licence": {
+        "spdx": "CC-BY-4.0",
+        "url": "https://creativecommons.org/licenses/by/4.0/",
+        "attribution": "The AlphaEarth Foundations Satellite Embedding dataset is produced by Google and Google DeepMind.",
+        "changes": "lossy georvq encoding of the int8 embeddings; the decoded values are approximations"
       },
       "format": "georvq-zarr",
       "version": "0.5",
@@ -1081,123 +1088,6 @@
     ],
     "proj:code": "EPSG:32633",
     "proj:wkt2": "PROJCRS[\"WGS 84 / UTM zone 33N\",BASEGEOGCRS[\"WGS 84\",DATUM[\"World Geodetic System 1984\",ELLIPSOID[\"WGS 84\",6378137,298.257223563,LENGTHUNIT[\"metre\",1]]],PRIMEM[\"Greenwich\",0,ANGLEUNIT[\"degree\",0.0174532925199433]],ID[\"EPSG\",4326]],CONVERSION[\"UTM zone 33N\",METHOD[\"Transverse Mercator\",ID[\"EPSG\",9807]],PARAMETER[\"Latitude of natural origin\",0,ANGLEUNIT[\"degree\",0.0174532925199433],ID[\"EPSG\",8801]],PARAMETER[\"Longitude of natural origin\",15,ANGLEUNIT[\"degree\",0.0174532925199433],ID[\"EPSG\",8802]],PARAMETER[\"Scale factor at natural origin\",0.9996,SCALEUNIT[\"unity\",1],ID[\"EPSG\",8805]],PARAMETER[\"False easting\",500000,LENGTHUNIT[\"metre\",1],ID[\"EPSG\",8806]],PARAMETER[\"False northing\",0,LENGTHUNIT[\"metre\",1],ID[\"EPSG\",8807]]],CS[Cartesian,2],AXIS[\"easting\",east,ORDER[1],LENGTHUNIT[\"metre\",1]],AXIS[\"northing\",north,ORDER[2],LENGTHUNIT[\"metre\",1]],ID[\"EPSG\",32633]]",
-    "proj:projjson": {
-      "$schema": "https://proj.org/schemas/v0.7/projjson.schema.json",
-      "type": "ProjectedCRS",
-      "name": "WGS 84 / UTM zone 33N",
-      "base_crs": {
-        "type": "GeographicCRS",
-        "name": "WGS 84",
-        "datum": {
-          "type": "GeodeticReferenceFrame",
-          "name": "World Geodetic System 1984",
-          "ellipsoid": {
-            "name": "WGS 84",
-            "semi_major_axis": 6378137,
-            "inverse_flattening": 298.257223563
-          }
-        },
-        "coordinate_system": {
-          "subtype": "ellipsoidal",
-          "axis": [
-            {
-              "name": "Geodetic latitude",
-              "abbreviation": "Lat",
-              "direction": "north",
-              "unit": "degree"
-            },
-            {
-              "name": "Geodetic longitude",
-              "abbreviation": "Lon",
-              "direction": "east",
-              "unit": "degree"
-            }
-          ]
-        },
-        "id": {
-          "authority": "EPSG",
-          "code": 4326
-        }
-      },
-      "conversion": {
-        "name": "UTM zone 33N",
-        "method": {
-          "name": "Transverse Mercator",
-          "id": {
-            "authority": "EPSG",
-            "code": 9807
-          }
-        },
-        "parameters": [
-          {
-            "name": "Latitude of natural origin",
-            "value": 0,
-            "unit": "degree",
-            "id": {
-              "authority": "EPSG",
-              "code": 8801
-            }
-          },
-          {
-            "name": "Longitude of natural origin",
-            "value": 15,
-            "unit": "degree",
-            "id": {
-              "authority": "EPSG",
-              "code": 8802
-            }
-          },
-          {
-            "name": "Scale factor at natural origin",
-            "value": 0.9996,
-            "unit": "unity",
-            "id": {
-              "authority": "EPSG",
-              "code": 8805
-            }
-          },
-          {
-            "name": "False easting",
-            "value": 500000,
-            "unit": "metre",
-            "id": {
-              "authority": "EPSG",
-              "code": 8806
-            }
-          },
-          {
-            "name": "False northing",
-            "value": 0,
-            "unit": "metre",
-            "id": {
-              "authority": "EPSG",
-              "code": 8807
-            }
-          }
-        ]
-      },
-      "coordinate_system": {
-        "subtype": "Cartesian",
-        "axis": [
-          {
-            "name": "Easting",
-            "abbreviation": "",
-            "direction": "east",
-            "unit": "metre"
-          },
-          {
-            "name": "Northing",
-            "abbreviation": "",
-            "direction": "north",
-            "unit": "metre"
-          }
-        ]
-      },
-      "id": {
-        "authority": "EPSG",
-        "code": 32633
-      }
-    },
     "spatial:dimensions": [
       "y",
       "x"
@@ -1923,6 +1813,7 @@
               }
             ],
             "quality": {
+              "name": "1 - cos",
               "stats": [
                 "mean",
                 "p99"

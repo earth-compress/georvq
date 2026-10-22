@@ -401,6 +401,12 @@
       "window_order": "row-major",
       "window_px": 16
      },
+     "licence": {
+      "attribution": "The AlphaEarth Foundations Satellite Embedding dataset is produced by Google and Google DeepMind.",
+      "changes": "lossy georvq encoding of the int8 embeddings; the decoded values are approximations",
+      "spdx": "CC-BY-4.0",
+      "url": "https://creativecommons.org/licenses/by/4.0/"
+     },
      "output": {
       "band_names": null,
       "count": 64,
@@ -432,6 +438,7 @@
       "decode_precision": "fp32",
       "encoding": "code = round(32 * (log10(e) + 6)) clipped to 0..255; 0 means e <= 1e-6",
       "error": "1 - cos(decoded, source) per valid pixel, decoded float field against the prepared source",
+      "name": "1 - cos",
       "offset": 6.0,
       "order": "per stat, one byte per rung in header rungs order",
       "scale": 32.0,
@@ -972,6 +979,7 @@
       "decode_precision": "fp32",
       "encoding": "code = round(32 * (log10(e) + 6)) clipped to 0..255; 0 means e <= 1e-6",
       "error": "1 - cos(decoded, source) per valid pixel, decoded float field against the prepared source",
+      "name": "1 - cos",
       "offset": 6.0,
       "order": "per stat, one byte per rung in header rungs order",
       "scale": 32.0,
