@@ -143,15 +143,16 @@ def _three_tier_cfg(tiers, window=24, **model):
                   **model}})
 
 
-def test_w60_preset_has_three_nested_tiers():
-    """s2_w60: one whole-window cell, 5 x 5 cells of 12 px and 10 x 10
-    cells of 6 px, all 128 wide."""
-    m = build_model(load_config("configs/s2/s2_w60.yaml"))
+def test_three_tier_encoder_nests_its_tiers():
+    """A 60 px window: one whole-window cell, 5 x 5 cells of 12 px and
+    10 x 10 cells of 6 px."""
+    m = build_model(_three_tier_cfg(["1:8:16:2", "5:8:16:2", "10:8:16:2"],
+                                    window=60))
     x = {"10m": torch.randn(2, 4, 60, 60), "20m": torch.randn(2, 6, 30, 30),
          "60m": torch.randn(2, 3, 10, 10)}
     zs = m.encode_levels(x)
     assert [tuple(z.shape) for z in zs] == \
-        [(2, 1, 128), (2, 25, 128), (2, 100, 128)]
+        [(2, 1, 8), (2, 25, 8), (2, 100, 8)]
 
 
 def test_two_tier_encoder_has_only_beta_parameters():

@@ -138,3 +138,19 @@ def test_each_tier1_field_is_retired(path, value):
         cur = cur[k]
     cur[last] = value
     Config.model_validate(drop_retired(raw))
+
+
+def test_coarse_decoder_fields_still_validate_from_a_checkpoint():
+    """S2 checkpoints written between 21 and 22 October 2026 carry
+    model.coarse_decoder and train.coarse_decoder_only, at their defaults
+    or set (the beta_arch_w36_coarse run)."""
+    for dec, only in ((None, False),
+                      ({"widths": [192, 128, 64], "blocks": 2}, True)):
+        raw = _raw()
+        raw["model"]["coarse_decoder"] = dec
+        raw["train"]["coarse_decoder_only"] = only
+        with pytest.raises(Exception):
+            Config.model_validate(raw)
+        cfg = Config.model_validate(drop_retired(raw))
+        assert cfg.model_dump(mode="json") == Config.model_validate(
+            _raw()).model_dump(mode="json")
