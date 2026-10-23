@@ -35,7 +35,7 @@ import threading
 import numpy as np
 import pandas as pd
 
-from georvq.data.store import geographic_split
+from georvq.data.store import geographic_split, spread_rows
 
 # band -> native group, in the order each group's planes are stacked
 BANDS_10M = ["B02", "B03", "B04", "B08"]
@@ -153,7 +153,15 @@ class LiveS2Store:
         return _LiveGroupShard(self, int(sh) * self.SHARD, group)
 
     def split(self, val_frac=0.04, seed=0, cell_deg=10.0):
-        return geographic_split(self.index, val_frac, cell_deg, seed)
+        """Geographic split, with the val rows in `spread_rows` order.
+
+        The catalogue is sorted by grid name, so in index order the first
+        256 val chips (all that `fixed_val_tokens` reads) came from 4 of
+        the 8 val cells and missed every val cell north of 40 degrees.
+        Reordering them seeded by the split seed spreads any prefix over
+        all val cells; which chips are held out is unchanged."""
+        train, val = geographic_split(self.index, val_frac, cell_deg, seed)
+        return train, spread_rows(val, cell_deg, seed)
 
     # ---- live reads ----
 

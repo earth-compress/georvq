@@ -84,8 +84,8 @@ pip install -e ".[train,eval,viz,onnx,era5,dev]"   # everything
 
 The extras are `train`, `tessera`, `baseline`, `eval`, `viz`, `onnx`,
 `era5`, `notebooks` and `dev`. The oldest tested versions are Python
-3.10, torch 2.10, numpy 2.0, rasterio 1.4 and, in `[onnx]`, onnxruntime
-1.19; `[era5]` needs Python 3.11 for zarr 3.
+3.12 (zarr-python 3.3 needs it), torch 2.10, numpy 2.0, rasterio 1.4
+and, in `[onnx]`, onnxruntime 1.19.
 
 ## Quickstart: the AlphaEarth release codec
 
@@ -97,19 +97,19 @@ takes five steps. For more detailed information about the release, see `docs/AE_
 git clone <this repo> && cd georvq
 pip install -e .
 
-# 2. use it; the weights a file needs are fetched on first read  [pending: hosting]
-python -m georvq.ae.v2 info   tile.georvq.parquet
-python -m georvq.ae.v2 decode tile.georvq.parquet out.npy --quality 8-8-2
+# 2. use it; the weights a store needs are fetched on first read  [pending: hosting]
+python -m georvq.ae.v2 info   tile.georvq.zarr
+python -m georvq.ae.v2 decode tile.georvq.zarr out.npy --quality 8-8-2
 python -m georvq.ae.v2 encode src.tif out_dir/ --bundle <bundle dir> --device cuda
 ```
 
 ```python
-import georvq.ae
-ds = georvq.ae.open("<url or path>/annual/2021/44N/<stem>.georvq.parquet")
+import georvq
+ds = georvq.open("<url or path>/annual/2021/44N/<stem>.georvq.zarr")
 a = ds.read(window=((0, 1024), (0, 1024)), quality="p99<=0.02")
 ```
 
-The file names the release that decodes it, so when you first `open` a file that uses the codec, the
+The store names the release that decodes it, so when you first `open` a store that uses the codec, the
 bundle will be automatically downloaded from Hugging Face. Decoding runs
 on torch, or on ONNX Runtime when asked for (`backend="onnx"`).
 
@@ -132,7 +132,7 @@ georvq-train -c configs/ae/hybrid_rate.yaml --gpu 0 train.init_from=checkpoints/
 Presets are grouped by source under `configs/<source>/`. `configs/ae/`
 holds `pyr64`, the standard recipe, and the exploratory `stage1`,
 `hybrid_rate`, `cascade` and `satclip_select`. `configs/tessera/` holds
-the lineage ending at the released `tessera_vq8_k256_statscond`, and
+the lineage ending at the released `tessera_v2`, and
 `s2/`, `dem/` and `era5/` hold the presets for those sources.
 `smoke.yaml` (CI) is at the top level. A preset's `data.store_dir`
 points at the group server, so override it for your own store.
@@ -162,44 +162,46 @@ the source before choosing an architecture for it.
 
 ## Ship
 
-Release bundles (`georvq.inference.release`) are self-contained
-directories, holding the weights, the embedded config and the
-`bitstream_id`, that decode anywhere georvq is installed:
+Release bundles (`georvq.inference.bundle`) are self-contained
+directories, holding the weights, the config and the `bitstream_id`,
+that decode anywhere georvq is installed:
 
 ```python
-from georvq.inference.release import load_release
-codec = load_release("releases/my_run", device="cuda")
-xhat = codec.decode(codec.encode(x), depths=[8, 4, 0])
+from georvq.tessera.v2 import load_bundle
+codec = load_bundle("georvq-tessera-v2", device="cuda").codec
+xhat = codec.decode(codec.encode(x), depths=[20, 13, 0])
 ```
 
 Each shipped source also has its own release layer on top of this
 generic code, which sets the container, the side channels and the
-executables for that source. Two are shipped. They differ in how the
-mean is coded, in the container and in whether a refinement is offered,
-and each of those choices was measured on its source.
+executables for that source. Two are shipped. They share the store
+format and the kind of mean channel, and differ in the mean channel's
+rate, in the output they return and in the quality statistic, and each
+of those choices was measured on its source.
 
 The AlphaEarth release (`georvq/ae/v2.py`, `docs/AE_RELEASE.md`) codes
 each source tile with a model that transmits each window's mean (440
-bits per window), and writes one GeoParquet file per tile
-(`docs/GEORVQ_PARQUET.md`). The reader stands in for the source tile's
-rasterio dataset and fetches only the byte ranges that a window and rate
+bits per window), and writes one Zarr store per tile
+(`docs/GEORVQ_ZARR.md`). The reader stands in for the source tile's
+rasterio dataset and fetches only the chunks that a window and rate
 need. The rate is picked from 23 rungs (0.11-7.5 b/px), or from a bound
 on the error measured at encode time:
 
 ```python
-import georvq.ae
-ds = georvq.ae.open(url)
+import georvq
+ds = georvq.open(url)
 a = ds.read(window=((0, 1024), (0, 1024)), quality="8-8-2")
 ```
 
-The Tessera release (`georvq/tessera/`, `docs/TESSERA_RELEASE.md`) codes
-128-band embedding windows across 0.23–10.9 b/px. It transmits the
-patch mean as a side channel and offers an opt-in fine-tier refinement:
+The Tessera release (`georvq/tessera/v2.py`, `docs/TESSERA_RELEASE.md`)
+codes each geotessera tile (128 bands) as one Zarr store, readable at 42
+rungs across 0.23–9.8 b/px. It transmits each window's mean (896 bits
+per window) and returns float32 embeddings:
 
 ```python
-from georvq.tessera import load
-R = load("/data/georvq-releases/tessera-beta-v1/bundle", device="cuda")
-recon = R.decode(R.encode(x, valid=v), depths=[20, 20, 5], valid=v)
+import georvq
+ds = georvq.open("2024/grid_-9.35_30.15.georvq.zarr")
+a = ds.read(quality="20-13-0")
 ```
 
 ## Docs
@@ -214,8 +216,8 @@ recon = R.decode(R.encode(x, valid=v), depths=[20, 20, 5], valid=v)
   new dataset.
 - `docs/SOURCE_ONBOARDING.md` describes the measurements of a new source
   that inform its architecture.
-- `docs/GEORVQ_PARQUET.md` specifies the GeoParquet file the AE codec
-  writes, for anyone reading the files without the georvq reader.
+- `docs/GEORVQ_ZARR.md` specifies the Zarr store the AE codec
+  writes, for anyone reading the stores without the georvq reader.
 - `docs/BITSTREAM.md` defines what a bitstream depends on, and why
   decoders can be upgraded without re-encoding.
 - `docs/DESIGN.md` explains how the method works and why it is built
@@ -231,10 +233,10 @@ pytest                 # adds the resume and real-checkpoint tests
 ```
 
 The golden decode tests (`tests/test_ae_v2_bundle.py` for the AlphaEarth
-release, `tests/test_tessera_bundle.py` for the Tessera release) verify
+release, `tests/test_tessera_v2_bundle.py` for the Tessera release) verify
 that released weights still encode and decode bit for bit, and skip
 themselves where the bundle is not present (`GEORVQ_AE_V2_BUNDLE`,
-`GEORVQ_AE_BUNDLE`, `GEORVQ_TESSERA_BUNDLE`). The recorded hashes hold
+`GEORVQ_AE_BUNDLE`, `GEORVQ_TESSERA_V2_BUNDLE`, `GEORVQ_TESSERA_BUNDLE`). The recorded hashes hold
 on torch 2.10 or later with numpy 2; older versions give different codes.
 
 ## Development
@@ -262,7 +264,8 @@ This work was funded by the Advanced Research and Invention Agency
 The code is licensed under the Apache License 2.0 (`LICENSE`), as are the
 model weights on Hugging Face. A few files are derived from third-party
 datasets and carry those datasets' terms instead: test fixtures and
-notebook outputs from AlphaEarth (CC-BY 4.0) and TESSERA (CC-BY-SA 4.0),
+notebook outputs from AlphaEarth (CC-BY 4.0), TESSERA (CC-BY-SA 4.0) and
+Copernicus Sentinel-2 (the Copernicus Sentinel data terms),
 a PCA basis fitted on Major TOM Core-S2L1C (CC-BY-SA 4.0), and ERA5
 statistics (CC-BY 4.0). `NOTICE` lists each file with its attribution,
 and the licence texts are in `LICENSES/`. Data encoded or decoded with the AE

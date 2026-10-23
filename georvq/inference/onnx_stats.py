@@ -13,7 +13,14 @@ split as follows:
   post-decode step applied, as `PyramidCodec.decode` returns it.
 - `codebooks.npz`: residual assignment and the codebook sums run in
   numpy (`rvq_assign_np`, `rvq_lookup_np`), so the indices that define
-  the bitstream come from the same arithmetic in every backend.
+  the bitstream come from the same arithmetic in every backend. A model
+  with int8 books (`vq.book_bits`) stores them as a release bundle does
+  (georvq.inference.bundle: `rvqs.<t>.levels.<l>.q` int8 and `.scale`
+  float32, -128 for -0.0), and `load_books_np` rebuilds the float32
+  books bit for bit; a model with float32 books stores `cb_t<t>_l<l>`.
+  An export inside a release bundle (`books=False`) writes no
+  codebooks.npz and names the bundle's own, `../codebooks.npz`, in
+  meta.json's `codebooks`, so the books are stored once.
 
 The stats are whatever the release transmits, already decoded to floats
 (for a mean channel, `channel.decode(fields)`). Coding them is the
@@ -48,6 +55,59 @@ DECODER_NAME = "decoder.onnx"
 # numpy RVQ
 # --------------------------------------------------------------------------
 
+NEG_ZERO = -128
+BUNDLE_BOOKS = "../codebooks.npz"
+
+
+def book_from_int_np(q, scale):
+    """float32(q) * scale per codeword, q = -128 standing for -0.0: the
+    numpy twin of georvq.inference.bundle.book_from_int, equal to it bit
+    for bit."""
+    q = np.asarray(q)
+    f = q.astype(np.float32)
+    f[q == NEG_ZERO] = np.float32(-0.0)
+    return f * np.asarray(scale, dtype=np.float32)[:, None]
+
+
+def export_file(export_dir, name) -> str:
+    """Path of a file meta.json names: in the export directory, or with
+    "../" in the bundle that holds it."""
+    base = name[3:] if name.startswith("../") else name
+    if not base or "/" in base or "\\" in base or base.startswith("."):
+        raise ValueError(f"{export_dir}: meta.json names {name!r}")
+    return os.path.join(export_dir, name)
+
+
+def load_books_np(path, depths):
+    """Per tier, the list of (K, dim) float32 books of a codebooks.npz in
+    either layout, for tiers of the given depths."""
+    with np.load(path, allow_pickle=False) as z:
+        if "cb_t0_l0" in z.files:
+            return [[z[f"cb_t{i}_l{j}"] for j in range(d)]
+                    for i, d in enumerate(depths)]
+        return [[book_from_int_np(z[f"rvqs.{i}.levels.{j}.q"],
+                                  z[f"rvqs.{i}.levels.{j}.scale"])
+                 for j in range(d)] for i, d in enumerate(depths)]
+
+
+def save_books_np(model, path):
+    """Write the model's books to `path`: int8 as a bundle stores them
+    when the model has `vq.book_bits`, else float32 `cb_t<t>_l<l>`."""
+    bits = model.cfg.vq.book_bits
+    books = {}
+    for i, rvq in enumerate(model.rvqs):
+        for j, lev in enumerate(rvq.levels):
+            w = lev.codebook.weight.detach().float().cpu()
+            if bits:
+                from georvq.inference.bundle import book_to_int
+                q, sc = book_to_int(w, bits)
+                books[f"rvqs.{i}.levels.{j}.q"] = q
+                books[f"rvqs.{i}.levels.{j}.scale"] = sc
+            else:
+                books[f"cb_t{i}_l{j}"] = w.numpy()
+    np.savez(path, **books)
+
+
 def rvq_assign_np(z, books, return_residual=False):
     """z: (B, cells, dim) fp32; books: list of (K, dim) codebooks.
     Greedy residual assignment -> (B, cells, depth) int64 indices
@@ -79,9 +139,11 @@ def rvq_lookup_np(indices, books, L=None):
 # --------------------------------------------------------------------------
 
 def export_stats_onnx(model, out_dir, extra_id=(), meta_extra=None,
-                      opset=18):
+                      opset=18, books=True):
     """Export a stats_cond PyramidCodec to `out_dir` (encoder.onnx,
-    decoder.onnx, codebooks.npz, meta.json). `extra_id` is the release's
+    decoder.onnx, codebooks.npz, meta.json); with `books=False` the
+    codebooks are the bundle's (meta.json `codebooks` "../codebooks.npz")
+    and none are written. `extra_id` is the release's
     bitstream-defining state, hashed into the recorded bitstream id;
     `meta_extra` is merged into meta.json. `opset` is the opset asked of
     the exporter, which writes a decoder with ReduceL2 (AE's per-pixel
@@ -150,11 +212,8 @@ def export_stats_onnx(model, out_dir, extra_id=(), meta_extra=None,
                         {0: batch}, {0: batch}),
         opset_version=opset, dynamo=True)
 
-    books = {f"cb_t{i}_l{j}": lev.codebook.weight.detach()
-             .float().cpu().numpy()
-             for i, rvq in enumerate(model.rvqs)
-             for j, lev in enumerate(rvq.levels)}
-    np.savez(os.path.join(out_dir, CODEBOOKS_NAME), **books)
+    if books:
+        save_books_np(model, os.path.join(out_dir, CODEBOOKS_NAME))
 
     from georvq.inference.release import bitstream_id, decoder_id
     graph_opsets = {n: _graph_opset(os.path.join(out_dir, f))
@@ -174,6 +233,7 @@ def export_stats_onnx(model, out_dir, extra_id=(), meta_extra=None,
         "opset": max((v for v in graph_opsets.values() if v is not None),
                      default=None),
         "graph_opsets": graph_opsets,
+        "codebooks": CODEBOOKS_NAME if books else BUNDLE_BOOKS,
     }
     meta.update(meta_extra or {})
     with open(os.path.join(out_dir, META_NAME), "w") as f:
@@ -210,9 +270,10 @@ class OnnxStatsCodec:
         self.window = int(self.meta["window"])
         self.bands = int(self.meta["bands"])
         self.tiers = self.meta["tiers"]
-        z = np.load(os.path.join(export_dir, CODEBOOKS_NAME))
-        self.books = [[z[f"cb_t{i}_l{j}"] for j in range(t["depth"])]
-                      for i, t in enumerate(self.tiers)]
+        self.books = load_books_np(
+            export_file(export_dir, self.meta.get("codebooks",
+                                                  CODEBOOKS_NAME)),
+            [t["depth"] for t in self.tiers])
         providers = ["CPUExecutionProvider"]
         if device.startswith("cuda"):
             if "CUDAExecutionProvider" not in ort.get_available_providers():

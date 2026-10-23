@@ -36,8 +36,8 @@ class Packet:
     # depth. Optional additive refinements: a decoder adds one to its
     # tier's tokens when that tier is decoded at full depth, buying back
     # the quantizer gap the codebooks left behind. Which tier is worth
-    # refining differs by model (see georvq.inference.refine); dropping a
-    # refinement always yields a valid decode.
+    # refining differs by model (lab/findings/refinement-budget-is-the-
+    # ceiling-gap.md); dropping a refinement always yields a valid decode.
 
 
 class Codec:
@@ -58,8 +58,8 @@ class Codec:
         window, at full depth (truncate at decode time for lower rates).
 
         refine_tiers: tier indices whose post-RVQ residual to carry as an
-        additive refinement (see georvq.inference.refine). Which tier is
-        worth refining is model-specific.
+        additive refinement, carried as floats; no release quantises one
+        for transmission. Which tier is worth refining is model-specific.
 
         valid/mean: for `stats_cond` models the per-window mean is part
         of the packet. It is measured from the input unless supplied —

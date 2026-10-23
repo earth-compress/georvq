@@ -74,33 +74,6 @@ def test_mismatched_scale_plane_is_rejected():
         io.prep(q, np.ones((2, 32, 32), np.float32))
 
 
-def test_windowing_round_trips_and_crops_rather_than_pads():
-    x = torch.randn(1, 4, 150, 200)
-    valid = torch.ones(1, 150, 200, dtype=torch.bool)
-    xw, vw, grid = io.to_windows(x, valid, window=64)
-    assert grid == (1, 2, 3) and xw.shape == (6, 4, 64, 64)
-    assert vw.shape == (6, 64, 64)
-    back = io.from_windows(xw, grid, window=64)
-    assert torch.equal(back, x[:, :, :128, :192])     # cropped, never padded
-
-
-def test_a_tile_smaller_than_one_window_is_an_error():
-    with pytest.raises(ValueError, match="smaller than one"):
-        io.to_windows(torch.randn(1, 4, 32, 32),
-                      torch.ones(1, 32, 32, dtype=torch.bool), window=64)
-
-
-def test_requantize_returns_to_source_units():
-    q, scale = _fake(n=1)
-    x, _ = io.prep(q, scale, device="cpu")
-    orig = io.requantize(x)
-    assert torch.allclose(orig, x * TesseraSource.XNORM)
-    _, codes = io.requantize(x, scale[0].astype(np.float32))
-    assert codes.dtype == torch.int8
-    ok = torch.from_numpy(q[0]).ne(0).any(0)          # ignore nodata pixels
-    assert torch.equal(codes[0][:, ok], torch.from_numpy(q[0])[:, ok])
-
-
 def test_prep_accepts_the_layout_geotessera_actually_returns():
     """geotessera hands out (H, W, bands); the store is (bands, H, W).
     Both must land on identical tensors, or the demo path and the
@@ -121,44 +94,3 @@ def test_prep_refuses_to_guess_an_ambiguous_layout():
     with pytest.raises(ValueError, match="cannot tell the layout"):
         io.prep(amb, np.ones((64, 128), np.float32))
     io.prep(amb, np.ones((64, 128), np.float32), channels_last=False)
-
-
-@pytest.fixture(scope="module")
-def tiny_release(tmp_path_factory):
-    from tests.test_tessera_release import _tiny_bundle
-    from georvq.tessera import release as rel
-    torch.manual_seed(0)
-    return rel.load(str(_tiny_bundle(tmp_path_factory.mktemp("tess"))))
-
-
-def _field(c=8, h=32, w=96, seed=0):
-    g = np.random.default_rng(seed)
-    x = g.normal(size=(c, h, w)).astype(np.float32) * 0.1
-    x[:, :, 64:] = 0                       # nodata: all-zero vectors
-    return x
-
-
-def test_decode_tile_restores_nodata(tiny_release):
-    R = tiny_release
-    x = _field()
-    packets, grid = io.encode_tile(R, x)
-    assert tuple(grid) == (1, 32 // R.window, 96 // R.window)
-    out = io.decode_tile(R, packets, grid)
-    assert (out[0, :, :, 64:] == 0).all()
-    assert (out[0, :, :, :64].abs().sum(0) > 0).all()
-    # a plain tuple grid carries no validity: nodata decodes as the mean
-    plain = io.decode_tile(R, packets, tuple(grid))
-    assert plain[0, :, :, 64:].abs().max() > 0
-    assert torch.equal(plain[0, :, :, :64], out[0, :, :, :64])
-    assert torch.equal(io.decode_tile(R, packets, tuple(grid), valid=grid.valid),
-                       out)
-
-
-def test_encode_tile_takes_channels_last(tiny_release):
-    R = tiny_release
-    x = _field(w=128)                      # (8, 32, 128): W equals 128 bands
-    pk, grid = io.encode_tile(R, x, channels_last=False)
-    pk_t, grid_t = io.encode_tile(R, np.ascontiguousarray(x.transpose(1, 2, 0)),
-                                  channels_last=True)
-    assert tuple(grid) == tuple(grid_t)
-    assert torch.equal(io.decode_tile(R, pk, grid), io.decode_tile(R, pk_t, grid_t))

@@ -1,6 +1,6 @@
 """AE v2 release layer: a synthetic bottom-up tile through encode to a
-georvq GeoParquet file, the rasterio-like reader and reconstruction,
-against a tiny stats_cond model trained for a few steps on CPU."""
+georvq Zarr store, the rasterio-like reader and reconstruction, against
+a tiny stats_cond model trained for a few steps on CPU."""
 import numpy as np
 import pytest
 import torch
@@ -14,8 +14,8 @@ from georvq.ae.v2 import requant_ae_np  # noqa: E402
 from georvq.config import TierSpec, load_config  # noqa: E402
 from georvq.factory import build_model  # noqa: E402
 from georvq.inference.api import Codec  # noqa: E402
-from georvq.inference.georvq_parquet import RVQParquetReader  # noqa: E402
 from georvq.inference.mean_codec import RVQPCAMeanChannel  # noqa: E402
+from georvq.inference.records import RecordReader  # noqa: E402
 from georvq.model.codec import sample_path_depths  # noqa: E402
 
 H, WD, WIN = 200, 168, 16
@@ -130,7 +130,7 @@ def setup(tmp_path_factory):
         ds.update_tags(AREA_OR_POINT="Area")
         for b in range(1, 65):
             ds.set_band_description(b, f"A{b - 1:02d}")
-    out = tmp / "tile.georvq.parquet"
+    out = tmp / "tile.georvq.zarr"
     v2.encode_tile(src, out, codec, stats=True, chunk_px=CHUNK_PX, strip_px=48,
                    batch=256)
     return {"codec": codec, "src": src, "file": out, "north": north,
@@ -217,7 +217,7 @@ def test_window_read_is_a_crop_of_the_full_read(setup):
 def test_quality_codes_fall_along_the_ladder(setup):
     codec = setup["codec"]
     n = len(codec.rungs)
-    with RVQParquetReader(setup["file"]) as rd:
+    with RecordReader(setup["file"]) as rd:
         got = rd.read(0, rd.window_grid[0], 0, rd.window_grid[1],
                       depths=(0, 0, 0), mask=False, quality=True)
         q, live = got["quality"], got["base"].any(-1)
@@ -255,24 +255,25 @@ def test_quality_bound_picks_rungs_per_window(setup):
         _same_decode(north[sl], full[k][sl])
 
 
-def test_point_read_is_one_request_per_tier_then_cached(setup):
-    with v2.open_dataset(setup["file"], codec=setup["codec"], first_read=4096,
-                         gap=0) as ds:
+def test_point_read_is_one_read_per_array_then_cached(setup):
+    with v2.open_dataset(setup["file"], codec=setup["codec"]) as ds:
         rd = ds.reader
         assert rd.chunk_grids == {"base": (2, 2), "mid": (4, 3), "fine": (7, 6),
                                   "quality": (2, 2)}
         # source row 100 is north-up row 99, window (6, 4)
         plan = rd.plan(6, 7, 4, 5, depths=(3, 2, 1))
-        assert len(plan) == 3
+        masked = (0, 0) in rd.masked               # the point's base chunk
+        assert sorted(name for name, _ in plan) == (
+            ["base", "fine"] + ["mask"] * masked + ["mid"])
         before = dict(rd.stats)
         a = ds.read(window=Window(70, 100, 1, 1), quality="3-2-1")
-        assert rd.stats["requests"] - before["requests"] == 3
-        assert rd.stats["bytes"] - before["bytes"] == sum(n for _, n in plan)
+        # one base chunk (and its mask), two mid levels and one fine level
+        assert rd.stats["values"] - before["values"] == 4 + masked
         before = dict(rd.stats)
         b = ds.read(window=Window(68, 98, 3, 3), quality="3-2-1")
-        assert rd.stats["requests"] == before["requests"]
+        assert rd.stats["values"] == before["values"]
         _same_decode(a, b[:, 2:3, 2:3])
-        # a quality bound fetches the quality chunk, then only what the
+        # a quality bound reads the quality chunk, then only what the
         # cache lacks
         assert len(rd.plan(6, 7, 4, 5, depths=(0, 0, 0), base=False, mask=False,
                            quality=True)) == 1
@@ -283,7 +284,7 @@ def test_point_read_is_one_request_per_tier_then_cached(setup):
 def test_header_records_the_given_source(setup):
     with v2.open_dataset(setup["file"], codec=setup["codec"]) as ds:
         assert ds.product["source"] == str(setup["src"])
-    out = setup["tmp"] / "named.georvq.parquet"
+    out = setup["tmp"] / "named.georvq.zarr"
     url = "https://data.source.coop/tge-labs/aef/v1/annual/tile.tiff"
     v2.encode_tile(setup["src"], out, setup["codec"], stats=False,
                    chunk_px=CHUNK_PX, strip_px=48, batch=256, source=url)
@@ -291,10 +292,10 @@ def test_header_records_the_given_source(setup):
         assert ds.product["source"] == url
 
 
-def test_empty_chunk_reads_as_nodata_without_a_request(setup):
+def test_empty_chunk_reads_as_nodata_without_a_read(setup):
     # the fixture's corner widened to cover fine chunk (0, 0), north-up
     # rows 0..31 and columns 0..31
-    src, out = setup["tmp"] / "corner.tif", setup["tmp"] / "corner.georvq.parquet"
+    src, out = setup["tmp"] / "corner.tif", setup["tmp"] / "corner.georvq.zarr"
     with rasterio.open(setup["src"]) as s:
         a, prof = s.read(), s.profile
     a[:, H - 32:, :50] = v2.NODATA
@@ -302,8 +303,7 @@ def test_empty_chunk_reads_as_nodata_without_a_request(setup):
         d.write(a)
     v2.encode_tile(src, out, setup["codec"], stats=True, chunk_px=CHUNK_PX,
                    strip_px=48, batch=256)
-    with v2.open_dataset(out, codec=setup["codec"], first_read=4096,
-                         gap=0) as ds:
+    with v2.open_dataset(out, codec=setup["codec"]) as ds:
         rd = ds.reader
         assert rd.empty["fine"] == {(0, 0)} and not rd.empty["mid"]
         before = dict(rd.stats)
@@ -345,7 +345,7 @@ def test_geometry_matches_rasterio_on_the_source(setup):
         for k in ("bounds", "res", "shape", "indexes", "transform", "crs"):
             assert getattr(ds, k) == getattr(s, k), k
         assert ds.meta == s.meta
-        assert ds.driver == "GeoRVQParquet" and ds.overviews(1) == []
+        assert ds.driver == "GeoRVQZarr" and ds.overviews(1) == []
         for rc in [(0, 0), (H - 1, 0), (17, WD - 1), (33.4, 101.7)]:
             for off in ("center", "ul", "lr"):
                 assert ds.xy(*rc, offset=off) == s.xy(*rc, offset=off)
@@ -456,7 +456,7 @@ def test_ae_instance_layout_matches_the_spec():
     assert ch.cost_bits() == 440
     lay = v2.layout(specs, 64, ch, n_rungs=23)
     assert {k: (g.chunk_px, g.chunk_windows) for k, g in lay.groups.items()} == {
-        "base": (8192, 128), "mid": (4096, 64), "fine": (1024, 16),
+        "base": (8192, 128), "mid": (8192, 128), "fine": (1024, 16),
         "quality": (8192, 128)}
     assert lay.column_order == (["base", "mask"] + [f"mid_{i}" for i in range(1, 9)]
                                 + [f"fine_{i}" for i in range(1, 9)] + ["quality"])
@@ -466,26 +466,32 @@ def test_ae_instance_layout_matches_the_spec():
     n = {k: g.chunk_windows ** 2 for k, g in lay.groups.items()}
     assert [rb[c] * n[lay.kind_of[c]] for c in ("base", "mid_1", "fine_1",
                                                  "quality")] == [
-        1081344, 106496, 114688, 753664]
+        1081344, 425984, 114688, 753664]
     assert [t.name for t in lay.tiers] == ["coarse", "mid", "fine"]
     assert lay.tiers[0].in_base
     assert v2.rung_bits(specs, (8, 8, 2), ch) == 440 + 88 + 8 * 16 * 13 + 2 * 256 * 14
 
 
 def test_output_name_and_info(setup, capsys):
-    from georvq.inference.georvq_parquet import output_name
+    from georvq.inference.records import output_name
     assert output_name("/x/y/x21yf-0000008192-0000000000.tiff") == \
-        "x21yf-0000008192-0000000000.georvq.parquet"
+        "x21yf-0000008192-0000000000.georvq.zarr"
     assert v2.main(["info", str(setup["file"])]) == 0
     out = capsys.readouterr().out
-    assert "georvq-parquet" in out and "fine" in out and "footer" in out
+    assert "georvq-zarr" in out and "fine" in out and "store" in out
+    assert "quality for decoders ['" in out
 
 
 def test_quality_code_round_trip():
-    e = np.array([0.0, 1e-7, 1e-6, 1e-3, 0.02, 1.0, np.nan])
+    e = np.array([0.0, 1e-7, 1e-6, 1e-3, 0.02, 1.0, 0.0123, np.nan])
     c = v2.quality_code(e)
     assert list(c[:3]) == [0, 0, 0] and c[-1] == 0
-    assert np.allclose(v2.quality_value(c[3:6]), e[3:6], rtol=0.04)
+    # codes round up: the value of a code is the smallest step at or
+    # above the error, so a bound on it is never exceeded
+    v = v2.quality_value(c[3:7])
+    assert (v >= e[3:7] * (1 - 1e-12)).all()
+    assert (v2.quality_value(c[3:7] - 1) < e[3:7]).all()
+    assert np.allclose(v, e[3:7], rtol=0.075)
 
 
 @pytest.fixture(scope="module")

@@ -189,10 +189,10 @@ quickest way to see which decisions are policy rather than architecture:
 
 | | AlphaEarth (`georvq/ae/`) | Tessera (`georvq/tessera/`) |
 |---|---|---|
-| container | one GeoParquet file per source tile | packets; no container yet, none required |
-| stats channel | the window mean, 440 bits/window (RVQ + PCA), charged | the patch mean, 768 bits/window, charged |
-| refinement | none | fine tier, 1-bit rotated Lloyd, opt-in (+150% rate) |
-| quality control | encode-time measured error ladder | not built, since no user has asked for it |
+| container | one Zarr store per source tile | one Zarr store per geotessera tile |
+| stats channel | the window mean, 440 bits/window (RVQ + PCA), charged | the window mean, 896 bits/window (RVQ + PCA), charged |
+| refinement | none | none (the beta release had a fine-tier one, 1-bit rotated Lloyd, opt-in, +150% rate) |
+| quality control | encode-time measured error ladder (`1 - cos`) | encode-time measured error ladder (relative L2) |
 
 Each of those differences was measured on the data, and the refinement
 row shows how far the right choice can differ between sources. The

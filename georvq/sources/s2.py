@@ -7,9 +7,13 @@ resampling of the data itself:
   fuse onto the 10m grid to form the single plane the tokenizer eats.
 - head: per-resolution patch heads decode the fine tokens back to each
   native grid.
-- normalizer: per-tile per-band mean/std are removed before encoding and
-  re-applied after decoding; the stats travel in the packet's side channel
-  (see georvq.inference.stats_codec).
+- normalizer: per-tile per-band mean/std, taken over each band's valid
+  (non-zero) pixels, are removed before encoding and re-applied after
+  decoding; the stats travel in the packet's side channel
+  (see georvq.inference.stats_codec). A model with `model.stats_cond`
+  (use_std) does the same standardisation inside the model instead, and
+  also conditions the encoder and decoder on the stats; `prep` then
+  leaves the field in reflectance and `S2Normalizer` does not run.
 
 Batches are dicts {"10m": (B,4,W,W), "20m": (B,6,W/2,W/2),
 "60m": (B,3,W/6,W/6)} with W = window (10m pixels, divisible by 6).
@@ -95,27 +99,168 @@ class _PatchHead(nn.Module):
         return self.conv(x)
 
 
+def _cbg(cin, cout, k, stride=1, pad=0):
+    """Conv, BatchNorm, GELU."""
+    return [nn.Conv2d(cin, cout, k, stride, pad), nn.BatchNorm2d(cout),
+            nn.GELU()]
+
+
+class _ResBlock(nn.Module):
+    """3x3 conv and 1x1 channel mix with a skip, BatchNorm after each."""
+
+    def __init__(self, ch):
+        super().__init__()
+        self.conv1 = nn.Conv2d(ch, ch, 3, 1, 1)
+        self.bn1 = nn.BatchNorm2d(ch)
+        self.conv2 = nn.Conv2d(ch, ch, 1)
+        self.bn2 = nn.BatchNorm2d(ch)
+
+    def forward(self, x):
+        return x + self.bn2(F.gelu(self.conv2(F.gelu(self.bn1(self.conv1(x))))))
+
+
+class S2ConvTileEncoder(nn.Module):
+    """The ring-space beta_v2 encoder: a conv stack that reads the 10 m
+    bands, halves to the 20 m grid and joins the 20 m bands, divides by
+    three to the 60 m grid and joins the 60 m bands. Each 60 m pixel
+    becomes one fine-tier cell (6 px at 10 m) and a pooled branch gives
+    the single coarse-tier vector.
+
+    With `mid_dim` and `mid_cell` set there is a third, middle tier
+    between the two: each token reads a `mid_cell` x `mid_cell` block of
+    the 60 m feature map through a conv whose kernel and stride are that
+    block, so it sees its own block of fine cells and nothing outside it,
+    then a 1x1 conv and a projection to `mid_dim`. Without them the
+    module holds exactly beta_v2's parameters.
+
+    Module names follow beta_v2's `TileVQAutoencoder` so its weights load
+    by prefix. `width` is beta's stem width (128 in beta_v2).
+
+    With `model.stats_cond.cond_encoder` the window's stats embedding
+    (`stats_bias`, width `width`) is added per channel to the output of
+    the 10 m stack, the first feature map every later layer reads. The
+    stats are removed from the input, so this is where the encoder learns
+    the window's absolute brightness and contrast, and adding it before
+    the 20 m and 60 m joins and the residual blocks lets both tiers use it
+    nonlinearly. Adding it to the coarse branch alone would leave the fine
+    tier without it, and the fine projection is a 1x1 conv, so a bias
+    there would only shift the fine latents.
+    """
+
+    def __init__(self, coarse_dim, fine_dim, width=128, mid_dim=None,
+                 mid_cell=None):
+        super().__init__()
+        w, w2, w4 = width, 2 * width, 4 * width
+        n10, n20, n60 = (GROUPS[g][0] for g in ("10m", "20m", "60m"))
+        self.enc_10m = nn.Sequential(*_cbg(n10, w, 3, 1, 1),
+                                     *_cbg(w, w, 3, 1, 1),
+                                     *_cbg(w, w, 3, 2, 1))
+        self.enc_fuse_20m = nn.Sequential(*_cbg(w + n20, w2, 1))
+        self.enc_20m = nn.Sequential(*_cbg(w2, w2, 3, 1, 1),
+                                     *_cbg(w2, w2, 3, 3, 0))
+        self.enc_fuse_60m = nn.Sequential(*_cbg(w2 + n60, w4, 1))
+        self.enc_res = _ResBlock(w4)
+        self.hq_proj = nn.Conv2d(w4, fine_dim, 1)
+        self.cls_res = _ResBlock(w4)
+        self.cls_pool = nn.AdaptiveAvgPool2d(1)
+        self.cls_proj = nn.Linear(w4, coarse_dim)
+        # built after beta_v2's modules, so that a two-tier encoder draws
+        # the same initial weights from a given seed as before
+        if (mid_dim is None) != (mid_cell is None):
+            raise ValueError("mid_dim and mid_cell are set together")
+        if mid_dim is not None:
+            self.mid_down = nn.Sequential(*_cbg(w4, w4, mid_cell, mid_cell),
+                                          *_cbg(w4, w4, 1))
+            self.mid_proj = nn.Conv2d(w4, mid_dim, 1)
+        else:
+            self.mid_down = self.mid_proj = None
+
+    def trunk(self, x, stats_bias=None):
+        """The shared stack: the prepped batch -> the 60 m feature map
+        (B, 4 * width, W/6, W/6)."""
+        h = self.enc_10m(x["10m"])
+        if stats_bias is not None:
+            h = h + stats_bias[:, :, None, None].to(h.dtype)
+        h = self.enc_fuse_20m(torch.cat([h, x["20m"]], 1))
+        h = self.enc_20m(h)
+        return self.enc_res(self.enc_fuse_60m(torch.cat([h, x["60m"]], 1)))
+
+    def mid(self, h):
+        """60 m feature map -> middle-tier tokens (B, g_mid**2, mid_dim)."""
+        return self.mid_proj(self.mid_down(h)).flatten(2).transpose(1, 2)
+
+    def forward(self, x, stats_bias=None):
+        h = self.trunk(x, stats_bias)
+        fine = self.hq_proj(h).flatten(2).transpose(1, 2)    # (B, g*g, D)
+        coarse = self.cls_proj(self.cls_pool(self.cls_res(h)).flatten(1))
+        if self.mid_down is None:
+            return [coarse.unsqueeze(1), fine]
+        return [coarse.unsqueeze(1), self.mid(h), fine]
+
+
+def _check_tile_layout(model_cfg, what):
+    """The beta_v2 conv encoder needs a whole-window coarse cell and a fine
+    cell of one 60 m pixel, with optionally a middle tier between them
+    whose cell is a whole number of fine cells.
+
+    Returns the middle tier's cell size in fine cells, or None for two
+    tiers."""
+    t, win = model_cfg.tiers, model_cfg.window
+    g_fine = win // 6
+    ok = (len(t) in (2, 3) and win % 6 == 0 and t[0].grid == 1
+          and t[-1].grid == g_fine)
+    if ok and len(t) == 3:
+        g_mid = t[1].grid
+        ok = 1 < g_mid < g_fine and g_fine % g_mid == 0
+    if not ok:
+        raise ValueError(
+            f"{what} needs tiers [1:..., window/6:...] or "
+            f"[1:..., g_mid:..., window/6:...] with g_mid dividing window/6 "
+            f"(window {win}, window/6 = {win / 6:g}); got "
+            f"{[str(s) for s in t]}")
+    return g_fine // t[1].grid if len(t) == 3 else None
+
+
 class S2Normalizer:
     """Per-tile per-band mean/std side channel: normalize before encode,
     restore after decode. `stats_vector` orders [means..., stds...] over
-    the 13 bands (the layout the stats codec compresses)."""
+    the 13 bands (the layout the stats codec compresses).
+
+    Used by models without `model.stats_cond` (the S2 v1 model). A
+    stats_cond model standardises inside the model with the same
+    arithmetic (`georvq.model.stats_cond`, multi-group path), which
+    tests/test_s2_stats_cond.py checks against this class bit for bit."""
 
     per_sample = True       # denormalize needs the batch's own stats
 
-    def normalize(self, x: dict):
-        """Per-band-group standardization, returning the stats to transmit.
+    def normalize(self, x: dict, valid: dict | None = None):
+        """Per-band standardization over valid pixels, returning the stats
+        to transmit.
 
         Sentinel-2 bands differ in physical scale and per-scene
         illumination, so the model sees standardized inputs and the (mu, sd)
-        side channel carries what was removed. Embedding-field sources need
-        nothing here and return None from `normalizer`.
+        side channel carries what was removed. `valid` maps each group to a
+        per-band mask (B, C, h, w) of pixels that are not nodata. The mean
+        and std of a band are taken over its own valid pixels only, and its
+        invalid pixels are set to 0 (the band mean) in the output, so a
+        window that straddles a swath edge is coded around the statistics
+        of the data it holds rather than those of the DN 0 fill. The std is
+        the unbiased estimate, as `Tensor.std` gives, so a fully valid
+        window gets the same stats as before masking existed.
         """
         stats = {}
         out = GroupBatch()
         for name, t in x.items():
-            mu = t.mean((2, 3), keepdim=True)
-            sd = t.std((2, 3), keepdim=True).clamp_min(1e-4)
-            out[name] = (t - mu) / sd
+            if valid is None:
+                m = torch.ones_like(t)
+            else:
+                m = valid[name].to(t.dtype)
+            n = m.sum((2, 3), keepdim=True)
+            mu = (t * m).sum((2, 3), keepdim=True) / n.clamp_min(1)
+            var = ((t - mu) ** 2 * m).sum((2, 3), keepdim=True) \
+                / (n - 1).clamp_min(1)
+            sd = var.sqrt().clamp_min(1e-4)
+            out[name] = (t - mu) / sd * m
             stats[name] = (mu, sd)
         return out, stats
 
@@ -130,6 +275,41 @@ class S2Normalizer:
         return torch.cat([mus, sds], 1)               # (B, 26)
 
 
+def pixel_valid(band_valid: dict):
+    """(B, W, W) mask on the 10 m grid of pixels where every band of every
+    group holds data. The 20 m and 60 m masks are repeated onto the 10 m
+    grid, so a 10 m pixel counts as valid only when the coarser pixels
+    covering it are valid too."""
+    v = None
+    for name, (_, ratio) in GROUPS.items():
+        g = band_valid[name].all(1)
+        if ratio > 1:
+            g = g.repeat_interleave(ratio, 1).repeat_interleave(ratio, 2)
+        v = g if v is None else v & g
+    return v
+
+
+def group_valid(valid, name):
+    """The 10 m pixel mask reduced to one group's grid: a coarse pixel is
+    valid when every 10 m pixel it covers is. Returns (B, 1, h, w)."""
+    ratio = GROUPS[name][1]
+    v = valid.unsqueeze(1).float()
+    if ratio > 1:
+        v = -F.max_pool2d(-v, ratio)
+    return v > 0.5
+
+
+class _FieldScale:
+    """The normalizer of a stats_cond model: the model space is the field
+    itself (reflectance / MAX_VALUE), so denormalizing is the identity and
+    `physical_scale` turns it into DN."""
+
+    per_sample = False
+
+    def denormalize(self, x, stats=None):
+        return x
+
+
 class S2Source(Source):
     name = "s2"
     grid_period = 6      # crop offsets must land on all three native grids
@@ -140,7 +320,17 @@ class S2Source(Source):
         assert p % 6 == 0, \
             ("S2 needs the fine-token patch size (window / finest grid) "
              f"divisible by 6 so every native grid decodes exactly; got {p}")
-        self._norm = S2Normalizer()
+        # A stats_cond model standardises inside the model; S2Normalizer
+        # runs only for the models trained without it.
+        sc = getattr(model_cfg, "stats_cond", None)
+        if sc is not None and not (sc.subtract_mean and sc.use_std):
+            raise ValueError(
+                "S2 with model.stats_cond needs subtract_mean and use_std: "
+                "the encoder reads per-band standardised windows, as the "
+                "S2 v1 model's normaliser gives")
+        self._stats_cond = sc
+        self._norm = _FieldScale() if sc is not None else S2Normalizer()
+        self._last_stats = None
         self._stats_pca_bits = None    # set from a checkpoint's prep state
 
     def prep_state(self):
@@ -161,12 +351,24 @@ class S2Source(Source):
         return _packed_bits(resolve_artifact(cfg.stats_pca))
 
     def prep(self, raw: dict, device):
-        """Raw uint16 group dict -> normalized float dict + 10m validity."""
+        """Raw uint16 group dict -> normalized float dict + 10 m validity.
+
+        DN 0 is the L1C nodata value. It is masked per band for the
+        statistics, and the returned mask marks the 10 m pixels where all
+        13 bands hold data (`pixel_valid`), which is what the loss and the
+        metrics score.
+        """
         x = GroupBatch()
+        band_valid = {}
         for name, t in raw.items():
-            x[name] = t.to(device, non_blocking=True).float() / MAX_VALUE
-        valid = x["10m"].sum(1) > 0
-        xn, self._last_stats = self._norm.normalize(x)
+            t = t.to(device, non_blocking=True)
+            band_valid[name] = t != 0
+            x[name] = t.float() / MAX_VALUE
+        valid = pixel_valid(band_valid)
+        if self._stats_cond is not None:
+            # the model removes and transmits the stats (stats_cond)
+            return x, valid
+        xn, self._last_stats = self._norm.normalize(x, band_valid)
         return xn, valid
 
     def last_stats(self):
@@ -181,8 +383,27 @@ class S2Source(Source):
         return S2MultiResHead(in_dim, grid=grid, p=p,
                               head_feat=model_cfg.decoder.head_feat)
 
+    def build_encoder(self, model_cfg) -> nn.Module:
+        mid_cell = _check_tile_layout(model_cfg, "tokenizer.kind=source")
+        t = model_cfg.tiers
+        return S2ConvTileEncoder(
+            t[0].dim, t[-1].dim, width=model_cfg.tokenizer.dim,
+            mid_dim=t[1].dim if mid_cell else None, mid_cell=mid_cell)
+
     def normalizer(self, model_cfg):
         return self._norm
+
+    #: denormalized values are reflectance / MAX_VALUE; this turns them
+    #: back into stored DN for figures
+    physical_scale = MAX_VALUE
+
+    @staticmethod
+    def error_parts(out, x, valid):
+        """Signed errors split by native grid, each over that grid's valid
+        pixels: {"10m": 1-D tensor, "20m": ..., "60m": ...}."""
+        return {g: (out[g].float() - x[g].float())[
+                    group_valid(valid, g).expand_as(x[g])]
+                for g in GROUPS}
 
     #: Share of a rung's index bits the stats channel may take before a
     #: cheaper encoding is chosen.
@@ -228,7 +449,12 @@ class S2Source(Source):
         of the rung's index bits, falling back to the cheapest when even
         that does not fit. `depths=None` means "a whole packet", i.e. full
         depth.
+
+        A stats_cond model's stats are charged by `model.stats_cond`
+        (`bits_per_band`), so the source adds nothing for them.
         """
+        if self._stats_cond is not None:
+            return 0.0
         enc = self._stats_encodings(cfg)
         if depths is None:
             depths = [sp.depth for sp in cfg.tiers]
@@ -247,18 +473,41 @@ class S2Source(Source):
             return 1e-4          # tighter than PCA can hit -> f16 escape
         return 0.01
 
+    def _standardized(self, out, x):
+        """(out, x) in the per-window standardised space the encoder reads.
+
+        For a stats_cond model `out` and `x` are reflectance, and the loss
+        and metrics are still scored after removing each window's per-band
+        mean and std, taken from `x` exactly as the model takes them. That
+        keeps the S2 v1 objective (an MSE that weighs every window and band
+        alike, whatever its brightness or contrast) and keeps trainer
+        metrics comparable with runs trained without stats_cond. Other
+        models are already in that space."""
+        if self._stats_cond is None:
+            return out, x
+        from georvq.model.stats_cond import center, patch_stats, standardize
+        st = patch_stats(x, use_std=True,
+                         std_floor=self._stats_cond.std_floor)
+        return standardize(out, st), center(x, st)
+
     def recon_stats(self, out: dict, x: dict, valid):
+        """Per-group MSE over valid pixels, averaged over the groups.
+
+        Nodata pixels carry no target (the release restores them from the
+        mask), so they are left out of the loss as DEM leaves them out."""
+        out, x = self._standardized(out, x)
         losses = {}
         total = 0.0
         for name in GROUPS:
-            mse = F.mse_loss(out[name], x[name])
+            mse = _masked_mse(out[name], x[name], group_valid(valid, name))
             losses[f"mse_{name}"] = mse
             total = total + mse
         losses["mse"] = total / len(GROUPS)
         # 1 - MSE over valid 10m pixels (normalized space); a proxy, not
         # a cosine
         err = ((out["10m"] - x["10m"]) ** 2).mean(1)
-        losses["one_minus_mse_10m"] = 1.0 - err[valid].mean().clamp(max=1.0)
+        losses["one_minus_mse_10m"] = 1.0 - err[valid].mean().clamp(max=1.0) \
+            if bool(valid.any()) else err.new_tensor(0.0)
         return total / len(GROUPS), losses
 
     def report(self, model_cfg):
@@ -299,21 +548,24 @@ class S2Source(Source):
         """
         from georvq.sources.report import (FIGURES, Metric, ReportSpec,
                                            band_rgb_preview)
-        r2 = Metric("r2", "R² (variance explained)", _s2_r2,
+
+        def std(fn):
+            if self._stats_cond is None:
+                return fn
+            return lambda o, x, v: fn(*self._standardized(o, x), v)
+        r2 = Metric("r2", "R² (variance explained)", std(_s2_r2),
                     higher_better=True, bounded=True)
-        sam = Metric("sam", "spectral angle, standardized (rad)", _s2_sam,
-                     higher_better=False, bounded=False)
-        rmse = Metric("rmse", "RMSE (standardized)", _s2_rmse,
+        sam = Metric("sam", "spectral angle, standardized (rad)",
+                     std(_s2_sam), higher_better=False, bounded=False)
+        rmse = Metric("rmse", "RMSE (standardized)", std(_s2_rmse),
                       higher_better=False, bounded=False)
         # R=B04, G=B03, B=B02 within the 10m group's band order; the
         # preview selects that group out of the model's dict output.
-        # no error_hist: it does tensor arithmetic on the whole batch to
-        # build one signed-error distribution, which has no single meaning
-        # across three native grids. A per-group version would be worth
-        # having; it is not this figure.
+        # error_hist draws one row per native grid (`error_parts`), in
+        # standardized units and in DN
         return ReportSpec(
             quality=r2, extra=(rmse, sam), baselines=(),
-            figures=tuple(f for f in FIGURES if f != "error_hist"),
+            figures=FIGURES, units="DN",
             preview=band_rgb_preview(2, 1, 0, select=_s2_10m))
 
 
@@ -321,20 +573,30 @@ def _s2_10m(t):
     return t["10m"] if isinstance(t, dict) else t
 
 
+def _masked_mse(out, x, m):
+    """Mean squared error over the pixels in m (B, 1, h, w), all bands;
+    zero when the batch holds no valid pixel."""
+    m = m.expand_as(x).to(x.dtype)
+    return ((out - x) ** 2 * m).sum() / m.sum().clamp_min(1)
+
+
 def _s2_r2(out, x, valid):
-    """Variance explained across all three native grids.
+    """Variance explained across all three native grids, on valid pixels.
 
     Per-group MSE over per-group variance, summed with equal group weight
     so the metric weights the grids the way `recon_stats` weights them.
-    Unmasked, for the same reason the loss is: S2 L1C is 99.5% valid and
-    the loss the model actually minimises does not mask either, so a
-    masked metric would report on a different quantity than the objective.
+    Masked as the loss is: nodata pixels are zero in normalized space and
+    carry no target.
     """
     num, den = 0.0, 0.0
     for name in GROUPS:
         t = x[name]
-        num = num + (t - out[name]).pow(2).mean()
-        den = den + t.var()
+        m = group_valid(valid, name)
+        num = num + _masked_mse(out[name], t, m)
+        mf = m.expand_as(t).to(t.dtype)
+        n = mf.sum().clamp_min(1)
+        mean = (t * mf).sum() / n
+        den = den + ((t - mean) ** 2 * mf).sum() / n
     return 1.0 - num / den.clamp_min(1e-8)
 
 

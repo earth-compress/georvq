@@ -2,17 +2,17 @@
 
 This document describes the released georvq codec for the AlphaEarth Foundations annual
 embedding tiles. The model that this codec uses is [released on Hugging Face](https://huggingface.co/earth-compress/georvq-ae-v2). 
-We use this codec to encode source tiles into a GeoParquet file that contains the compressed
-blobs used by the decoder. These GeoParquet files can be streamed from their location on the cloud at any of 23 bitrates, with windowed
-range reads over HTTP, allowing users to access lossily compressed AlphaEarth Foundations data at bitrates from ~0.1-7.5 bits per pixel, with cosine similarity going from 97.2% to 99.8%. The code that this release uses is in `georvq/ae/v2.py`, and the GeoParquet file format is defined in `georvq/inference/georvq_parquet.py`.
+We use this codec to encode source tiles into a Zarr store that contains the compressed
+blobs used by the decoder. These Zarr stores can be streamed from their location on the cloud at any of 23 bitrates, with windowed
+range reads over HTTP, allowing users to access lossily compressed AlphaEarth Foundations data at bitrates from ~0.1-7.5 bits per pixel, with cosine similarity going from 97.2% to 99.8%. The code that this release uses is in `georvq/ae/v2.py`, on the shared store codec and reader in `georvq/inference/store_codec.py` and `georvq/inference/store_dataset.py`, and the store format is defined in `georvq/inference/records.py`.
 
 ## Who is this for
 
 | you are | recommended points of entry |
 |---|---|
-| AE data user, reading tiles | `georvq.ae.open`, `python -m georvq.ae.v2 decode/reconstruct/info`, the Reading and Rate sections below |
-| archive operator, bulk-encoding source tiles | `python -m georvq.ae.v2 encode` on a GPU, the quality column, the Encoding cost section |
-| codec researcher | `georvq/{model,train,...}` and `docs/OVERVIEW.md`; `georvq/ae/v2.py` is a worked example of a release layer on the GeoParquet container |
+| AE data user, reading tiles | `georvq.open`, `python -m georvq.ae.v2 decode/reconstruct/info`, the Reading and Rate sections below |
+| archive operator, bulk-encoding source tiles | `python -m georvq.ae.v2 encode` on a GPU, the quality array, the Encoding cost section |
+| codec researcher | `georvq/{model,train,...}` and `docs/OVERVIEW.md`; `georvq/ae/v2.py` is a worked example of a release layer on the Zarr store |
 
 ## Model details
 
@@ -35,7 +35,7 @@ Note: this information only makes sense if you are familiar with the georvq code
   exact one costs about 0.0001 cosine at every rung. The mean channel's
   tables enter the `bitstream_id`.
 - The `bitstream_id` is `f6ad2ff121a473df` and the `decoder_id` is
-  `d9b0af741f66b682`. A file records the `bitstream_id` and `decoder_id`
+  `d9b0af741f66b682`. A store records the `bitstream_id` and `decoder_id`
   it was encoded with, and a reader holding a different codec refuses to
   decode it.
 - Decoding runs on PyTorch, on CPU or CUDA. Decoder passes run in bf16
@@ -47,82 +47,83 @@ Note: this information only makes sense if you are familiar with the georvq code
 
 ## Data Format
 
-We are using a mirrored structure to [Taylor Geospatial's AlphaEarth release on source.coop](https://source.coop/tge-labs/aef), where each of our GeoParquet files corresponds to one of their 8192x8192 tiles. Because of the structure of the georvq model's outputs, we've opted to use a GeoParquet file so that we can make independent chunks for different parts of the model's output. These files are named `{source stem}.georvq.parquet` and
+We are using a mirrored structure to [Taylor Geospatial's AlphaEarth release on source.coop](https://source.coop/tge-labs/aef), where each of our Zarr stores corresponds to one of their 8192x8192 tiles. Because of the structure of the georvq model's outputs, we've opted to use a Zarr store so that we can make independent chunks for different parts of the model's output. These stores are named `{source stem}.georvq.zarr` and
 placed at the path that mirrors the source tile's path
-(`annual/{year}/{zone}/{stem}.georvq.parquet`). 
+(`annual/{year}/{zone}/{stem}.georvq.zarr`). 
 
 A tile index, `aef_georvq_index.parquet`, is the place to find which
-coded file covers an area and how many bytes it costs at each rate. It
-has the source index's columns with paths to the coded files, plus each
-file's `bitstream_id` and bytes per rung. It is built by
+coded store covers an area and how many bytes it costs at each rate. It
+has the columns every georvq index has (the store's path, product id,
+CRS, bounds and footprint, `bitstream_id`, sizes and bytes per rung),
+followed by the source index's columns (its `path` as `source_path`). It is built by
 `scripts/build_ae_index.py` (`georvq/ae/index.py`) and published with the
-files, and the sample's index is in the
+stores, and the sample's index is in the
 [sample dataset](https://huggingface.co/datasets/earth-compress/georvq-ae-v2-sample).
-The files are GeoParquet 1.1, so pyarrow and DuckDB read their rows
-directly. The georvq header is JSON in the file's key-value metadata,
+The stores are plain Zarr v3, so zarr-python and xarray open them
+directly. The georvq header is JSON in the group's attributes,
 and the source tile's profile, tags, band descriptions and orientation
 are kept as JSON in `georvq_aux`. 
 
-Records are grouped into square chunks, with one row and one row group
-per chunk. The chunk size differs by kind of record so that each chunk
-holds roughly 1 MB at full depth (`docs/GEORVQ_PARQUET.md`), which is why
-one `base` chunk covers the whole tile whilst `fine` is chunked at the
-source's 1024 px block:
+Records are grouped into square chunks, with one array per kind of
+record. The chunk size differs by kind of record (`docs/GEORVQ_ZARR.md`):
+one `base` chunk covers the whole tile, and `fine` is chunked at 1024 px:
 
 | kind | chunk | per window |
 |---|---|---|
-| `base` (with `mask`) | 8192 px (the whole tile) | mean (55 B) and the 8 coarse levels (11 B), 66 B |
-| `mid` | 4096 px (2 x 2 chunks) | per level, 16 cells x 13 bits, 26 B |
-| `fine` | 1024 px (8 x 8 chunks, the source's block) | per level, 256 cells x 14 bits, 448 B |
-| `quality` | 8192 px | mean and p99 of `1 - cos` per rung, 46 B |
+| `base` (`mask` chunked alike) | 8192 px (the whole tile) | mean (55 B) and the 8 coarse levels (11 B), 66 B |
+| `mid` | 8192 px (the whole tile) | per level, 16 cells x 13 bits, 26 B |
+| `fine` | 1024 px (8 x 8 chunks) | per level, 256 cells x 14 bits, 448 B |
+| `quality/<decoder_id>` | 8192 px | mean and p99 of `1 - cos` per rung, 46 B |
 
-Each level of a tier is its own column, so reading a tier to depth `L`
-reads the first `L` columns of its row group, which form one contiguous
-byte range. Code columns are stored uncompressed with fixed bit widths.
-The validity mask is stored once for the tile, compressed, and is empty
-for a fully valid tile, and windows with no valid pixel are not coded.
-On the tile measured below (2021, zone 44N, 11% nodata) the file is
-64.2 MB, of which `base` with its mask takes 1.10 MB, `mid` 3.41 MB,
-`fine` 58.8 MB, `quality` 0.75 MB and the footer 0.14 MB.
+Each level of a chunk of a tier is its own inner chunk of the tier's
+shard, so reading a tier to depth `L` reads `L` inner chunks per chunk,
+which zarr-python fetches together. Code arrays are stored with fixed
+bit widths and compressed with zstd. The validity mask is stored once
+for the tile, compressed, and has no stored chunk for a fully valid
+tile, and windows with no valid pixel are not coded and are stored as
+zero records, which take almost no space. On the tile measured below
+(2021, zone 44N, 11% nodata) the store is 56.8 MB, of which `base`
+takes 0.96 MB, the mask 0.01 MB, `mid` 3.06 MB, `fine` 52.5 MB,
+`quality` 0.24 MB and the group metadata 0.04 MB.
 
-Functionally, most users will not need to worry about anything beyond this, as our reader handles the filesystem and requests for you. For those interested to learn more about how those files are arranged, refer to `docs/GEORVQ_PARQUET.md`. 
+Functionally, most users will not need to worry about anything beyond this, as our reader handles the filesystem and requests for you. For those interested to learn more about how those stores are arranged, refer to `docs/GEORVQ_ZARR.md`. 
 
 ## Reading
 
-The main principle being followed in the reader's design is to mirror the behaviour of a rasterio file object's read method, so that after replacing `rasterio.open()` with `georvq.ae.open()` in your code, the `.read` will work as it did before. This is to make the transition as straightforward as possible for people who are already using the AlphaEarth Foundations dataset on source.coop.
+The main principle being followed in the reader's design is to mirror the behaviour of a rasterio file object's read method, so that after replacing `rasterio.open()` with `georvq.open()` in your code, the `.read` will work as it did before. This is to make the transition as straightforward as possible for people who are already using the AlphaEarth Foundations dataset on source.coop.
 
-`georvq.ae.open(path_or_url, ...)` returns a lazy-loaded read-only dataset with the
+`georvq.open(store, ...)`, given a path, a URL or an open `zarr.Group`, returns a lazy-loaded read-only dataset with the
 source tile's georeferencing and shape: `crs`, `transform`, `width`,
 `height`, `count` (64), `dtypes` (int8), `nodata` (-128), `profile`,
 `meta`, `tags()`, `descriptions`, `block_shapes`, `block_windows()`,
 `bounds`, `res`, and rasterio's window helpers (`index`, `xy`,
-`window`). `driver` is "GeoRVQParquet", whilst `profile` and `meta`
+`window`). `driver` is "GeoRVQZarr", whilst `profile` and `meta`
 carry the source's driver ("GTiff"), so either can be passed to
 `rasterio.open(..., "w")`.
 
-The AEF source tiles store their rows bottom-up. The file codes them
+The AEF source tiles store their rows bottom-up. The store codes them
 north-up, but `read`, `read_masks` and `dataset_mask` return them in the
 source's own order, with rasterio's arguments and results, so code
 written against the rasterio dataset of the source tile can read the
-file instead. Two differences remain. The file has no overviews, so a
+store instead. Two differences remain. The store has no overviews, so a
 decimated read samples the full-resolution decode, and there is no
 `colorinterp`. Invalid pixels come back as -128 exactly, from the
 stored mask.
 
-The file's header names the release that decodes it, and `open` finds
+The store's header names the release that decodes it, and `open` finds
 that release's bundle by its `bitstream_id`, either at
 `GEORVQ_AE_BUNDLE`, in a local cache
 (`~/.cache/georvq/bundles/<bitstream_id>/`), or by downloading it from
 the `earth-compress` organisation on Hugging
 Face ([`earth-compress/georvq-ae-v2`](https://huggingface.co/earth-compress/georvq-ae-v2)).
-A bundle whose ids do not match the file is refused, including one at
+A bundle whose ids do not match the store is refused, including one at
 `GEORVQ_AE_BUNDLE`. The device defaults to CUDA when available, and the
 backend to torch.
 
 ```python
-import georvq.ae
+import georvq
 
-ds = georvq.ae.open("annual/2021/44N/<stem>.georvq.parquet")
+ds = georvq.open("annual/2021/44N/<stem>.georvq.zarr")
 w = ((0, 1024), (0, 1024))                            # rows, cols in source pixels
 a = ds.read(window=w, quality="8-8-2")                # (64, 1024, 1024) int8
 b = ds.read(3, window=w, quality="p99<=0.02")         # band 3 only, 1-based
@@ -135,35 +136,38 @@ source pixels. `quality` takes a rung (`"8-8-2"`, `"8,8,2"` or a
 tuple), a bound on a quality statistic (`"mean<=X"` or `"p99<=X"`), or
 `None` for full depth. A bound is resolved per window to the cheapest
 rung whose encode-time statistic meets it, and to full depth where none
-does, at the cost of one extra read of the quality rows. You should
-expect a bound to hold to within a few percent rather than exactly,
-because the statistics are stored log-quantised. The statistics are
+does, at the cost of one extra read of the quality array. A bound holds
+in the decode the statistics were measured with, because the statistics
+are stored log-quantised and rounded up. The statistics are
 `1 - cos` of the decoded float field against the prepared source, over
 the window's valid pixels, measured with the decode precision the header
 records. They are stored with 32 codes per decade, a step of about 7.5%,
-and the bound is applied to the stored value, so a bound is met to within
-half a step. For example, `p99<=0.02` admits windows whose measured p99
-is up to about 0.0198.
+rounded up to the next step, and the bound is applied to the stored
+value, so a window read to a bound that one of its rungs meets is never
+above it, while a window whose statistic is less than one step below
+the bound may be read one rung deeper than it needs. For example,
+`p99<=0.02` admits no window whose measured p99 is above 0.02, and may
+pass over windows between about 0.0186 and 0.02.
 
 The same reads are available from the command line, together with
-commands to inspect a file, fetch the release it names and encode new
+commands to inspect a store, fetch the release it names and encode new
 tiles:
 
 ```bash
-python -m georvq.ae.v2 info  tile.georvq.parquet          # header, rungs, bytes per column
-python -m georvq.ae.v2 fetch tile.georvq.parquet          # download the release it names
-python -m georvq.ae.v2 decode tile.georvq.parquet out.npy \
+python -m georvq.ae.v2 info  tile.georvq.zarr             # header, rungs, bytes per array
+python -m georvq.ae.v2 fetch tile.georvq.zarr             # download the release it names
+python -m georvq.ae.v2 decode tile.georvq.zarr out.npy \
     --window 0,0,1024,1024 --quality 8-8-2                 # or --quality "p99<=0.02"
-python -m georvq.ae.v2 reconstruct tile.georvq.parquet recon.tif --quality 8-8-2
+python -m georvq.ae.v2 reconstruct tile.georvq.zarr recon.tif --quality 8-8-2
 python -m georvq.ae.v2 encode src.tif out_dir/ --bundle <bundle dir> --device cuda
 ```
 
-`decode` writes a `.npy` in source row order and prints the requests
-and bytes it used. `reconstruct` writes a tiled GeoTIFF with the
+`decode` writes a `.npy` in source row order and prints the bytes of
+records it read. `reconstruct` writes a tiled GeoTIFF with the
 source's profile, block size, compression, tags and band descriptions,
 although COG layout and overviews are not reproduced. `encode` writes
-`{stem}.georvq.parquet` into the output directory (the current one by
-default), and `--no-quality` leaves out the quality column, which
+`{stem}.georvq.zarr` into the output directory (the current one by
+default), and `--no-quality` leaves out the quality array, which
 otherwise costs one decode per rung at encode time.
 
 The other `encode` options set the provenance that the header records.
@@ -220,10 +224,10 @@ hf download earth-compress/georvq-ae-v2 \
 
 A sample of six encoded tiles with their index is on Hugging Face as
 [`earth-compress/georvq-ae-v2-sample`](https://huggingface.co/datasets/earth-compress/georvq-ae-v2-sample), in the same
-`annual/{year}/{zone}/` layout, and `georvq.ae.open` reads them by URL, e.g.
-`https://huggingface.co/datasets/earth-compress/georvq-ae-v2-sample/resolve/main/annual/2025/32N/xh72hhha3ih6mroc7-0000008192-0000008192.georvq.parquet`.
+`annual/{year}/{zone}/` layout, and `georvq.open` reads them by URL, e.g.
+`https://huggingface.co/datasets/earth-compress/georvq-ae-v2-sample/resolve/main/annual/2025/32N/xh72hhha3ih6mroc7-0000008192-0000008192.georvq.zarr`.
 The full set of encoded tiles will be hosted at
-`<host>/annual/{year}/{zone}/{stem}.georvq.parquet` `[pending: hosting]`.
+`<host>/annual/{year}/{zone}/{stem}.georvq.zarr` `[pending: hosting]`.
 
 ## Encoding and decoding cost
 

@@ -145,12 +145,17 @@ class PyramidCodec(nn.Module):
         self.norm_latents = cfg.norm_latents
         self.continuous = cfg.vq is None
 
-        self.stem = source.build_stem(cfg)
-        self.tokenizer = ViTTokenizer(
-            self.specs, cfg.window, cfg.bands, dim=cfg.tokenizer.dim,
-            depth=cfg.tokenizer.depth, ff_ratio=cfg.ff_ratio,
-            stem_pyramid=cfg.tokenizer.stem_pyramid,
-            embed_norm=cfg.tokenizer.embed_norm)
+        if cfg.tokenizer.kind == "source":
+            # the source's encoder reads the prepped batch itself
+            self.stem = nn.Identity()
+            self.tokenizer = source.build_encoder(cfg)
+        else:
+            self.stem = source.build_stem(cfg)
+            self.tokenizer = ViTTokenizer(
+                self.specs, cfg.window, cfg.bands, dim=cfg.tokenizer.dim,
+                depth=cfg.tokenizer.depth, ff_ratio=cfg.ff_ratio,
+                stem_pyramid=cfg.tokenizer.stem_pyramid,
+                embed_norm=cfg.tokenizer.embed_norm)
 
         if not self.continuous:
             v = cfg.vq
@@ -308,7 +313,9 @@ class PyramidCodec(nn.Module):
         out = self.decoder(zqs, cond, stats=emb)
         if self.stats_cond is not None and self.stats_cond.subtract_mean:
             from georvq.model.stats_cond import uncenter
-            out = uncenter(out, stats.to(out.dtype), valid)
+            if not isinstance(out, dict):
+                stats = stats.to(out.dtype)
+            out = uncenter(out, stats, valid)
             # a source whose field is constrained (AE: unit-norm pixels)
             # cannot impose that in its head once the head predicts the
             # mean-removed residual, so it applies it here instead

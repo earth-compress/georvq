@@ -1,0 +1,39 @@
+# S2 v1, the Sentinel-2 L1C release model: beta_arch_w36 at step 42,500
+# with its codebooks on the int8 grid (model.vq.book_bits 8, as AE v2 and
+# Tessera). The frozen checkpoint is checkpoints/s2_v1/s2_v1.pt, copied
+# read-only to /data/georvq-releases/s2-v1/s2_v1.pt with its sha256.
+#
+# The model was trained with float32 codebooks (beta_arch_w36.yaml, which
+# leaves book_bits unset). After training, each of its 16 books was
+# snapped once onto the 8-bit grid by QuantizedBookVQ.project_book (per
+# codeword a max-abs scale and integers in [-127, 127]), book_bits was set
+# to 8 in the embedded config, and every other tensor was copied
+# unchanged; there was no further training. Snapping changed the books by
+# 0.64% relative RMS (0.64 to 0.65% per book). Every book converts to int8
+# and a float32 scale and back bit for bit, so a release bundle stores
+# exactly the books the model uses, and a QuantizedBookVQ in eval mode
+# assigns codes with them. The script that did this, make_int8_ckpt.py,
+# is kept with the release notes (scratch/release-plan/phase3c/ on the
+# main checkout).
+#
+# Scored with the 256-bit statistics channel on the trainer's validation
+# windows (scratch/s2-final/score_s2.py, GPU jobs 1523 and 1524, results
+# in scratch/release-plan/phase3c/scores/ref_fp32.json and int8_pre.json
+# on the main checkout), the int8 books give a DN RMSE within 0.63% of
+# the float32 books in every band at every rung from 8-0 to 8-8 (worst
+# B10 at 8-2, 1.0063 times), and the mean over bands is unchanged to
+# 0.03 DN (173.21 against 173.18 at 8-0, 43.84 against 43.84 at 8-8). The
+# codes do change, since assignment uses the int8 books.
+#
+# This preset is beta_arch_w36's with book_bits 8. Apart from log.run_tag
+# (beta_arch_w36 in the checkpoint), it equals the checkpoint's embedded
+# config. Training from it would train with int8 books from the start,
+# which is not how the release model was made.
+inherit: beta_arch_w36.yaml
+
+model:
+  vq:
+    book_bits: 8
+
+log:
+  run_tag: s2_v1

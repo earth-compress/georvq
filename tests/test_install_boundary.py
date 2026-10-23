@@ -82,7 +82,7 @@ def test_ae_v2_encode_decode_and_index_run_without_training_packages(tmp_path):
         from georvq.ae.index import build_index
         tmp = {str(tmp_path)!r}
         codec = tiny_codec()
-        f = os.path.join(tmp, TILES[0][2] + ".georvq.parquet")
+        f = os.path.join(tmp, TILES[0][2] + ".georvq.zarr")
         write_tile(f, codec, 40, 48)
         with v2.open_dataset(f, codec=codec) as ds:
             a = ds.read(quality="3-2-0")

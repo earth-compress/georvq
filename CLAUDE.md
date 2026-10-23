@@ -113,8 +113,9 @@ The documentation is split in two:
   `georvq/model/vq_quant.py`. Trained checkpoints must decode
   bit-for-bit forever. `tests/test_ae_v2_bundle.py` checks the AE v2
   release's codes and decodes against the released bundle, and reads
-  back a golden GeoParquet tile; `tests/test_tessera_bundle.py` checks
-  the Tessera release's codes and decodes. Both must stay exact, not
+  back a golden Zarr tile; `tests/test_tessera_v2_bundle.py` checks
+  the Tessera v2 release's codes and decodes, and reads back a golden
+  Zarr tile. Both must stay exact, not
   approximately equal. The recorded hashes hold on torch 2.10 or later
   with numpy 2.
 - State dict names are part of the checkpoint format. Renaming modules

@@ -1,4 +1,4 @@
-"""HTTP helpers for the AE demo notebook (demo_ae.ipynb).
+"""HTTP helpers for the demo notebooks (demo_ae.ipynb, demo_tessera.ipynb).
 
 `serve` starts a threaded HTTP server on 127.0.0.1 that answers single
 Range requests (and HEAD) in one of two modes:
@@ -7,12 +7,15 @@ Range requests (and HEAD) in one of two modes:
   each response and a per-response bandwidth cap, to stand in for a
   remote host whose latency and throughput were measured;
 - upstream: each request is forwarded to `upstream` + path over a
-  persistent connection per server thread, so a client such as GDAL
-  can be pointed at the server and its requests to the real host timed.
+  persistent connection per server thread, following redirects (Hugging
+  Face answers with one to its CDN), so a client such as GDAL or
+  zarr-python can be pointed at the server and its requests to the real
+  host counted and timed. `headers`, for example a token, go with each
+  request to the upstream host and not to a host it redirects to.
 
 Either way the server records each GET it answers as an event dict
 (`kind` "get", `label`, `t0`, `t1` in time.perf_counter seconds,
-`bytes`), the format of georvq.inference.georvq_parquet.Trace.
+`bytes`), the format of georvq.inference.records.Trace.
 
 `probe` measures latency (time to first byte of small range requests)
 and single-stream throughput (one large range request) to a URL.
@@ -24,9 +27,16 @@ import os
 import re
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+
+class _Server(ThreadingHTTPServer):
+    # the default backlog of 5 drops connections when a client opens more
+    # at once, and the client's retry then adds about a second
+    request_queue_size = 256
 
 _RANGE = re.compile(r"^bytes=(\d*)-(\d*)$")
 _CHUNK = 64 * 1024
@@ -60,8 +70,9 @@ def _span(rng, size):
     return int(a), min(size - 1, int(b)) if b else size - 1
 
 
-def _handler(root, upstream, latency, bandwidth, rec):
+def _handler(root, upstream, latency, bandwidth, rec, extra=None):
     up = urllib.parse.urlsplit(upstream) if upstream else None
+    extra = dict(extra or {})
     local = threading.local()
 
     def connection():
@@ -93,7 +104,7 @@ def _handler(root, upstream, latency, bandwidth, rec):
 
         def _forward(self, body, rng):
             path = up.path.rstrip("/") + self.path
-            headers = {"User-Agent": USER_AGENT}
+            headers = {"User-Agent": USER_AGENT, **extra}
             if rng:
                 headers["Range"] = rng
             for attempt in (0, 1):
@@ -106,11 +117,23 @@ def _handler(root, upstream, latency, bandwidth, rec):
                     local.conn = None
                     if attempt:
                         raise
+            if resp.status in (301, 302, 303, 307, 308):
+                resp.read()
+                where = urllib.parse.urljoin(f"{up.scheme}://{up.netloc}{path}",
+                                             resp.getheader("Location"))
+                req = urllib.request.Request(
+                    where, method="GET" if body else "HEAD",
+                    headers={k: v for k, v in headers.items() if k in
+                             ("User-Agent", "Range")})
+                try:
+                    resp = urllib.request.urlopen(req, timeout=120)
+                except urllib.error.HTTPError as e:
+                    resp = e
             self.send_response(resp.status)
             for k in ("Content-Length", "Content-Range", "Content-Type",
                       "ETag", "Last-Modified", "Accept-Ranges"):
-                if resp.getheader(k):
-                    self.send_header(k, resp.getheader(k))
+                if resp.headers.get(k):
+                    self.send_header(k, resp.headers.get(k))
             self.end_headers()
             n = 0
             while body:
@@ -165,16 +188,17 @@ def _handler(root, upstream, latency, bandwidth, rec):
     return H
 
 
-def serve(root=None, upstream=None, latency=0.0, bandwidth=None):
+def serve(root=None, upstream=None, latency=0.0, bandwidth=None, headers=None):
     """Start a server; returns (base_url, recorder, server). Pass `root`
     (a directory) or `upstream` (a URL prefix). `latency` in seconds,
     `bandwidth` in bytes per second per response; both apply to local
-    files only. Stop it with server.shutdown()."""
+    files only. `headers` go to the upstream host. Stop it with
+    server.shutdown()."""
     if (root is None) == (upstream is None):
         raise ValueError("give root or upstream")
     rec = Recorder()
-    srv = ThreadingHTTPServer(("127.0.0.1", 0),
-                              _handler(root, upstream, latency, bandwidth, rec))
+    srv = _Server(("127.0.0.1", 0),
+                  _handler(root, upstream, latency, bandwidth, rec, headers))
     srv.daemon_threads = True
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     return f"http://127.0.0.1:{srv.server_address[1]}", rec, srv

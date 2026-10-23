@@ -69,9 +69,10 @@ The tools read stores and checkpoints and write nothing back to them.
 | `turboquant.py` | Rotation + Lloyd scalar coding of a post-RVQ residual, as replacement and as refinement. |
 | `refine_decode.py` | Whether that refinement actually *decodes* better, per tier, through the real model. |
 
-`turboquant.py` and `refine_decode.py` are what produced
-`georvq/inference/refine.py`; use them to locate which tier of a new
-model holds recoverable slack before configuring a refinement.
+`turboquant.py` and `refine_decode.py` are what produced the Tessera
+beta release's refinement (`georvq/inference/refine.py`, removed with
+that release); use them to locate which tier of a new model holds
+recoverable slack before configuring a refinement.
 
 ## E. Comparing runs
 

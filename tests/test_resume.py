@@ -214,7 +214,8 @@ def test_loop_checkpoints_load_weights_only(smoke, monkeypatch):
         ck = torch.load(os.path.join(run, "model.pt"), weights_only=True)
     assert {"opt", "sched", "train_state"} <= set(ck)
     ts = ck["train_state"]
-    assert set(ts) == {"best_q", "best_is_quantized", "best_ceil_guard",
+    assert set(ts) == {"quality_key", "best_q", "best_is_quantized",
+                       "best_ceil_guard",
                        "nonfinite_steps", "last_full_q", "vq", "rng"}
     # the restored RNG reproduces the saved stream
     loop.set_rng_state(ts["rng"])

@@ -17,8 +17,9 @@ from georvq.ae import v2  # noqa: E402
 from georvq.ae.index import build_index, tile_record  # noqa: E402
 from georvq.config import load_config  # noqa: E402
 from georvq.factory import build_model  # noqa: E402
-from georvq.inference.georvq_parquet import RVQParquetReader  # noqa: E402
 from georvq.inference.mean_codec import RVQPCAMeanChannel  # noqa: E402
+from georvq.inference.records import RecordReader  # noqa: E402
+from georvq.inference.store_index import CORE  # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WIN = 16
@@ -32,8 +33,8 @@ TILES = [("2024", "33N", "xaaaa-0000000000-0000000000", 40, 48),
          ("2023", "34S", "xbbbb-0000000000-0000000000", 48, 32)]
 SMOKE = os.environ.get(
     "GEORVQ_TEST_AE_V2_TILE",
-    "/home/ali/projects/georvq/scratch/ae-v2/parquet_smoke2/serve/"
-    "x21yfwngg902u0lsh-0000008192-0000000000.georvq.parquet")
+    "/home/ali/projects/georvq/scratch/ae-v2/zarr_sample/annual/2021/44N/"
+    "x21yfwngg902u0lsh-0000008192-0000000000.georvq.zarr")
 AEF_INDEX = os.environ.get("GEORVQ_TEST_AEF_INDEX",
                            "/data/AE-samples/aef_index.parquet")
 
@@ -57,7 +58,7 @@ def tiny_codec():
     return v2.AEV2Codec(model, channel)
 
 
-def write_tile(path, codec, h, w, seed=0, stats=True):
+def write_tile(path, codec, h, w, seed=0, stats=True, crs="EPSG:32633"):
     """Encode a random bottom-up int8 tile to `path`; returns the source."""
     from rasterio.transform import Affine
     rng = np.random.default_rng(seed)
@@ -66,7 +67,7 @@ def write_tile(path, codec, h, w, seed=0, stats=True):
     src = os.path.splitext(os.path.splitext(path)[0])[0] + ".tif"
     t = Affine(10.0, 0.0, 500000.0, 0.0, 10.0, 4000000.0)
     with rasterio.open(src, "w", driver="GTiff", width=w, height=h, count=64,
-                       dtype="int8", nodata=v2.NODATA, crs="EPSG:32633",
+                       dtype="int8", nodata=v2.NODATA, crs=crs,
                        transform=t) as ds:
         ds.write(a)
     v2.encode_tile(src, path, codec, stats=stats, chunk_px=CHUNK_PX, strip_px=WIN)
@@ -122,8 +123,9 @@ def tree(tmp_path_factory):
     for i, (y, z, pid, h, w) in enumerate(TILES):
         d = root / y / z
         d.mkdir(parents=True, exist_ok=True)
-        f = d / f"{pid}.georvq.parquet"
-        write_tile(str(f), codec, h, w, seed=i, stats=i != 1)
+        f = d / f"{pid}.georvq.zarr"
+        write_tile(str(f), codec, h, w, seed=i, stats=i != 1,
+                   crs=f"EPSG:326{z[:2]}")
         files.append(str(f))
     src = tmp / "aef_index.parquet"
     source_index(src, TILES)
@@ -136,12 +138,13 @@ def test_rows_match_the_source_index(tree):
                     url_prefix="https://host/aef/v2/")
     src = pq.read_table(tree["src"])
     assert t.num_rows == len(TILES)
-    src_cols = src.schema.names
-    assert t.schema.names[:len(src_cols) + 1] == (
-        src_cols[:3] + ["source_path"] + src_cols[3:])
+    src_cols = [c for c in src.schema.names
+                if c not in ("crs", "geom", "geom_bbox")]
+    assert t.schema.names == CORE.names + [
+        "source_path" if c == "path" else c for c in src_cols]
     by_src = {r["path"]: r for r in src.to_pylist()}
     want = {f"{SRC_PREFIX}/{y}/{z}/{p}.tiff": f"https://host/aef/v2/{y}/{z}/"
-            f"{p}.georvq.parquet" for y, z, p, *_ in TILES}
+            f"{p}.georvq.zarr" for y, z, p, *_ in TILES}
     rows = t.to_pylist()
     for r in rows:
         assert r["path"] == want[r["source_path"]]
@@ -151,6 +154,11 @@ def test_rows_match_the_source_index(tree):
                 assert r[c] == s[c], c
         assert r["bitstream_id"] == tree["codec"].bitstream_id
         assert r["decoder_id"] == tree["codec"].decoder_id
+        assert r["crs"] == s["crs"] and r["release"] == "ae-v2"
+        assert r["source_url"].endswith(".tif")
+        b = r["bounds"]
+        assert (b["xmin"], b["xmax"]) == (500000.0, 500000.0 + 10 * r["width"])
+        assert r["bbox"]["xmin"] < r["bbox"]["xmax"]
     # source order
     src_order = [s["path"] for s in src.to_pylist()]
     idx = [src_order.index(r["source_path"]) for r in rows]
@@ -158,40 +166,66 @@ def test_rows_match_the_source_index(tree):
     assert pq.read_table(out).equals(t)
 
 
-def test_rung_bytes_account_for_the_file(tree):
+def _store_files(root):
+    return [os.path.join(d, n) for d, _, ns in os.walk(root) for n in ns]
+
+
+def test_rung_bytes_account_for_the_store(tree):
     for f in tree["files"]:
         rec = tile_record(f)
-        with RVQParquetReader(f) as rd:
-            col = rd.column_bytes()
-            rungs = rd.header["rungs"]
-            assert [r["rung"] for r in rec["rungs"]] == [
-                "-".join(map(str, r["tuple"])) for r in rungs]
-            for r, h in zip(rec["rungs"], rungs):
-                assert r["bits_px"] == h["bits_px"]
-                assert r["bytes"] == sum(col[c] for c in rd.columns_for(h["tuple"]))
-            full = sum(col[c] for c in rd.columns_for(None))
+        rd = RecordReader(f)
+        col = rd.column_bytes()
+        index = rd.shard_index_bytes()
+        stored = rd.stored_bytes()
+        rungs = rd.header["rungs"]
+        assert [r["rung"] for r in rec["rungs"]] == [
+            "-".join(map(str, r["tuple"])) for r in rungs]
+        for r, h in zip(rec["rungs"], rungs):
+            assert r["bits_px"] == h["bits_px"]
+            assert r["bytes"] == stored["mask"] + sum(
+                col[c] for c in rd.columns_for(h["tuple"], mask=False)) + sum(
+                index[t.name] for t, L in zip(rd.layout.tiers, h["tuple"])
+                if not t.in_base and L > 0)
         b = [r["bytes"] for r in rec["rungs"]]
         assert b == sorted(b) and b[0] > 0
-        assert b[-1] == full                # the last rung is full depth
-        meta = sum(col[c] for c in ("kind", "product_id", "chunk_row",
-                                    "chunk_col", "geometry", "bbox"))
-        assert rec["quality_bytes"] == col.get("quality", 0)
-        assert rec["file_bytes"] == os.path.getsize(f)
-        assert rec["file_bytes"] == (4 + meta + full + rec["quality_bytes"]
-                                     + rec["footer_bytes"])
+        # the last rung is full depth
+        full = stored["mask"] + sum(col[c] for c in rd.columns_for(None, mask=False))
+        assert b[-1] == full + sum(index.values())
+        # a level's stored bytes are its inner chunks: the tiers' arrays
+        # are their levels and their shard indexes
+        assert stored["base"] == col["base"] + os.path.getsize(
+            os.path.join(f, "base", "zarr.json"))
+        assert rec["quality_bytes"] == sum(v for k, v in stored.items()
+                                           if k.startswith("quality/"))
+        # the arrays' stored bytes and the zarr.json of the root and of the
+        # quality group (when present) are everything the store holds
+        files = _store_files(f)
+        groups = [os.path.join(f, "zarr.json"), os.path.join(f, "quality", "zarr.json")]
+        assert rec["store_bytes"] + sum(os.path.getsize(p) for p in groups
+                                        if os.path.exists(p)) == \
+            sum(os.path.getsize(p) for p in files)
+        assert rec["metadata_bytes"] == os.path.getsize(groups[0])
     assert tile_record(tree["files"][1])["quality_bytes"] == 0
 
 
-def test_only_footers_are_read(tree):
-    """Zeroing everything but the footer leaves the record unchanged."""
+def test_only_metadata_and_sizes_are_read(tree):
+    """Zeroing every chunk of a copy, all but the shard indexes, leaves
+    the record unchanged."""
     f = tree["files"][0]
     rec = tile_record(f)
-    g = tree["tmp"] / "blank.georvq.parquet"
-    shutil.copy(f, g)
-    with open(g, "r+b") as fh:
-        fh.seek(4)
-        fh.write(b"\0" * (rec["file_bytes"] - rec["footer_bytes"] - 4))
-    assert tile_record(g, first_read=rec["footer_bytes"]) == rec
+    rd = RecordReader(f)
+    keep = {t.name: rd.shard_index_bytes()[t.name] for t in rd.layout.tiers
+            if not t.in_base}
+    g = tree["tmp"] / "blank.georvq.zarr"
+    shutil.copytree(f, g)
+    for p in _store_files(g):
+        if os.path.basename(p) != "zarr.json":
+            n = os.path.getsize(p)
+            top = os.path.relpath(p, g).split(os.sep)[0]
+            tail = keep.get(top, 0)
+            with open(p, "r+b") as fh:
+                fh.write(b"\0" * (n - tail))
+    assert tile_record(g) == rec
 
 
 def test_geoparquet_metadata(tree):
@@ -201,13 +235,17 @@ def test_geoparquet_metadata(tree):
     geo = json.loads(pq.read_schema(out).metadata[b"geo"])
     assert set(pq.read_schema(out).metadata) == {b"geo"}
     gc = geo["columns"][geo["primary_column"]]
-    assert geo["primary_column"] == "geom" and geo["version"] == "1.1.0"
+    assert geo["primary_column"] == "geometry" and geo["version"] == "1.1.0"
     assert gc["encoding"] == "WKB"
-    assert gc["covering"]["bbox"] == {k: ["geom_bbox", k]
+    assert gc["covering"]["bbox"] == {k: ["bbox", k]
                                       for k in ("xmin", "ymin", "xmax", "ymax")}
-    bb = t.column("geom_bbox").to_pylist()
+    bb = t.column("bbox").to_pylist()
     assert gc["bbox"] == [min(b["xmin"] for b in bb), min(b["ymin"] for b in bb),
                           max(b["xmax"] for b in bb), max(b["ymax"] for b in bb)]
+    for g, b in zip(t.column("geometry").to_pylist(), bb):
+        xy = np.frombuffer(g[13:], "<f8").reshape(-1, 2)
+        assert len(xy) == 4 * 20 + 1 and (xy[0] == xy[-1]).all()
+        assert xy[:, 0].min() == b["xmin"] and xy[:, 1].max() == b["ymax"]
 
 
 def test_unknown_or_repeated_products_raise(tree):
@@ -222,16 +260,15 @@ def test_unknown_or_repeated_products_raise(tree):
 
 
 @pytest.mark.skipif(not (os.path.exists(SMOKE) and os.path.exists(AEF_INDEX)),
-                    reason="real AE v2 smoke file or AEF index absent")
-def test_real_file_against_the_aef_index():
+                    reason="real AE v2 store or AEF index absent")
+def test_real_store_against_the_aef_index():
     t = build_index([SMOKE], AEF_INDEX)
     (r,) = t.to_pylist()
     assert r["source_path"].endswith(
         "/annual/2021/44N/x21yfwngg902u0lsh-0000008192-0000000000.tiff")
-    assert r["path"] == SMOKE and r["year"] == 2021
+    assert r["path"] == os.path.abspath(SMOKE) and r["year"] == 2021
     assert r["rungs"][-1]["rung"] == "8-8-8"
-    assert (r["rungs"][-1]["bytes"] + r["quality_bytes"] + r["footer_bytes"]
-            < r["file_bytes"])
+    assert r["rungs"][-1]["bytes"] + r["quality_bytes"] <= r["store_bytes"]
 
 
 def test_build_script_warns_without_a_url_prefix(tmp_path, monkeypatch, capsys):

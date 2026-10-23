@@ -1,0 +1,1060 @@
+{
+ "chunks": {
+  "base": {
+   "0.0.0": "f16b24675f0553126b619a6df1a28983083e2376237f26d43ae44670148b3c55",
+   "0.1.0": "94173d1e263235d2899a50b5b07f3b6734496d554168372b183140ec0d90cd0e",
+   "1.0.0": "210dda170190cae5dfeddffb3b5ce7219c3583e296dbe5b4968dae102aa7d4c9",
+   "1.1.0": "168e3a2b8cc7d0a3a51927d8bfdeebf61c80ded0eb7b0f1e80c05a94a6405daa"
+  },
+  "fine": {
+   "0.0.0.0": "725167db0a69dfebbdc80a87e10b3a2a3eb438250e9b87b06e0104c13459c9c7",
+   "0.0.1.0": "c9936f945611fedd34aa28d4cec6c4531a0cd6f512ad1c228cd7f2eb63351ec7",
+   "0.1.0.0": "3a3651714a4ece0ab07df574afc6842cc2edc25b15de7ae8bf5af67e6b5f8972",
+   "0.1.1.0": "9e1bb1d486a999e83c988c8baa5b4c276d2f1d8fdcae29d5731ba2e8b1d0c2fb",
+   "0.2.0.0": "66687aadf862bd776c8fc18b8e9f8e20089714856ee233b3902a591d0d5f2925",
+   "0.2.1.0": "66687aadf862bd776c8fc18b8e9f8e20089714856ee233b3902a591d0d5f2925",
+   "1.0.0.0": "a8990074eef493f9a394470bef58f29a007cf0758da9a1f1084ae90240bdbfdf",
+   "1.0.1.0": "51c0da8840cc346b14203a2a36ccb7fb165f6b1cc340df37a3e3ba7a43f9bd37",
+   "1.1.0.0": "e6a7aa281f83c6f9dc66df0970bf82d650def261662e1d27d791d04a57617929",
+   "1.1.1.0": "01970c0771a932975066de9c98ea916f56e8c424fc8703419708cef201979683",
+   "1.2.0.0": "f8a0bcfb34ae34890eb63c14fd2f3390ed06009ea32ced1455553db7d7344f0d",
+   "1.2.1.0": "1495c5e28b4becca8b00438993671072bd8300f4c99c161ee0e41970c216b47f",
+   "2.0.0.0": "075fa849f78fbb3e5d5baf797ac5a1b6f29970f281370e558710656ee82fbecb",
+   "2.0.1.0": "fd384d9e530b5c223245a755d2838cfd81245308856dde3f43c1606c4f351910",
+   "2.1.0.0": "90a60f68810d2fa694be1c3b8c56d4a82dd722bec9921743375de648fc027aa9",
+   "2.1.1.0": "6e961f7350dff9c837e21b5bd0deab1ec0c7bae7b54736e38b8c443e22295fc0",
+   "2.2.0.0": "0f8272ea8132ec8afa500b3d3352bda7e678b16b0258582870c2891f612b254c",
+   "2.2.1.0": "c488b913356347e757c34af89ffc3ec802d7799bc7b4a086dc6ea8f2b41b1f17"
+  },
+  "mask": {
+   "0.0": "ceb1e027fbdde905f4db3fc1cb784dc093087601bf7b1d4c7c6a4de8222b6304",
+   "0.1": "c492acb3f08bc8d6d4d75ddd843b9d225984d228f1572f13a46570bed40dabd8",
+   "1.0": "970d58ed69ebf9ad45ba9580cb9c34063eea1ec2361ce6f99e030e6c60957657",
+   "1.1": "8b28299ec97baff0855a6beabf9bd86cc8cf6cd954689956bb904a8fc8d0d2c4"
+  },
+  "mid": {
+   "0.0.0.0": "46b98f39f0b03d8fc03555c7dc53262c4767b556ca7dc8d90f31f844c540ad79",
+   "0.0.1.0": "ac45d0d45334b4204cede39cb92d6ab0fbd062be904371d2dfdac5b4ea8dcd77",
+   "0.1.0.0": "5bdf6512aada74fdfdad1248660f025a24383ab414c58b3811c9ab231f13f036",
+   "0.1.1.0": "50137599147c1976ecb9cf3d11b9fc79fd433f6b051b5b1be343a75d1cd09b23",
+   "1.0.0.0": "e13f6a75c6191f327abb27d9f977ac62fc8ac33f4cd28494a307abbf3fc3540d",
+   "1.0.1.0": "c917f2343f7ab46d0b2a343fbd345b293d944d687c33f3e89a37dc67aa55d368",
+   "1.1.0.0": "9c6073723c873bd3ab1d760fd731b7816c9ccea6bae74e8d401770acd7e7bedb",
+   "1.1.1.0": "f20509289064077045f119fb1a295c55cfa679bff79685eb9596985eb179ffee"
+  },
+  "quality/fedcba9876543210": {
+   "0.0.0": "339203775e380c9692d8623951a209b46142d9d73a5f3f954afc55f2f1af07d3",
+   "0.1.0": "f748707258c7480233016d3d4a92c1dc2c9a8f433b0a139eff385397eec6ddd1",
+   "1.0.0": "6431b79e4376392771f258e2800ab8c9582c2a1fe107a40ac1a307dd30941039",
+   "1.1.0": "425501dcaafd9d08a9484b6d16863f1c57eb0657f26c99e394af32ca1182947d"
+  }
+ },
+ "keys": [
+  "base/c/0/0/0",
+  "base/c/0/1/0",
+  "base/c/1/0/0",
+  "base/c/1/1/0",
+  "base/zarr.json",
+  "fine/c/0/0/0/0",
+  "fine/zarr.json",
+  "mask/c/0/0",
+  "mask/c/0/1",
+  "mask/zarr.json",
+  "mid/c/0/0/0/0",
+  "mid/zarr.json",
+  "quality/fedcba9876543210/c/0/0/0",
+  "quality/fedcba9876543210/c/0/1/0",
+  "quality/fedcba9876543210/c/1/0/0",
+  "quality/fedcba9876543210/c/1/1/0",
+  "quality/fedcba9876543210/zarr.json",
+  "quality/zarr.json",
+  "zarr.json"
+ ],
+ "nodes": {
+  ".": {
+   "attributes": {
+    "georvq": {
+     "codec": {
+      "bands": 128,
+      "bitstream_id": "0123456789abcdef",
+      "decoder_id": "fedcba9876543210",
+      "format": "georvq-tessera/v2",
+      "mean_channel": {
+       "bits": 48,
+       "kind": "rvq-pca"
+      },
+      "min_depths": [
+       2,
+       0,
+       0
+      ],
+      "release": {
+       "bitstream_id": "0123456789abcdef",
+       "decoder_id": "fedcba9876543210",
+       "name": "tessera-v2",
+       "revision": "r1",
+       "uri": "hf://earth-compress/georvq-tessera-v2"
+      },
+      "tiers": [
+       "1:16:32:3",
+       "2:8:32:2",
+       "4:8:16:2"
+      ],
+      "window": 16
+     },
+     "format": "georvq-zarr",
+     "layout": {
+      "columns": [
+       {
+        "fields": [
+         {
+          "bits": 4,
+          "count": 2,
+          "name": "mean_rvq"
+         },
+         {
+          "bits": 3,
+          "count": 8,
+          "name": "mean_pca_0"
+         },
+         {
+          "bits": 2,
+          "count": 8,
+          "name": "mean_pca_8"
+         },
+         {
+          "bits": 0,
+          "count": 112,
+          "name": "mean_pca_16"
+         },
+         {
+          "bits": 5,
+          "count": 3,
+          "name": "coarse"
+         }
+        ],
+        "name": "base",
+        "record_bytes": 8
+       },
+       {
+        "fields": [
+         {
+          "bits": 5,
+          "count": 4,
+          "name": "mid"
+         }
+        ],
+        "name": "mid_1",
+        "record_bytes": 3
+       },
+       {
+        "fields": [
+         {
+          "bits": 5,
+          "count": 4,
+          "name": "mid"
+         }
+        ],
+        "name": "mid_2",
+        "record_bytes": 3
+       },
+       {
+        "fields": [
+         {
+          "bits": 4,
+          "count": 16,
+          "name": "fine"
+         }
+        ],
+        "name": "fine_1",
+        "record_bytes": 8
+       },
+       {
+        "fields": [
+         {
+          "bits": 4,
+          "count": 16,
+          "name": "fine"
+         }
+        ],
+        "name": "fine_2",
+        "record_bytes": 8
+       },
+       {
+        "fields": [
+         {
+          "bits": 8,
+          "count": 6,
+          "name": "mean"
+         },
+         {
+          "bits": 8,
+          "count": 6,
+          "name": "p99"
+         }
+        ],
+        "name": "quality",
+        "record_bytes": 12
+       }
+      ],
+      "groups": [
+       {
+        "chunk_grid": [
+         2,
+         2
+        ],
+        "chunk_px": 64,
+        "chunk_windows": 4,
+        "columns": [
+         "base",
+         "mask"
+        ],
+        "empty_chunks": [],
+        "kind": "base"
+       },
+       {
+        "chunk_grid": [
+         2,
+         2
+        ],
+        "chunk_px": 48,
+        "chunk_windows": 3,
+        "columns": [
+         "mid_1",
+         "mid_2"
+        ],
+        "empty_chunks": [],
+        "kind": "mid"
+       },
+       {
+        "chunk_grid": [
+         3,
+         3
+        ],
+        "chunk_px": 32,
+        "chunk_windows": 2,
+        "columns": [
+         "fine_1",
+         "fine_2"
+        ],
+        "empty_chunks": [
+         [
+          0,
+          2
+         ]
+        ],
+        "kind": "fine"
+       },
+       {
+        "chunk_grid": [
+         2,
+         2
+        ],
+        "chunk_px": 64,
+        "chunk_windows": 4,
+        "columns": [
+         "quality"
+        ],
+        "empty_chunks": [],
+        "kind": "quality"
+       }
+      ],
+      "mask": {
+       "chunks": [
+        [
+         0,
+         0
+        ],
+        [
+         0,
+         1
+        ]
+       ],
+       "column": "mask",
+       "kind": "base"
+      },
+      "product_px": [
+       75,
+       90
+      ],
+      "tiers": [
+       {
+        "columns": [
+         "base"
+        ],
+        "levels": 3,
+        "name": "coarse"
+       },
+       {
+        "columns": [
+         "mid_1",
+         "mid_2"
+        ],
+        "levels": 2,
+        "name": "mid"
+       },
+       {
+        "columns": [
+         "fine_1",
+         "fine_2"
+        ],
+        "levels": 2,
+        "name": "fine"
+       }
+      ],
+      "window_grid": [
+       5,
+       6
+      ],
+      "window_order": "row-major",
+      "window_px": 16
+     },
+     "licence": {
+      "attribution": "TESSERA embeddings, Energy and Environment Group, Department of Computer Science and Technology, University of Cambridge, via geotessera (https://github.com/ucam-eo/geotessera)",
+      "changes": "lossy georvq encoding of the int8 embeddings and their per-pixel scales; the decoded values are approximations",
+      "spdx": "CC-BY-SA-4.0",
+      "url": "https://creativecommons.org/licenses/by-sa/4.0/"
+     },
+     "output": {
+      "band_names": null,
+      "count": 128,
+      "dtype": "float32",
+      "nodata": 0.0
+     },
+     "product": {
+      "count": 128,
+      "dtype": "int8",
+      "epsg": 32633,
+      "georef": "landmask",
+      "height": 75,
+      "id": "2024/grid_17.25_46.75",
+      "kind": "tessera-tile",
+      "lat": 46.75,
+      "lon": 17.25,
+      "nodata": null,
+      "orientation": "north-up",
+      "scale": "float32 per pixel, x = q * scale",
+      "scales": "snap/global_0.1_degree_representation/2024/grid_17.25_46.75/grid_17.25_46.75_scales.npy",
+      "source": "snap/global_0.1_degree_representation/2024/grid_17.25_46.75/grid_17.25_46.75.npy",
+      "transform": [
+       10.0,
+       0.0,
+       667876.8296629513,
+       0.0,
+       -10.0,
+       5185507.804629618
+      ],
+      "width": 90,
+      "year": 2024
+     },
+     "quality": {
+      "column": "quality",
+      "decode_precision": "fp32",
+      "encoding": "code = ceil(32 * (log10(e) + 6)) clipped to 0..255, so that the value a code stands for is never below e; 0 means e <= 1e-6",
+      "error": "||decoded - source|| / ||source|| per valid pixel (relative L2 of the 128-band vector), decoded float field against the prepared source",
+      "name": "rel_l2",
+      "offset": 6.0,
+      "order": "per stat, one byte per rung in header rungs order",
+      "scale": 32.0,
+      "stats": [
+       "mean",
+       "p99"
+      ]
+     },
+     "rungs": [
+      {
+       "bits_px": 0.2265625,
+       "bits_window": 58,
+       "tuple": [
+        2,
+        0,
+        0
+       ]
+      },
+      {
+       "bits_px": 0.24609375,
+       "bits_window": 63,
+       "tuple": [
+        3,
+        0,
+        0
+       ]
+      },
+      {
+       "bits_px": 0.32421875,
+       "bits_window": 83,
+       "tuple": [
+        3,
+        1,
+        0
+       ]
+      },
+      {
+       "bits_px": 0.40234375,
+       "bits_window": 103,
+       "tuple": [
+        3,
+        2,
+        0
+       ]
+      },
+      {
+       "bits_px": 0.65234375,
+       "bits_window": 167,
+       "tuple": [
+        3,
+        2,
+        1
+       ]
+      },
+      {
+       "bits_px": 0.90234375,
+       "bits_window": 231,
+       "tuple": [
+        3,
+        2,
+        2
+       ]
+      }
+     ],
+     "status": "prototype",
+     "version": "0.5"
+    },
+    "georvq_aux": [
+     "geotessera"
+    ],
+    "proj:code": "EPSG:32633",
+    "spatial:bbox": [
+     667876.8296629513,
+     5184757.804629618,
+     668776.8296629513,
+     5185507.804629618
+    ],
+    "spatial:dimensions": [
+     "y",
+     "x"
+    ],
+    "spatial:registration": "pixel",
+    "spatial:shape": [
+     75,
+     90
+    ],
+    "spatial:transform": [
+     10.0,
+     0.0,
+     667876.8296629513,
+     0.0,
+     -10.0,
+     5185507.804629618
+    ],
+    "zarr_conventions": [
+     {
+      "description": "Coordinate reference system information for geospatial data",
+      "name": "proj",
+      "schema_url": "https://raw.githubusercontent.com/zarr-conventions/proj/refs/tags/v0.1/schema.json",
+      "spec_url": "https://github.com/zarr-conventions/proj/blob/v0.1/README.md",
+      "uuid": "f17cb550-5864-4468-aeb7-f3180cfb622f"
+     },
+     {
+      "description": "Spatial coordinate information",
+      "name": "spatial",
+      "schema_url": "https://raw.githubusercontent.com/zarr-conventions/spatial/refs/tags/v0.1/schema.json",
+      "spec_url": "https://github.com/zarr-conventions/spatial/blob/v0.1/README.md",
+      "uuid": "689b58e2-cf7b-45e0-9fff-9cfc0883d6b4"
+     }
+    ]
+   },
+   "node_type": "group",
+   "zarr_format": 3
+  },
+  "base": {
+   "attributes": {
+    "proj:code": "EPSG:32633",
+    "spatial:bbox": [
+     667876.8296629513,
+     5184707.804629618,
+     668836.8296629513,
+     5185507.804629618
+    ],
+    "spatial:dimensions": [
+     "wy",
+     "wx"
+    ],
+    "spatial:registration": "pixel",
+    "spatial:shape": [
+     5,
+     6
+    ],
+    "spatial:transform": [
+     160.0,
+     0.0,
+     667876.8296629513,
+     0.0,
+     -160.0,
+     5185507.804629618
+    ],
+    "zarr_conventions": [
+     {
+      "description": "Coordinate reference system information for geospatial data",
+      "name": "proj",
+      "schema_url": "https://raw.githubusercontent.com/zarr-conventions/proj/refs/tags/v0.1/schema.json",
+      "spec_url": "https://github.com/zarr-conventions/proj/blob/v0.1/README.md",
+      "uuid": "f17cb550-5864-4468-aeb7-f3180cfb622f"
+     },
+     {
+      "description": "Spatial coordinate information",
+      "name": "spatial",
+      "schema_url": "https://raw.githubusercontent.com/zarr-conventions/spatial/refs/tags/v0.1/schema.json",
+      "spec_url": "https://github.com/zarr-conventions/spatial/blob/v0.1/README.md",
+      "uuid": "689b58e2-cf7b-45e0-9fff-9cfc0883d6b4"
+     }
+    ]
+   },
+   "chunk_grid": {
+    "configuration": {
+     "chunk_shape": [
+      4,
+      4,
+      8
+     ]
+    },
+    "name": "regular"
+   },
+   "chunk_key_encoding": {
+    "configuration": {
+     "separator": "/"
+    },
+    "name": "default"
+   },
+   "codecs": [
+    {
+     "name": "bytes"
+    },
+    {
+     "configuration": {
+      "checksum": false,
+      "level": 19
+     },
+     "name": "zstd"
+    }
+   ],
+   "data_type": "uint8",
+   "dimension_names": [
+    "wy",
+    "wx",
+    "base_byte"
+   ],
+   "fill_value": 0,
+   "node_type": "array",
+   "shape": [
+    5,
+    6,
+    8
+   ],
+   "storage_transformers": [],
+   "zarr_format": 3
+  },
+  "fine": {
+   "attributes": {
+    "proj:code": "EPSG:32633",
+    "spatial:bbox": [
+     667876.8296629513,
+     5184707.804629618,
+     668836.8296629513,
+     5185507.804629618
+    ],
+    "spatial:dimensions": [
+     "wy",
+     "wx"
+    ],
+    "spatial:registration": "pixel",
+    "spatial:shape": [
+     5,
+     6
+    ],
+    "spatial:transform": [
+     160.0,
+     0.0,
+     667876.8296629513,
+     0.0,
+     -160.0,
+     5185507.804629618
+    ],
+    "zarr_conventions": [
+     {
+      "description": "Coordinate reference system information for geospatial data",
+      "name": "proj",
+      "schema_url": "https://raw.githubusercontent.com/zarr-conventions/proj/refs/tags/v0.1/schema.json",
+      "spec_url": "https://github.com/zarr-conventions/proj/blob/v0.1/README.md",
+      "uuid": "f17cb550-5864-4468-aeb7-f3180cfb622f"
+     },
+     {
+      "description": "Spatial coordinate information",
+      "name": "spatial",
+      "schema_url": "https://raw.githubusercontent.com/zarr-conventions/spatial/refs/tags/v0.1/schema.json",
+      "spec_url": "https://github.com/zarr-conventions/spatial/blob/v0.1/README.md",
+      "uuid": "689b58e2-cf7b-45e0-9fff-9cfc0883d6b4"
+     }
+    ]
+   },
+   "chunk_grid": {
+    "configuration": {
+     "chunk_shape": [
+      6,
+      6,
+      2,
+      8
+     ]
+    },
+    "name": "regular"
+   },
+   "chunk_key_encoding": {
+    "configuration": {
+     "separator": "/"
+    },
+    "name": "default"
+   },
+   "codecs": [
+    {
+     "configuration": {
+      "chunk_shape": [
+       2,
+       2,
+       1,
+       8
+      ],
+      "codecs": [
+       {
+        "name": "bytes"
+       },
+       {
+        "configuration": {
+         "checksum": false,
+         "level": 19
+        },
+        "name": "zstd"
+       }
+      ],
+      "index_codecs": [
+       {
+        "configuration": {
+         "endian": "little"
+        },
+        "name": "bytes"
+       },
+       {
+        "name": "crc32c"
+       }
+      ],
+      "index_location": "end"
+     },
+     "name": "sharding_indexed"
+    }
+   ],
+   "data_type": "uint8",
+   "dimension_names": [
+    "wy",
+    "wx",
+    "fine_level",
+    "fine_byte"
+   ],
+   "fill_value": 0,
+   "node_type": "array",
+   "shape": [
+    5,
+    6,
+    2,
+    8
+   ],
+   "storage_transformers": [],
+   "zarr_format": 3
+  },
+  "mask": {
+   "attributes": {
+    "proj:code": "EPSG:32633",
+    "spatial:bbox": [
+     667876.8296629513,
+     5184757.804629618,
+     668776.8296629513,
+     5185507.804629618
+    ],
+    "spatial:dimensions": [
+     "y",
+     "x"
+    ],
+    "spatial:registration": "pixel",
+    "spatial:shape": [
+     75,
+     90
+    ],
+    "spatial:transform": [
+     10.0,
+     0.0,
+     667876.8296629513,
+     0.0,
+     -10.0,
+     5185507.804629618
+    ],
+    "zarr_conventions": [
+     {
+      "description": "Coordinate reference system information for geospatial data",
+      "name": "proj",
+      "schema_url": "https://raw.githubusercontent.com/zarr-conventions/proj/refs/tags/v0.1/schema.json",
+      "spec_url": "https://github.com/zarr-conventions/proj/blob/v0.1/README.md",
+      "uuid": "f17cb550-5864-4468-aeb7-f3180cfb622f"
+     },
+     {
+      "description": "Spatial coordinate information",
+      "name": "spatial",
+      "schema_url": "https://raw.githubusercontent.com/zarr-conventions/spatial/refs/tags/v0.1/schema.json",
+      "spec_url": "https://github.com/zarr-conventions/spatial/blob/v0.1/README.md",
+      "uuid": "689b58e2-cf7b-45e0-9fff-9cfc0883d6b4"
+     }
+    ]
+   },
+   "chunk_grid": {
+    "configuration": {
+     "chunk_shape": [
+      64,
+      64
+     ]
+    },
+    "name": "regular"
+   },
+   "chunk_key_encoding": {
+    "configuration": {
+     "separator": "/"
+    },
+    "name": "default"
+   },
+   "codecs": [
+    {
+     "name": "bytes"
+    },
+    {
+     "configuration": {
+      "checksum": false,
+      "level": 19
+     },
+     "name": "zstd"
+    }
+   ],
+   "data_type": "bool",
+   "dimension_names": [
+    "y",
+    "x"
+   ],
+   "fill_value": true,
+   "node_type": "array",
+   "shape": [
+    75,
+    90
+   ],
+   "storage_transformers": [],
+   "zarr_format": 3
+  },
+  "mid": {
+   "attributes": {
+    "proj:code": "EPSG:32633",
+    "spatial:bbox": [
+     667876.8296629513,
+     5184707.804629618,
+     668836.8296629513,
+     5185507.804629618
+    ],
+    "spatial:dimensions": [
+     "wy",
+     "wx"
+    ],
+    "spatial:registration": "pixel",
+    "spatial:shape": [
+     5,
+     6
+    ],
+    "spatial:transform": [
+     160.0,
+     0.0,
+     667876.8296629513,
+     0.0,
+     -160.0,
+     5185507.804629618
+    ],
+    "zarr_conventions": [
+     {
+      "description": "Coordinate reference system information for geospatial data",
+      "name": "proj",
+      "schema_url": "https://raw.githubusercontent.com/zarr-conventions/proj/refs/tags/v0.1/schema.json",
+      "spec_url": "https://github.com/zarr-conventions/proj/blob/v0.1/README.md",
+      "uuid": "f17cb550-5864-4468-aeb7-f3180cfb622f"
+     },
+     {
+      "description": "Spatial coordinate information",
+      "name": "spatial",
+      "schema_url": "https://raw.githubusercontent.com/zarr-conventions/spatial/refs/tags/v0.1/schema.json",
+      "spec_url": "https://github.com/zarr-conventions/spatial/blob/v0.1/README.md",
+      "uuid": "689b58e2-cf7b-45e0-9fff-9cfc0883d6b4"
+     }
+    ]
+   },
+   "chunk_grid": {
+    "configuration": {
+     "chunk_shape": [
+      6,
+      6,
+      2,
+      3
+     ]
+    },
+    "name": "regular"
+   },
+   "chunk_key_encoding": {
+    "configuration": {
+     "separator": "/"
+    },
+    "name": "default"
+   },
+   "codecs": [
+    {
+     "configuration": {
+      "chunk_shape": [
+       3,
+       3,
+       1,
+       3
+      ],
+      "codecs": [
+       {
+        "name": "bytes"
+       },
+       {
+        "configuration": {
+         "checksum": false,
+         "level": 19
+        },
+        "name": "zstd"
+       }
+      ],
+      "index_codecs": [
+       {
+        "configuration": {
+         "endian": "little"
+        },
+        "name": "bytes"
+       },
+       {
+        "name": "crc32c"
+       }
+      ],
+      "index_location": "end"
+     },
+     "name": "sharding_indexed"
+    }
+   ],
+   "data_type": "uint8",
+   "dimension_names": [
+    "wy",
+    "wx",
+    "mid_level",
+    "mid_byte"
+   ],
+   "fill_value": 0,
+   "node_type": "array",
+   "shape": [
+    5,
+    6,
+    2,
+    3
+   ],
+   "storage_transformers": [],
+   "zarr_format": 3
+  },
+  "quality": {
+   "attributes": {
+    "decoders": [
+     "fedcba9876543210"
+    ]
+   },
+   "node_type": "group",
+   "zarr_format": 3
+  },
+  "quality/fedcba9876543210": {
+   "attributes": {
+    "georvq_quality": {
+     "bitstream_id": "0123456789abcdef",
+     "decoder_id": "fedcba9876543210",
+     "fields": [
+      {
+       "bits": 8,
+       "count": 6,
+       "name": "mean"
+      },
+      {
+       "bits": 8,
+       "count": 6,
+       "name": "p99"
+      }
+     ],
+     "quality": {
+      "decode_precision": "fp32",
+      "encoding": "code = ceil(32 * (log10(e) + 6)) clipped to 0..255, so that the value a code stands for is never below e; 0 means e <= 1e-6",
+      "error": "||decoded - source|| / ||source|| per valid pixel (relative L2 of the 128-band vector), decoded float field against the prepared source",
+      "name": "rel_l2",
+      "offset": 6.0,
+      "order": "per stat, one byte per rung in header rungs order",
+      "scale": 32.0,
+      "stats": [
+       "mean",
+       "p99"
+      ]
+     },
+     "release": {
+      "bitstream_id": "0123456789abcdef",
+      "decoder_id": "fedcba9876543210",
+      "name": "tessera-v2",
+      "revision": "r1",
+      "uri": "hf://earth-compress/georvq-tessera-v2"
+     },
+     "rungs": [
+      {
+       "bits_px": 0.2265625,
+       "bits_window": 58,
+       "tuple": [
+        2,
+        0,
+        0
+       ]
+      },
+      {
+       "bits_px": 0.24609375,
+       "bits_window": 63,
+       "tuple": [
+        3,
+        0,
+        0
+       ]
+      },
+      {
+       "bits_px": 0.32421875,
+       "bits_window": 83,
+       "tuple": [
+        3,
+        1,
+        0
+       ]
+      },
+      {
+       "bits_px": 0.40234375,
+       "bits_window": 103,
+       "tuple": [
+        3,
+        2,
+        0
+       ]
+      },
+      {
+       "bits_px": 0.65234375,
+       "bits_window": 167,
+       "tuple": [
+        3,
+        2,
+        1
+       ]
+      },
+      {
+       "bits_px": 0.90234375,
+       "bits_window": 231,
+       "tuple": [
+        3,
+        2,
+        2
+       ]
+      }
+     ]
+    },
+    "proj:code": "EPSG:32633",
+    "spatial:bbox": [
+     667876.8296629513,
+     5184707.804629618,
+     668836.8296629513,
+     5185507.804629618
+    ],
+    "spatial:dimensions": [
+     "wy",
+     "wx"
+    ],
+    "spatial:registration": "pixel",
+    "spatial:shape": [
+     5,
+     6
+    ],
+    "spatial:transform": [
+     160.0,
+     0.0,
+     667876.8296629513,
+     0.0,
+     -160.0,
+     5185507.804629618
+    ],
+    "zarr_conventions": [
+     {
+      "description": "Coordinate reference system information for geospatial data",
+      "name": "proj",
+      "schema_url": "https://raw.githubusercontent.com/zarr-conventions/proj/refs/tags/v0.1/schema.json",
+      "spec_url": "https://github.com/zarr-conventions/proj/blob/v0.1/README.md",
+      "uuid": "f17cb550-5864-4468-aeb7-f3180cfb622f"
+     },
+     {
+      "description": "Spatial coordinate information",
+      "name": "spatial",
+      "schema_url": "https://raw.githubusercontent.com/zarr-conventions/spatial/refs/tags/v0.1/schema.json",
+      "spec_url": "https://github.com/zarr-conventions/spatial/blob/v0.1/README.md",
+      "uuid": "689b58e2-cf7b-45e0-9fff-9cfc0883d6b4"
+     }
+    ]
+   },
+   "chunk_grid": {
+    "configuration": {
+     "chunk_shape": [
+      4,
+      4,
+      12
+     ]
+    },
+    "name": "regular"
+   },
+   "chunk_key_encoding": {
+    "configuration": {
+     "separator": "/"
+    },
+    "name": "default"
+   },
+   "codecs": [
+    {
+     "name": "bytes"
+    },
+    {
+     "configuration": {
+      "checksum": false,
+      "level": 19
+     },
+     "name": "zstd"
+    }
+   ],
+   "data_type": "uint8",
+   "dimension_names": [
+    "wy",
+    "wx",
+    "quality_byte"
+   ],
+   "fill_value": 0,
+   "node_type": "array",
+   "shape": [
+    5,
+    6,
+    12
+   ],
+   "storage_transformers": [],
+   "zarr_format": 3
+  }
+ }
+}

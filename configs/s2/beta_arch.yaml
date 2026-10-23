@@ -1,0 +1,125 @@
+# Sentinel-2 L1C with the architecture of the ring-space beta_v4 codec,
+# trained in one stage by georvq's recipe. The point is to see whether
+# georvq's training code reaches beta_v4's quality when the network and
+# the bitstream are beta's, since georvq's own S2 designs (96 px and 36 px
+# pyramids) came out 7-46% behind it in RMSE at matched rate.
+#
+#   sbatch --gpus=1 --cpus-per-task=16 --mem=150G --time=4-00:00:00 \
+#          --signal=B:USR1@300 job.sbatch
+#   where job.sbatch sets PYTHONPATH to the checkout and ends with
+#   exec python scripts/train_pyramid.py -c configs/s2/beta_arch.yaml --gpu 0
+#   Resume a stopped run with train.resume=checkpoints/beta_arch/model.pt.
+#
+# Architecture, as beta_v4. Checked weight for weight: the beta_v4
+# release (beta_v2's encoder and books with beta_v4's decoder) loads into
+# this model with every tensor matched, and encodes and decodes the same
+# normalised tiles as ring-space's code to within 1e-5.
+#   - 42 px tiles at 10 m (21 at 20 m, 7 at 60 m), per-tile per-band mean
+#     and std removed and sent as float16, 424 bits per tile (0.240 b/px).
+#   - encoder: beta_v2's conv stack at width 128 (`tokenizer.kind:
+#     source`, S2ConvTileEncoder), a 7 x 7 grid of 6 px cells and one
+#     whole-tile vector, both 128 wide.
+#   - books: 8 levels of K=16384 on both tiers, as beta's CLS and HQ,
+#     with codes assigned on fp32 distances as beta's were
+#     (bf16_scores off; bf16 scores change beta_v4's own codes).
+#   - decoder: beta_v4's transformer, dim 384, depth 8, 8 heads, FFN x4,
+#     AdaLN-Zero on the depth thermometer, per-grid patch heads of width
+#     48, no lineage bridge (22.5M parameters). georvq conditions on the
+#     thermometers of both tiers where beta conditioned on the HQ depth
+#     alone; with the coarse tier always at 8 levels the extra inputs are
+#     constant.
+#   63.1M parameters in all, 33.6M of them codebooks.
+#
+# Recipe, georvq's single stage as s2_w36 ran it, not beta's April one:
+# an unquantised warmup at a quarter of the batch, then tree init of the
+# books on the warmed-up latents, then quantised training with split
+# resets, path depth sampling with the coarse tier sent in full at every
+# rung (min_depths [8, 0], as beta sends CLS), the trainer's grad clip
+# 1.0, bf16 autocast, and the per-grid MSE loss georvq uses for S2 (beta
+# added 0.1 SSIM and summed the grids; neither is used here).
+#
+# Warmup 5000 steps, after the maintainer's "a few thousand". The batch
+# ramp ends at 4999 because the books are fitted at step 5001 from the
+# batch of the step before.
+#
+# Batch 2048 tiles, as beta. The EMA update in vq.py builds a dense
+# N x K one-hot per level, and the fine tier gives 49 vectors per tile,
+# so batch 2048 is already 100k rows against K=16384 (about 20 GB of
+# transient memory per level); s2_w36's 4096 would double it.
+# Sample budget (lab/findings/codebook-sample-budget.md), vectors per
+# code = batch x cells x EMA window x share / K, at EMA decay 0.998
+# (window 500): fine tier, deepest level reached by 0.24 of rows,
+# 2048 x 49 x 500 x 0.24 / 16384 = 735; coarse tier, every row,
+# 2048 x 500 / 16384 = 63. The coarse book is under the ~450 the rule
+# asks for, because K is fixed by beta's architecture (beta trained it at
+# decay 0.99, 12 per code). Tree init takes 500 vectors per code.
+#
+# lr 2e-4 cosine with a 2000-step warmup. Job 950 (s2_w36) had two loss
+# spikes at lr 2.8-3e-4 under the same clip, the second of which tripped
+# the collapse guard. 2e-4 is the lr beta's decoder trained at.
+#
+# 250,000 steps: 512M tiles, 2.2 times what beta's encoder and decoder
+# saw between them (34k + 80k steps of about 2048 tiles, 234M). The pilot
+# ran the warmup at 0.14 s per step (batch 512) and quantised steps at
+# 0.81 s (2048 tiles, 72 GB of GPU memory), so about 2.4 days on one A100.
+
+data:
+  source: s2
+  store_dir: /data/Major-TOM/Core-S2L1C
+  reader: live_s2
+  val_frac: 0.02
+  pool:
+    # 8192 whole scenes, 97 GiB resident, as s2_w36
+    size: 8192
+    workers: 8
+    slot_rows: 1068
+    refresh_per_s: 32.0
+    device: cpu
+    cycle: true
+    align_crops: true
+
+model:
+  window: 42
+  bands: 13
+  tiers: ["1:128:16384:8", "7:128:16384:8"]
+  min_depths: [8, 0]
+  depth_sampling: path
+  full_frac: 0.15
+  tokenizer: {kind: source, dim: 128}
+  decoder: {dim: 384, depth: 8, heads: 8, head_feat: 48, cls_bridge: false,
+            ff_ratio: 4.0}
+  vq:
+    commit_weight: 0.25
+    dead_threshold: 0.000625
+    ema_decay: 0.998
+    bf16_scores: false
+    skip_masked: true
+    warmup_steps: 5000
+    warmup_truncate: true
+    init_mode: tree
+    init_per_code: 500
+    reset_mode: split
+
+train:
+  steps: 250000
+  batch_windows: 2048
+  batch_ramp: {until: 4999, divisor: 4}
+  amp: true
+  grad_ckpt: true
+  tf32: true
+  optim: {lr: 2.0e-4, wd: 0.01, warmup: 2000}
+  val_interval: 1000
+  fig_interval: 5000
+  save_interval: 2500
+
+log:
+  run_tag: beta_arch
+  wandb: true
+  wandb_project: georvq
+
+eval:
+  recon_tuples: ["8-0", "8-1", "8-2", "8-4", "8-8"]
+  ref_curves:
+    # beta_v4 without its deblocker, scored by georvq's validation on this
+    # run's validation windows (scratch/s2-final/beta_rerun/make_refs.py)
+    - path: artifacts/s2_ref_beta_v4.json

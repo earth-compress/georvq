@@ -7,7 +7,7 @@ name = "georvq"
 version = "0.1.0"
 description = "Pyramidal residual-VQ compression for geospatial datasets: variable-rate matryoshka codecs with learned entropy models"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE", "LICENSES/*"]
 # The base install is the decode path: georvq.inference, the release
@@ -25,14 +25,19 @@ dependencies = [
     "pydantic>=2.5",
     "pyyaml",
     "rasterio>=1.4",   # AE release layer: tile encode, GeoTIFF output
-    "huggingface_hub",   # release bundles named by a file's header
+    "huggingface_hub",   # release bundles named by a store's header
+    # coded stores; 3.3 is the first release that reads the inner chunks
+    # of a shard concurrently, and it needs Python 3.12
+    "zarr>=3.3",
+    "fsspec",
+    "aiohttp",           # fsspec over http(s)
 ]
 
 [project.optional-dependencies]
 # training, stores, evaluation and figures
 train = ["pandas", "matplotlib", "scikit-learn", "wandb"]
-tessera = ["geotessera"]   # fetch Tessera tiles: the demo notebook, a store build
-# the tessera-vq baseline the demo compares against (Yang, Feng & Keshav)
+tessera = ["geotessera"]   # fetch Tessera tiles for a chip store build
+# the tessera-vq baseline (scripts/baseline_tessera_vq.py; Yang, Feng & Keshav)
 baseline = ["tessera-vq @ git+https://github.com/sk818/tessera-vq.git@v0.3.1"]
 # Downstream eval benchmarks (AEF extraction, ASTER GED, LUCAS/LCMAP)
 eval = ["georvq[train]", "h5py", "requests", "pyproj", "shapely"]
@@ -41,19 +46,17 @@ viz = ["georvq[train]", "imageio", "pillow"]
 # ONNX export (the dynamo exporter imports onnxscript) and onnxruntime
 # decode (backend="onnx"); onnxruntime 1.19 is the first built for numpy 2
 onnx = ["onnx", "onnxruntime>=1.19", "onnxscript"]
-# ERA5 reader and the ERA5 / CMIP6 / NextGEMS store builders. zarr 3
-# needs Python 3.11 or later.
-era5 = ["zarr>=3", "xarray", "fsspec", "gcsfs", "aiohttp", "healpy"]
+# ERA5 reader and the ERA5 / CMIP6 / NextGEMS store builders
+era5 = ["xarray", "gcsfs", "healpy"]
 # the demo notebooks and their generators
 notebooks = ["georvq[train]", "jupyter", "nbformat", "duckdb", "geopandas"]
-# the suite covers training; zarr and duckdb un-skip test_era5 and the
-# GeoParquet duckdb test
-dev = ["georvq[train]", "pytest", "duckdb",
-       "zarr>=3; python_version >= '3.11'"]
+# the suite covers training; xarray un-skips the store's xarray test
+dev = ["georvq[train]", "pytest", "xarray"]
 
 [project.scripts]
 georvq-train = "georvq.cli:train_pyramid"
 georvq-train-stage1 = "georvq.cli:train_stage1"
+georvq = "georvq.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["georvq*"]

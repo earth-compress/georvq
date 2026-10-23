@@ -75,17 +75,17 @@ def test_prep_rejects_missing_scales():
 
 
 def test_recon_stats_raw_space():
-    """Loss is raw-space MSE; cos is on-the-fly (scale-blind); rel_l2 is
-    not — a uniformly rescaled recon keeps cos=1 but pays in mse/rel."""
+    """Loss is raw-space MSE and the metric is relative L2, which sees
+    magnitude: a uniformly rescaled recon has the right direction but pays
+    in mse and rel."""
     from georvq.sources.tessera import TesseraSource
     src = TesseraSource(SimpleNamespace(bands=8))
     x = torch.randn(1, 8, 4, 4)
     valid = torch.ones(1, 4, 4, dtype=torch.bool)
     mse, stats = src.recon_stats(x, x, valid)
     assert mse < 1e-10 and stats["vec_rel_l2"] < 1e-5
-    assert abs(stats["cos"] - 1.0) < 1e-5
+    assert "cos" not in stats
     mse, stats = src.recon_stats(2 * x, x, valid)
-    assert abs(stats["cos"] - 1.0) < 1e-5     # direction untouched
     assert abs(stats["vec_rel_l2"] - 1.0) < 1e-5   # magnitude off by 100%
     assert mse > 0.1
 
@@ -125,6 +125,104 @@ def test_utm_epsg():
     assert builder.utm_epsg(0.15, 52.05) == "EPSG:32631"
     assert builder.utm_epsg(-119.95, 36.05) == "EPSG:32611"
     assert builder.utm_epsg(147.05, -42.15) == "EPSG:32755"
+
+
+def test_sampler_accepts_tile_year_mapping():
+    s = builder.Sampler({(15, 5205): [2023, 2024]}, seed=0)
+    s.rng = _FixedPointRng(0.11, 52.09)
+    assert s.draw() == (2023, 0.15, 52.05)
+
+
+def _registry(rows):
+    import pandas as pd
+    return pd.DataFrame(rows, columns=["zone", "year", "embedded",
+                                       "bbox_west", "bbox_south",
+                                       "bbox_east", "bbox_north"])
+
+
+def test_registry_tile_years():
+    reg = _registry([
+        # zone 31 starts at 0E: the 30N row may only mark tiles west of 0
+        ("31N", 2024, True, -0.08, 52.02, 0.27, 52.18),
+        ("30N", 2024, True, -0.12, 52.02, 0.12, 52.08),
+        ("31N", 2023, True, 0.02, 52.02, 0.08, 52.08),
+        ("31N", 2022, False, 0.02, 52.02, 0.08, 52.08),
+        # the S group extends past the equator: keep southern tiles only
+        ("31S", 2024, True, 0.02, -0.12, 0.08, 0.12),
+    ])
+    out = builder.registry_tile_years(reg)
+    assert out[(5, 5205)] == [2023, 2024]
+    assert out[(15, 5205)] == out[(25, 5205)] == [2024]
+    assert out[(-5, 5205)] == [2024]          # from the 30N row only
+    assert out[(15, 5215)] == [2024]
+    assert (5, 5) not in out and out[(5, -5)] == [2024]
+    assert (35, 5205) not in out and (-15, 5205) not in out
+    assert set(out) == {(5, 5205), (15, 5205), (25, 5205), (-5, 5205),
+                        (5, 5215), (15, 5215), (25, 5215), (5, -5)}
+
+
+def test_registry_tile_years_antimeridian():
+    reg = _registry([("60N", 2024, True, 179.92, 10.02, -179.9, 10.08),
+                     ("01N", 2024, True, 179.92, 10.02, -179.92, 10.08)])
+    out = builder.registry_tile_years(reg)
+    assert set(out) == {(17995, 1005), (-17995, 1005)}
+
+
+def test_clean_nodata():
+    q = np.ones((4, 2, 3), np.int8)
+    s = np.array([[0.1, np.nan, 0.2], [np.inf, 0.3, 0.4]], np.float32)
+    q, s = builder.clean_nodata(q, s)
+    assert (s == np.float32([[0.1, 0, 0.2], [0, 0.3, 0.4]])).all()
+    assert (q[:, 0, 1] == 0).all() and (q[:, 1, 0] == 0).all()
+    assert q.sum() == 4 * 4
+
+
+def test_fetch_tile_zarr_reads_crops(monkeypatch):
+    """Crops come from the tile's window on the zone grid, int8 codes are
+    copied unchanged and NaN scales become the v1 nodata convention."""
+    pytest.importorskip("pyproj")
+    from pyproj import Transformer
+    monkeypatch.setattr(builder, "PX", 64)
+    lon, lat = 0.15, 52.05
+    fwd = Transformer.from_crs("EPSG:4326", "EPSG:32631", always_xy=True)
+    _, _, h, w = builder.tile_window(lon, lat, 0.0, 0.0, 10.0, fwd.transform)
+    # the envelope includes the skew from meridian convergence
+    assert 1100 < h < 1150 and 680 < w < 740
+    # place the grid so the tile window starts at row 3, col 5
+    r0, c0, _, _ = builder.tile_window(lon, lat, 0.0, 0.0, 10.0,
+                                       fwd.transform)
+    west, top = (c0 - 5) * 10.0, -(r0 - 3) * 10.0
+    rng = np.random.default_rng(0)
+    emb = rng.integers(-127, 128, size=(2, 4, h + 8, w + 8), dtype=np.int8)
+    sc = rng.uniform(0.01, 0.05, size=(2, h + 8, w + 8)).astype(np.float32)
+    sc[1, :, : w // 2] = np.nan
+
+    class Tiles:
+        def zone(self, z):
+            assert z == 31
+            return {"emb": emb, "scales": sc, "west": west, "top": top,
+                    "px": 10.0, "years": [2023, 2024], "crs": "EPSG:32631"}
+
+    out = builder.fetch_tile_zarr(Tiles(), (2023, lon, lat), 2, 1.0,
+                                  np.random.default_rng(1))
+    assert len(out) == 2
+    for q, s, m in out:
+        R, C = 3 + m["row_off"], 5 + m["col_off"]
+        assert q.shape == (4, 64, 64) and q.dtype == np.int8
+        assert (q == emb[0, :, R:R + 64, C:C + 64]).all()
+        assert (s == sc[0, R:R + 64, C:C + 64]).all()
+        assert abs(m["lon"] - lon) < 0.05 and abs(m["lat"] - lat) < 0.05
+        assert m["crs"] == "EPSG:32631" and m["nodata_frac"] == 0.0
+    out = builder.fetch_tile_zarr(Tiles(), (2024, lon, lat), 8, 1.0,
+                                  np.random.default_rng(1))
+    assert out, "half the tile is valid"
+    for q, s, m in out:
+        bad = s == 0
+        assert (q[:, bad] == 0).all() and np.isfinite(s).all()
+        assert m["nodata_frac"] == pytest.approx(bad.mean())
+    sc[0] = np.nan
+    assert builder.fetch_tile_zarr(Tiles(), (2023, lon, lat), 2, 1.0,
+                                   np.random.default_rng(1)) == []
 
 
 def test_scale_sidecar_layout(tmp_path):

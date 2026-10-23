@@ -32,12 +32,15 @@ from georvq.repro import (load_checkpoint, run_metadata, save_checkpoint,
 from georvq.train.figures import (codebook_figure, cosdist_figure,
                                   error_hist_harvest, error_hist_render,
                                   rd_err_harvest, rd_err_render, rd_figure,
-                                  recon_harvest, recon_render, reset_figure)
+                                  recon_harvest, recon_render,
+                                  ref_history_figure, reset_figure)
 from georvq.sources.report import resolve_report
-from georvq.train.validate import canonical_tuples, load_rd_ref, tname, validate
+from georvq.train.validate import (canonical_tuples, load_ref_curve,
+                                   load_rd_ref, tname, validate)
 from georvq.train import dist as D
 from georvq.train.signals import stop_on_signals
-from georvq.train.warmstart import (check_warm_start, freeze_books,
+from georvq.train.warmstart import (DECODER_MODULES, check_warm_start,
+                                    freeze_all_but_decoder, freeze_books,
                                     load_partial, set_encoder_frozen,
                                     trainable_params)
 
@@ -113,12 +116,14 @@ def rng_state():
 
 
 def set_rng_state(st):
-    torch.set_rng_state(st["torch"])
+    # a checkpoint loaded with map_location=cuda puts these on the GPU, and
+    # torch only accepts RNG states as CPU byte tensors
+    torch.set_rng_state(st["torch"].cpu())
     if st.get("cuda") is not None and torch.cuda.is_available() \
             and len(st["cuda"]) == torch.cuda.device_count():
-        torch.cuda.set_rng_state_all(st["cuda"])
+        torch.cuda.set_rng_state_all([t.cpu() for t in st["cuda"]])
     kind, keys, pos, has_gauss, gauss = st["numpy"]
-    np.random.set_state((kind, keys.numpy().astype(np.uint32), pos,
+    np.random.set_state((kind, keys.cpu().numpy().astype(np.uint32), pos,
                          has_gauss, gauss))
     version, internal, gauss_next = st["python"]
     random.setstate((version, tuple(internal), gauss_next))
@@ -266,6 +271,13 @@ def _train(cfg: Config, gpu, stop):
                   if all(L >= m for L, m in zip(t, mins))]
     canon = canonical_tuples(specs, mins, cfg.model.depth_sampling)
     ref_fronts = [load_rd_ref(s) for s in cfg.eval.rd_refs]
+    ref_curves = [load_ref_curve(rc.path, rc.label)
+                  for rc in cfg.eval.ref_curves]
+    # tuples a reference scored, which every validation then scores too
+    ref_ts = [t for t in tuples
+              if any(tname(t) in rc["quality_by_tuple"] for rc in ref_curves)]
+    ref_hist = {"step": [], "ceiling": [],
+                **{tname(t): [] for t in ref_ts}}
     run_dir = os.path.join(cfg.log.out_dir, cfg.log.run_tag)
     os.makedirs(run_dir, exist_ok=True)
     write_resolved_config(run_dir, cfg)
@@ -283,6 +295,11 @@ def _train(cfg: Config, gpu, stop):
     # fail in the first second, not at the first val_interval.
     report = resolve_report(source, cfg)
     qm = report.quality
+    for rc in ref_curves:
+        if rc["quality_key"] != qm.key:
+            raise ValueError(
+                f"eval.ref_curves: {rc['path']} scores {rc['quality_key']!r} "
+                f"but this run's quality metric is {qm.key!r}")
     if D.is_main():
         print(f"report: quality={qm.key} "
               f"extra={[m.key for m in report.extra]} "
@@ -394,6 +411,11 @@ def _train(cfg: Config, gpu, stop):
         n_book = freeze_books(model)
         print(f"vq.freeze_books: {n_book/1e6:.1f}M codebook weights frozen "
               f"(no EMA, no resets, no grad)", flush=True)
+    if cfg.train.decoder_only:
+        n_dec = freeze_all_but_decoder(model)
+        print(f"train.decoder_only: {n_dec/1e6:.2f}M decoder params train; "
+              f"encoder and books frozen (eval, no EMA, no resets)",
+              flush=True)
     if ddp_world > 1:
         # Absorb prefill skew explicitly before the first real collective:
         # ranks reach this point many minutes apart because each fills its
@@ -420,6 +442,8 @@ def _train(cfg: Config, gpu, stop):
     # params (the encoder) must be present from the start or
     # unfreezing them later would never take effect.
     def _trains_eventually(n, p):
+        if cfg.train.decoder_only:
+            return n.split(".")[0] in DECODER_MODULES
         if v.freeze_books and n.startswith("rvqs."):
             return False              # frozen for the whole run
         if cfg.train.freeze_codec:
@@ -447,7 +471,10 @@ def _train(cfg: Config, gpu, stop):
               f"{sched.get_last_lr()[0]:.3g})", flush=True)
     elif cfg.train.init_from:
         ck = load_checkpoint(cfg.train.init_from, map_location=device)
-        if "opt" in ck:
+        if cfg.train.decoder_only:
+            print("train.decoder_only: fresh AdamW over the decoder",
+                  flush=True)
+        elif "opt" in ck:
             try:
                 # moments only -- the lr SCHEDULE stays what this run's
                 # config says (resume recipes set their warmup on
@@ -489,7 +516,7 @@ def _train(cfg: Config, gpu, stop):
     select_weight = (cfg.model.conditioning.weight
                      if cfg.model.conditioning is not None
                      and cfg.model.conditioning.kind == "select" else 0.0)
-    commit_weight = v.commit_weight
+    commit_weight = 0.0 if cfg.train.decoder_only else v.commit_weight
     # batch_windows is the GLOBAL batch: splitting it keeps the effective
     # batch, the LR schedule and the step count identical to a single-GPU
     # run, so extra ranks buy wall-clock rather than changing the recipe.
@@ -512,11 +539,19 @@ def _train(cfg: Config, gpu, stop):
     start = 1
     if resume_ck is not None:
         ts = resume_ck["train_state"]
-        best_q = ts["best_q"]
         best_is_quantized = ts["best_is_quantized"]
-        best_ceil_guard = ts["best_ceil_guard"]
         nonfinite_steps = ts["nonfinite_steps"]
-        last_full_q = ts.get("last_full_q")
+        # the trackers hold values of one quality metric; a checkpoint
+        # scored on another (or written before the key was stored)
+        # starts them afresh rather than comparing across metrics
+        if ts.get("quality_key") == qm.key:
+            best_q = ts["best_q"]
+            best_ceil_guard = ts["best_ceil_guard"]
+            last_full_q = ts.get("last_full_q")
+        else:
+            print(f"resume: quality metric is now {qm.key!r} (checkpoint: "
+                  f"{ts.get('quality_key')!r}); best and collapse-guard "
+                  "trackers restart", flush=True)
         set_level_state(model, ts["vq"])
         start = resume_ck["step"] + 1
         rng0 = ts["rng"]
@@ -524,7 +559,8 @@ def _train(cfg: Config, gpu, stop):
         set_rng_state(rng0)   # last, so the stream continues the run's
 
     def train_state():
-        return {"best_q": float(best_q),
+        return {"quality_key": qm.key,
+                "best_q": float(best_q),
                 "best_is_quantized": bool(best_is_quantized),
                 "best_ceil_guard": float(best_ceil_guard),
                 "nonfinite_steps": int(nonfinite_steps),
@@ -547,6 +583,10 @@ def _train(cfg: Config, gpu, stop):
     last_save = None
     last_val_ok = start - 1
     for step in range(start, cfg.train.steps + 1):
+        if cfg.train.decoder_only:
+            # validate() and the figure harvests return the whole model
+            # to train(), which would let BatchNorm and the books update
+            freeze_all_but_decoder(model)
         if enc_frozen and step > cfg.train.freeze_encoder_steps:
             set_encoder_frozen(model, False)
             enc_frozen = False
@@ -841,7 +881,8 @@ def _train(cfg: Config, gpu, stop):
 
         if (step % cfg.train.val_interval == 0
                 or step == cfg.train.steps) and D.is_main():
-            canon_ts = list(canon.values())
+            canon_ts = list(canon.values()) + [t for t in ref_ts
+                                               if t not in canon.values()]
             if step == cfg.train.steps and len(tuples) <= 64:
                 val_ts = tuples           # full enumeration at the end
             else:
@@ -867,6 +908,16 @@ def _train(cfg: Config, gpu, stop):
                 model.eval()
             if v.freeze_books:            # validate() leaves the model in
                 freeze_books(model)       # train() -- re-assert the freeze
+            if ref_curves:
+                ref_hist["step"].append(step + step0)
+                ref_hist["ceiling"].append(vs[f"{qm.key}_ceiling"])
+                for t in ref_ts:
+                    ref_hist[tname(t)].append(cbt.get(tname(t), float("nan")))
+                ref_fig = ref_history_figure(ref_hist, ref_curves, qm)
+                ref_fig.savefig(os.path.join(run_dir, "val_vs_ref.png"),
+                                dpi=90)
+                ref_img = wandb.Image(ref_fig) if use_wandb else None
+                plt.close(ref_fig)
             ebt = vs.pop("_extra", {})
             extra_str = "".join(
                 f" {m.key}_ceil={vs[f'{m.key}_ceiling']:.4f}"
@@ -932,6 +983,18 @@ def _train(cfg: Config, gpu, stop):
                     bk = f"{qm.key}_{b.key}"
                     if bk in vs:
                         scalars[f"val/{bk}"] = vs[bk]
+                # run minus reference at each tuple both scored
+                for rc in ref_curves:
+                    for tn, rv in rc["quality_by_tuple"].items():
+                        if tn in cbt:
+                            scalars[f"val/{qm.key}_{tn}_vs_{rc['slug']}"] = \
+                                cbt[tn] - rv
+                    rce = rc["scalars"].get(f"{qm.key}_ceiling")
+                    if rce is not None:
+                        scalars[f"val/{qm.key}_ceiling_vs_{rc['slug']}"] = \
+                            vs[f"{qm.key}_ceiling"] - rce
+                if ref_curves:
+                    scalars["val_figs/ref_history"] = ref_img
                 # Every figure below is a view of QUANTIZED behaviour --
                 # the R-D front, per-level codebook health, reconstructions
                 # at depth tuples. During the VQ-free warmup they would all
@@ -1001,12 +1064,12 @@ def _train(cfg: Config, gpu, stop):
                         if report.has_figure("rd"):
                             add("figs/rd", rd_figure(
                                 cbt, vs, specs, val_ts, step, report,
-                                ref_fronts=ref_fronts,
+                                ref_fronts=ref_fronts, ref_curves=ref_curves,
                                 px=cfg.model.window ** 2, side_bits=sb))
                         if report.has_figure("rd_log"):
                             add("figs/rd_log", rd_figure(
                                 cbt, vs, specs, val_ts, step, report,
-                                ref_fronts=ref_fronts,
+                                ref_fronts=ref_fronts, ref_curves=ref_curves,
                                 px=cfg.model.window ** 2, dist_log=True,
                                 side_bits=sb))
                         if report.has_figure("codebook"):
@@ -1042,6 +1105,13 @@ def _train(cfg: Config, gpu, stop):
             # Collapse guard: a stage latch is a catastrophic ceiling drop
             # that never recovers; trip on the FIRST validation past it.
             ceil_q = vs[f"{qm.key}_ceiling"]
+            if vq_live and not best_is_quantized:
+                # the unquantised ceiling falls once the network trains on
+                # quantised latents (0.976 -> 0.926 R2 within 2k steps on
+                # s2_w60 while full decode rose), so the warmup's best is
+                # not a reference for the quantised phase
+                best_ceil_guard = (-math.inf if qm.higher_better
+                                   else math.inf)
             if cfg.train.guard_drop is not None:
                 worse = (best_ceil_guard - ceil_q if qm.higher_better
                          else ceil_q - best_ceil_guard)

@@ -29,6 +29,14 @@ if TYPE_CHECKING:
     import pandas as pd
 
 
+def _index(t, k):
+    """t[k], also for uint16 on CUDA, which has no index kernel for
+    tensor indices: the gather runs on an int16 view of the same bits."""
+    if t.dtype == torch.uint16 and t.is_cuda and not isinstance(k, slice):
+        return t.view(torch.int16)[k].view(torch.uint16)
+    return t[k]
+
+
 class GroupBatch(dict):
     """A multi-resolution batch: `{group_name: (B, bands, px, px) tensor}`.
 
@@ -56,7 +64,7 @@ class GroupBatch(dict):
     def __getitem__(self, k):
         if isinstance(k, str):
             return dict.__getitem__(self, k)
-        return GroupBatch({n: t[k] for n, t in self.items()})
+        return GroupBatch({n: _index(t, k) for n, t in self.items()})
 
     def to(self, *a, **kw):
         return GroupBatch({n: t.to(*a, **kw) for n, t in self.items()})

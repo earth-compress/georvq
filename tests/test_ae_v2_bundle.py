@@ -8,8 +8,8 @@ bundle_path`, ~/.cache/georvq/bundles/<bitstream_id> by default). Its inputs are
 golden/divfull_val_tokens.npz. golden/ae_v2_golden.npz holds the codes
 the bundle's encoder produced for them on CPU, and sha256 hashes of the
 float32 field and the int8 tile decoded from those codes at three rungs.
-golden/ae_v2_tile.georvq.parquet is those windows written as one v2
-file with small chunks, read back through the container reader.
+golden/ae_v2_tile.georvq.zarr is those windows written as one v2
+store with small chunks, read back through the store reader.
 
 Everything is compared exactly. The hashes were recorded on CPU in fp32
 (cirrus, x86-64); a CPU with other vector kernels could produce
@@ -68,7 +68,7 @@ CKPT = os.environ.get(
 MEAN_NPZ = os.environ.get(
     "GEORVQ_AE_V2_MEAN",
     "/home/ali/projects/georvq/scratch/ae-v2/meanrvq/mean_channel_v2.npz")
-TILE = os.path.join(HERE, "golden/ae_v2_tile.georvq.parquet")
+TILE = os.path.join(HERE, "golden/ae_v2_tile.georvq.zarr")
 GOLDEN_RUNGS = ((2, 0, 0), (8, 8, 2), (8, 8, 8))
 TILE_GRID = (2, 4)           # the eight windows as a 2 x 4 window tile
 # Records are dense over a chunk, so the default 8192 px base chunk would
@@ -201,6 +201,47 @@ def test_tampered_bundle_is_refused(tiny, tmp_path):
     np.savez(d / "codebooks.npz", **books)
     with pytest.raises(ValueError, match="sha256"):
         load_bundle(d)
+
+
+def test_decoder_only_bundle(tiny, tmp_path):
+    from georvq.ae.v2_bundle import write_decoder_bundle
+    d = tiny["dir"] / "decoder"
+    meta = json.load(open(d / "bundle.json"))
+    full = json.load(open(tiny["dir"] / "bundle.json"))
+    assert meta["variant"] == "decoder" and full["variant"] == "full"
+    assert full["decoder_bundle"] == "decoder"
+    assert (meta["bitstream_id"], meta["decoder_id"]) == (
+        full["bitstream_id"], full["decoder_id"])
+    again = write_decoder_bundle(tiny["dir"], tmp_path / "again")
+    assert {k: v for k, v in again.items() if k != "files"} == \
+        {k: v for k, v in meta.items() if k != "files"}
+    with np.load(d / "weights.npz", allow_pickle=False) as z:
+        assert not any(k.startswith(("tokenizer.", "stats_enc.", "stem."))
+                       for k in z.files)
+        assert all(z[k].dtype == np.float32 for k in z.files
+                   if z[k].dtype.kind == "f")
+    for n in ("codebooks.npz", "mean_channel.npz", "config.json"):
+        assert open(d / n, "rb").read() == open(tiny["dir"] / n, "rb").read()
+    a, b = load_bundle(tiny["dir"]), load_bundle(d)
+    assert b.decode_only and not a.decode_only
+    assert b.decoder_id == a.decoder_id == meta["decoder_id"]
+    with pytest.raises(RuntimeError, match="decoder-only"):
+        b.encode_windows(tiny["raw"])
+    ra, _, va = a.encode_windows(tiny["raw"], stats=False)
+    tiers = [ra[n].transpose(1, 0, 2) for n in a.names[1:]]
+    for r in [(1, 0, 0), (3, 2, 2)]:
+        fa, _ = a.decode_field(ra["base"][0], tiers, r, va.numpy())
+        fb, _ = b.decode_field(ra["base"][0], tiers, r, va.numpy())
+        assert torch.equal(fa, fb)
+    # georvq.open reads a store with it, quality values included
+    import georvq
+    from tests.test_ae_index import write_tile
+    store = str(tmp_path / "t.georvq.zarr")
+    write_tile(store, a, 32, 48)
+    with georvq.open(store, codec=b) as db, georvq.open(store, codec=a) as da:
+        assert db.reader.quality_decoder == a.decoder_id
+        assert np.array_equal(db.read(quality="3-2-2"),
+                              da.read(quality="3-2-2"))
 
 
 # --------------------------------------------------------------------------

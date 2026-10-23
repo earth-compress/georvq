@@ -58,6 +58,14 @@ def parse_tier(v):
 
 
 class TokenizerConfig(StrictModel):
+    # "vit": the shared ViT tokenizer over the source stem's plane.
+    # "source": the source adapter builds the whole encoder
+    # (`Source.build_encoder`), which reads the prepped batch directly and
+    # returns one latent stream per tier. It exists for encoders whose
+    # layout depends on the source's band geometry, such as the ring-space
+    # beta_v2 conv encoder that joins the S2 grids at 21 and 7 px. Its
+    # width is `dim` and `depth` is unused.
+    kind: Literal["vit", "source"] = "vit"
     dim: int = 256
     depth: int = 9
     # One conv pyramid instead of an independent patch embed per tier and
@@ -600,6 +608,11 @@ class TrainConfig(StrictModel):
     resume: Optional[Path] = None
     freeze_encoder_steps: int = 0
     freeze_codec: bool = False
+    # Train the decoder (and stats_dec, if any) alone on the codes of the
+    # init_from checkpoint. Everything else is held in eval mode with no
+    # gradient, so the books take no EMA update, reset or init, and the
+    # commitment loss is dropped. The optimiser starts fresh.
+    decoder_only: bool = False
     optim: OptimConfig = Field(default_factory=OptimConfig)
     seed: int = 0
     val_interval: int = 1000
@@ -608,9 +621,28 @@ class TrainConfig(StrictModel):
     val_tuples: int = 16
 
 
+class RefCurveConfig(StrictModel):
+    """A reference codec scored through this run's own validation.
+
+    `path` is a JSON written by `georvq.train.validate.write_ref_curve`:
+    the reference's quality per depth tuple, on the same validation
+    windows and with the same metric as the run. Validation then always
+    scores those tuples, the R-D figure draws the reference as a dotted
+    curve, and a history figure (`val_vs_ref.png` in the run directory,
+    `val_figs/ref_history` in wandb) draws it as a dotted line over the
+    run's validation history at each tuple and at the ceiling. The run
+    also logs its difference from the reference at each tuple
+    (`val/<metric>_<tuple>_vs_<label>`). `label` overrides the label in
+    the file.
+    """
+    path: Path
+    label: Optional[str] = None
+
+
 class EvalConfig(StrictModel):
     recon_tuples: Optional[list[str]] = None   # e.g. ["8-1-0", "8-8-8"]
     rd_refs: list[str] = Field(default_factory=list)
+    ref_curves: list[RefCurveConfig] = Field(default_factory=list)
 
 
 class ReportConfig(StrictModel):
@@ -676,6 +708,9 @@ RETIRED_FIELDS = (
     "train.compile",
     "train.freeze_head_steps", "train.freeze_head_blocks",
     "data.limit_chips",
+    # an S2 conv decoder for coarse-only rows that did not change the
+    # released model; removed 2026-10-22
+    "model.coarse_decoder", "train.coarse_decoder_only",
 )
 
 
@@ -796,6 +831,13 @@ class Config(StrictModel):
                     f"model.vq.passthrough_frac ({v.passthrough_frac}) > 1: "
                     "they are shares of the same batch and leave no rows for "
                     "the sampled depth tuples")
+        if self.train.decoder_only:
+            if self.train.init_from is None and self.train.resume is None:
+                raise ValueError("train.decoder_only requires train.init_from")
+            if v is None or v.warmup_steps:
+                raise ValueError("train.decoder_only needs a quantised model "
+                                 "with model.vq.warmup_steps: 0, so that the "
+                                 "loaded books are never refitted")
         if self.train.freeze_codec:
             if self.train.init_from is None:
                 raise ValueError("train.freeze_codec requires train.init_from")

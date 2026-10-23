@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 from georvq.model.decoder import DenseHead
 from georvq.sources import Source
@@ -75,24 +74,27 @@ class TesseraSource(Source):
 
     def recon_stats(self, out, x, valid):
         """Loss: masked per-pixel MSE in original (rescaled) units.
-        Metrics: on-the-fly cosine and relative L2 of the full vectors."""
+        Metric: relative L2 of the full vectors."""
         se = (out - x).pow(2).sum(1)
         mse = se[valid].mean()
         with torch.no_grad():
-            cos = F.cosine_similarity(out, x, dim=1, eps=1e-6)[valid].mean()
             rel = (se.sqrt()
                    / x.pow(2).sum(1).sqrt().clamp_min(1e-6))[valid].mean()
-        return mse, {"mse": mse, "cos": cos, "vec_rel_l2": rel}
+        return mse, {"mse": mse, "vec_rel_l2": rel}
 
     def report(self, model_cfg):
-        """Same shape as AlphaEarth, plus the relative-L2 diagnostic this
-        field needs: Tessera vectors carry real magnitude (spread 1.57x),
-        so an error can be large in norm while cosine looks fine."""
-        from georvq.sources.report import (Metric, embedding_field_spec,
-                                           replace_extra)
+        """Relative L2 of the pixel vectors, and nothing based on cosine.
+        Tessera vectors carry real magnitude (spread 1.57x), so cosine
+        ignores part of the error, and the shared `cos` metric is a dot
+        product that only equals cosine on unit-norm fields. The zero-rate
+        floor is the window mean the stats channel sends."""
+        from dataclasses import replace
+        from georvq.sources.report import (WINDOW_MEAN, Metric,
+                                           embedding_field_spec)
         rel = Metric("vec_rel_l2", "relative L2", _vec_rel_l2,
                      higher_better=False, bounded=False, min_bands=2)
-        return replace_extra(embedding_field_spec(), add=(rel,))
+        return replace(embedding_field_spec(), quality=rel, extra=(),
+                       baselines=(WINDOW_MEAN,))
 
 
 def _vec_rel_l2(out, x, valid):

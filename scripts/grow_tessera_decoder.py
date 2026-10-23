@@ -1,13 +1,13 @@
-"""Grow the released Tessera decoder: deeper and wider, same function.
+"""Grow a Tessera decoder: deeper and wider, same function.
 
-Takes the shipped bundle, builds a decoder with more blocks and wider
-MLPs/head, and initialises it so it reproduces the release exactly (see
+Takes a training checkpoint, builds a decoder with more blocks and wider
+MLPs/head, and initialises it so it reproduces the source exactly (see
 `georvq.train.grow`). The encoder, codebooks and therefore the BITSTREAM
 are untouched -- `bitstream_id` must be unchanged, and this script asserts
 it. Only `decoder_id` moves.
 
     python scripts/grow_tessera_decoder.py \
-        --bundle /data/georvq-releases/tessera-beta-v1/bundle \
+        --ckpt /data/georvq-releases/tessera-v2/tessera_v2_step88000.pt \
         --add-blocks 8 --ff-ratio 3.0 --head-feat 192 \
         --out checkpoints/tessera_grown_init.pt
 """
@@ -25,17 +25,10 @@ from georvq.repro import save_checkpoint
 from georvq.train.grow import grow_decoder, verify_growth
 
 
-def load_bundle(bundle, device):
-    from georvq.inference.release import load_release
-    out = load_release(bundle, device=device)
-    codec = out[0] if isinstance(out, tuple) else out
-    return getattr(codec, "model", codec)
-
-
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--bundle",
-                    default="/data/georvq-releases/tessera-beta-v1/bundle")
+    ap.add_argument("--ckpt", required=True,
+                    help="the training checkpoint whose decoder is grown")
     ap.add_argument("--add-blocks", type=int, default=8)
     ap.add_argument("--ff-ratio", type=float, default=3.0)
     ap.add_argument("--head-feat", type=int, default=192)
@@ -53,9 +46,10 @@ def main():
 
     dev = torch.device(args.device if torch.cuda.is_available()
                        else "cpu")
-    src = load_bundle(args.bundle, dev).eval()
+    from georvq.factory import from_checkpoint
+    src = from_checkpoint(args.ckpt, dev).eval()
     scfg = src.full_config
-    print(f"release: decoder dim={scfg.model.decoder.dim} "
+    print(f"source:  decoder dim={scfg.model.decoder.dim} "
           f"depth={scfg.model.decoder.depth} "
           f"head_feat={scfg.model.decoder.head_feat} "
           f"ff_ratio={scfg.model.ff_ratio}")
@@ -106,14 +100,14 @@ def main():
           f"(output scale {r['output_scale']:.3f}, rel {r['rel']:.3e})")
     if not r["ok"]:
         raise SystemExit(
-            f"grown decoder does NOT reproduce the release "
+            f"grown decoder does NOT reproduce the source "
             f"(max|diff| {r['max_abs_diff']:.3e} > {args.atol}). Refusing to "
             f"write: the experiment would confound added capacity with lost "
             f"weights.")
 
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
     save_checkpoint(args.out, dst, cfg, 0,
-                    {"grown_from": args.bundle, "bitstream_id": bid_s,
+                    {"grown_from": args.ckpt, "bitstream_id": bid_s,
                      "max_abs_diff_vs_release": r["max_abs_diff"]})
     print(f"wrote {args.out}")
 
