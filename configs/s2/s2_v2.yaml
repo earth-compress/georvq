@@ -16,8 +16,8 @@
 # Codebooks: int8 (vq.book_bits 8, as AE v2 and Tessera), trained with
 # the books projected onto their 8-bit grid at every update, so that the
 # books a release ships are the ones the model was trained with. The S2 v1
-# model was trained with float32 books and had to have its decoder
-# fine-tuned on the codes the rounded books assign (configs/s2/s2_v1.yaml).
+# model was trained with float32 books, which were snapped to the int8 grid
+# after training (configs/s2/s2_v1.yaml).
 #
 # Statistics: the 13 per-band means and 13 stds of each window, taken over
 # each band's nonzero pixels with the unbiased std floored at 1e-4
