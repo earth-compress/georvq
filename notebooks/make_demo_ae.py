@@ -32,7 +32,7 @@ md("""
 
 The AlphaEarth Foundations annual embeddings come as 8192 x 8192 pixel
 tiles of 64 int8 bands at 10 m, about 1 to 3 GB each. The ae-v2 release
-codes each tile as one Zarr store of about 61 MB that can be read at 23
+codes each tile as one Zarr store of about 64 MB that can be read at 23
 rates, from 0.11 to 7.5 bits per pixel, by window, over HTTP. The
 reader returns int8 arrays in the source's layout, so code written for
 the source tiles can read these stores instead.
@@ -59,8 +59,8 @@ Cooperative serves them publicly over HTTPS.
 The codec weights are not in the stores. On the first pixel read,
 `georvq.open` finds the bundle the store's header names: in
 `$GEORVQ_AE_BUNDLE`, in the cache at `~/.cache/georvq/bundles/<bitstream_id>/`,
-or by downloading it from the Hugging Face release
-(`earth-compress/georvq-ae-v2`, about 420 MB). On a machine with a GPU
+or by downloading the decoder-only bundle from the Hugging Face
+release (`decoder/` in `earth-compress/georvq-ae-v2`, 135 MB). On a machine with a GPU
 the torch backend uses it; everything below also runs on CPU, more
 slowly (a 1024 px window takes about 10 s to decode on 16 CPU threads).
 """)
@@ -265,13 +265,19 @@ meter.clear()
 georvq.open(metered(TILE))
 open_req, open_bytes = len(meter.events), sum(e["bytes"] for e in meter.events)
 
+attrs = ds.reader.group.attrs
+
 print(f"{'store':<12}{path}")
-print(f"{'crs':<12}{ds.crs.to_string()}")
+print(f"{'source':<12}{ds.product['source']}")
+print(f"{'crs':<12}{attrs['proj:code']} ({ds.crs.to_string()})")
 print(f"{'size':<12}{ds.width} x {ds.height} px, {ds.count} bands of {ds.dtypes[0]}, nodata {ds.nodata}")
 print(f"{'transform':<12}{tuple(ds.transform)[:6]}")
 print(f"{'row order':<12}{'bottom-up, as the source' if ds.transform.e > 0 else 'north-up'}")
 print(f"{'extent':<12}{lonlat(ds.crs, ds.transform, ds.height, ds.width)}")
-print(f"{'codec':<12}bitstream {ds.header['codec']['bitstream_id']}, release {ds.header['codec']['release']['name']}")
+print(f"{'codec':<12}bitstream {ds.header['codec']['bitstream_id']}, "
+      f"decoder {ds.header['codec']['decoder_id']}, release {ds.header['codec']['release']['name']}")
+print(f"{'quality':<12}{ds.header['quality']['name']}: {', '.join(ds.header['quality']['stats'])}")
+print(f"{'licence':<12}{ds.header['licence']['spdx']}: {ds.header['licence']['attribution']}")
 print(f"{'opened with':<12}{open_req} request, {mb(open_bytes)}")
 """)
 
@@ -622,17 +628,18 @@ gantt(runs)
 stages = pd.DataFrame([{**{"read": k}, **{lab: sum(e["t1"] - e["t0"] for e in r["events"]
                                                if e["label"] == lab)
                                            for lab in ("mean channel", "codebook lookup",
-                                                       "decoder forward", "requantize")}}
+                                                       "decoder forward", "postprocess")}}
                        for k, r in runs.items() if k.startswith("georvq")]).set_index("read")
 (stages * 1e3).round(1).rename(columns=lambda c: c + " (ms)")
 """)
 
 md("""
-The 1024 px block is small enough that the number of round trips, not
-the bytes, sets the time of each read. The next cell reads a quarter of
-the tile (4096 px) through the same server at the same rungs, and
-splits each read into the time spent fetching and the time spent
-decoding.
+On a GPU the 1024 px block decodes quickly enough that the number of
+round trips, not the bytes, sets the time of each read. On CPU, as in
+the outputs here, decoding takes most of the time. The next cell reads
+a quarter of the tile (4096 px) through the same server at the same
+rungs, and splits each read into the time spent fetching and the time
+spent decoding.
 """)
 
 code("""
@@ -855,11 +862,15 @@ plt.show()
 md("""
 ## The tile index
 
-`aef_georvq_index.parquet` has one row per coded store: the source
-index's row for the tile (year, UTM zone, bounds in UTM and WGS84,
-footprint), the store's path, its codec ids, its size, and the bytes a
-whole-tile read fetches at each rung. It is GeoParquet, so pyarrow,
-GeoPandas or DuckDB can query it without opening the coded stores.
+`aef_georvq_index.parquet` has one row per coded store. Its first
+columns are the same in every georvq release's index: the store's
+path, the product id, the source URL, the release, the CRS, the size
+and bounds in the tile's UTM zone, the footprint in longitude and
+latitude (`geometry` and its `bbox`), the codec ids, the store's sizes,
+and the bytes a whole-tile read fetches at each rung. The source
+index's row for the tile follows (year, UTM zone, bounds in UTM and
+WGS84). It is GeoParquet, so pyarrow, GeoPandas or DuckDB can query it
+without opening the coded stores.
 """)
 
 code("""
@@ -871,21 +882,21 @@ print(f"{idx.num_rows} tiles; columns: {', '.join(idx.column_names)}")
 def at(rungs, name):
     return next(r["bytes"] for r in rungs if r["rung"] == name)
 
+bbox = idx["bbox"].to_pylist()
 tiles = pd.DataFrame({
     "year": idx["year"].to_pylist(), "zone": idx["utm_zone"].to_pylist(),
-    "tile": [p.rsplit("/", 1)[-1].split(".")[0] for p in idx["path"].to_pylist()],
-    "lon": [(a + b) / 2 for a, b in zip(idx["wgs84_west"].to_pylist(), idx["wgs84_east"].to_pylist())],
-    "lat": [(a + b) / 2 for a, b in zip(idx["wgs84_south"].to_pylist(), idx["wgs84_north"].to_pylist())],
+    "tile": idx["product_id"].to_pylist(),
+    "lon": [(b["xmin"] + b["xmax"]) / 2 for b in bbox],
+    "lat": [(b["ymin"] + b["ymax"]) / 2 for b in bbox],
     "store MB": [(b + m) / 1e6 for b, m in zip(idx["store_bytes"].to_pylist(),
                                                idx["metadata_bytes"].to_pylist())],
     "8-8-0 MB": [at(r, "8-8-0") / 1e6 for r in idx["rungs"].to_pylist()]})
 
-# tiles whose WGS84 bounds intersect a box over Europe
+# tiles whose footprint box intersects a box over Europe
 box = dict(west=-10, south=35, east=30, north=70)
-sel = idx.filter(pc.and_(pc.and_(pc.greater(idx["wgs84_east"], box["west"]),
-                                 pc.less(idx["wgs84_west"], box["east"])),
-                         pc.and_(pc.greater(idx["wgs84_north"], box["south"]),
-                                 pc.less(idx["wgs84_south"], box["north"]))))
+bx = {k: pc.struct_field(idx["bbox"], k) for k in ("xmin", "ymin", "xmax", "ymax")}
+sel = idx.filter(pc.and_(pc.and_(pc.greater(bx["xmax"], box["west"]), pc.less(bx["xmin"], box["east"])),
+                         pc.and_(pc.greater(bx["ymax"], box["south"]), pc.less(bx["ymin"], box["north"]))))
 print(f"in the Europe box: {sel['path'].to_pylist()}")
 try:
     import duckdb
@@ -929,10 +940,11 @@ the command line does the same in 1024-row strips:
     python -m georvq.ae.v2 decode STORE.georvq.zarr out.npy --window 4096,5120,1024,1024 --quality 8-8-2
 
 `backend="onnx"` decodes with onnxruntime and numpy from the ONNX
-export in the bundle, without torch. It decodes in fp32. On CUDA the
-torch backend decodes in bf16 by default, so the comparison below is
-made against both the bf16 decode used above and an fp32 torch decode
-(`bf16=False`).
+export in the full bundle, without torch, and downloads the full
+bundle (423 MB) for it. It decodes in fp32. On CUDA the torch backend
+decodes in bf16 by default and on CPU in fp32, so the comparison below
+is made against the decode used above and, on CUDA, against an fp32
+torch decode (`bf16=False`) as well.
 """)
 
 code("""
@@ -954,16 +966,17 @@ with open_tile(TILE, backend="onnx") as dx:
     a_onnx = dx.read(window=WINDOW, quality="8-8-2")
 t_onnx = time.perf_counter() - t
 a_torch = dec["8-8-2"]
-with open_tile(TILE, bf16=False) as d32:
-    a_fp32 = d32.read(window=WINDOW, quality="8-8-2")
+compare = [(f"torch {'bf16' if ds.codec.bf16 else 'fp32'} on {ds.codec.device.type}", a_torch)]
+if ds.codec.bf16:
+    with open_tile(TILE, bf16=False) as d32:
+        compare.append(("torch fp32", d32.read(window=WINDOW, quality="8-8-2")))
 print(f"onnx backend, CPU: {t_onnx:.1f} s including loading the graphs")
-for name, a in [("torch bf16", a_torch), ("torch fp32", a_fp32)]:
+for name, a in compare:
     diff = np.abs(a_onnx.astype(int) - a.astype(int))
     print(f"onnx against {name}: {(diff == 0).mean():.4%} of values equal, "
           f"largest difference {diff.max()} step(s)")
-print(f"mean 1 - cos against the source: onnx {err(u_ref, unit(a_onnx))[valid_ref].mean():.5f}, "
-      f"torch bf16 {err(u_ref, unit(a_torch))[valid_ref].mean():.5f}, "
-      f"torch fp32 {err(u_ref, unit(a_fp32))[valid_ref].mean():.5f}")
+print("mean 1 - cos against the source: " + ", ".join(
+    f"{name} {err(u_ref, unit(a))[valid_ref].mean():.5f}" for name, a in [("onnx", a_onnx)] + compare))
 """)
 
 
