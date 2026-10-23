@@ -665,6 +665,7 @@ class StoreDataset(WindowMethodsMixin, TransformMethodsMixin):
             return a if all_bands else a[sel]
 
         own = np.dtype(self.dtypes[0])
+        self._prefetch(win, oh, ow, quality)
         vals, inside = self._gather(win, oh, ow, fetch, len(bands), self._fill)
         if vals is None:
             vals = np.full((len(bands), oh, ow), self._fill, own)
@@ -692,6 +693,39 @@ class StoreDataset(WindowMethodsMixin, TransformMethodsMixin):
             return (np.ma.array(out, mask=np.ma.getmaskarray(res).reshape(
                 out.shape), fill_value=res.fill_value) if masked else out)
         return res if masked else np.ascontiguousarray(res)
+
+    def _prefetch(self, win, oh, ow, quality):
+        """Fetch the records of an unresampled read that spans several
+        strips with one zarr-python read per array, before `_gather`
+        decodes it strip by strip, so that the strips take their records
+        from the cache. Read strip by strip, the inner chunks of a shard
+        are fetched in as many groups as there are strips, and from
+        zarr-python 3.3 each group is merged with neighbouring inner
+        chunks of other strips that are not needed. Skipped when the
+        records would take more than half the cache. Decoding, and so
+        every decoded value, is unchanged."""
+        if (oh, ow) != (win.height, win.width):
+            return
+        r0, c0 = max(0, int(math.floor(win.row_off))), max(0, int(math.floor(win.col_off)))
+        r1 = min(self.height, int(math.ceil(win.row_off + win.height)))
+        c1 = min(self.width, int(math.ceil(win.col_off + win.width)))
+        if r1 <= r0 or c1 <= c0:
+            return
+        ny0, ny1, nx0, nx1 = self._north_px(((r0, r1), (c0, c1)))
+        W = self._wpx
+        wy0, wy1, wx0, wx1 = ny0 // W, -(-ny1 // W), nx0 // W, -(-nx1 // W)
+        if wy1 - wy0 <= max(1, STRIP_PX // W):
+            return
+        depth = np.array(self.rungs)[self._depth_map(quality, wy0, wy1, wx0,
+                                                     wx1)]
+        need = [int(v) for v in depth.reshape(-1, depth.shape[-1]).max(0)]
+        lay = self.reader.layout
+        per = lay.columns["base"].record_bytes + sum(
+            lay.columns[c].record_bytes
+            for c in self.reader.columns_for(need, base=False, mask=False))
+        if (wy1 - wy0) * (wx1 - wx0) * per > self.reader.cache.max_bytes // 2:
+            return
+        self.reader.read(wy0, wy1, wx0, wx1, depths=need)
 
     def read_masks(self, indexes=None, out=None, out_shape=None, window=None,
                    boundless=False, resampling=None):

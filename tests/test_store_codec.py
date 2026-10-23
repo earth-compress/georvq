@@ -263,6 +263,25 @@ def test_bound_reads_are_conservative(built):
             assert (got[met] <= bound * (1 + 1e-5)).all()
 
 
+def test_a_read_of_several_strips_is_fetched_once(built, monkeypatch):
+    """A read spanning several decode strips fetches its records with one
+    zarr-python read per array, and decodes as it does strip by strip."""
+    from georvq.inference import store_dataset
+    from georvq.inference.records import Trace
+    monkeypatch.setattr(store_dataset, "STRIP_PX", WIN)
+    tr = Trace()
+    with open_dataset(built["store"], SPEC, codec=built["codec"], trace=tr) as ds:
+        monkeypatch.setattr(ds, "_prefetch", lambda *a: None)
+        nopf = ds.read(quality=(2, 2, 1, 0))
+    assert sum(e["kind"] == "get" for e in tr.events) > 4
+    tr = Trace()
+    with open_dataset(built["store"], SPEC, codec=built["codec"], trace=tr) as ds:
+        got = ds.read(quality=(2, 2, 1, 0))
+        gets = [e["label"] for e in tr.events if e["kind"] == "get"]
+    assert np.array_equal(got, nopf)
+    assert len(gets) == len(set(gets)) <= 4          # base, mask, tier1, tier2
+
+
 def test_blank_window_reads_nothing(built):
     """Window (1, 1) has no valid pixel and shares its base chunk with
     valid windows: its records are zero, reading it fetches nothing, and
