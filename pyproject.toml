@@ -25,6 +25,9 @@ dependencies = [
     "pydantic>=2.5",
     "pyyaml",
     "rasterio>=1.4",   # AE release layer: tile encode, GeoTIFF output
+    # a store's proj:wkt2 attribute and Tessera v2's UTM georeferencing;
+    # without it an encoder wrote stores missing proj:wkt2
+    "pyproj>=3.0",
     "huggingface_hub",   # release bundles named by a store's header
     # coded stores; 3.3 is the first release that reads the inner chunks
     # of a shard concurrently, and it needs Python 3.12
