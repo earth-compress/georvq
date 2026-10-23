@@ -419,11 +419,10 @@ def _crs_attrs(product):
         out["proj:code"] = f"EPSG:{int(product['epsg'])}"
     wkt = product.get("crs_wkt")
     if wkt:
-        try:
-            import pyproj
-            out["proj:wkt2"] = pyproj.CRS.from_wkt(wkt).to_wkt("WKT2_2019")
-        except ImportError:
-            pass
+        # a dependency, not optional: skipping it when pyproj is missing
+        # would make a store's attributes depend on the encoding machine
+        import pyproj
+        out["proj:wkt2"] = pyproj.CRS.from_wkt(wkt).to_wkt("WKT2_2019")
     return out
 
 
