@@ -554,3 +554,19 @@ def test_error_histogram_has_a_row_per_native_grid(s2_store):
     assert h["absu"]["3-0|60m"].abs().mean() > 10 * h["rel"]["3-0|60m"].abs().mean()
     fig = error_hist_render(h, step=0, unit="DN")
     assert len(fig.axes) == 6
+
+
+def test_rd_err_harvest_pools_the_native_grids(s2_store):
+    """The physical-unit R-D figure decodes S2's three grids and pools
+    their errors, rather than assuming one output plane."""
+    from georvq.data.pool import fixed_val_tokens
+    from georvq.train.figures import rd_err_harvest
+
+    cfg = _cfg()
+    model = build_model(cfg)
+    val = fixed_val_tokens(s2_store, s2_store.index, token=24, per_chip=2,
+                           nodata=None)
+    h = rd_err_harvest(model, model.source, val, [[3, 0], [3, 3]], px=576,
+                       chunk=4)
+    assert set(h["errs"]) == {"3-0", "3-3"}
+    assert all(e.numel() > 0 and bool((e >= 0).all()) for e in h["errs"].values())

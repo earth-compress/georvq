@@ -504,10 +504,17 @@ def rd_err_harvest(model, source, val_s, tuples, px, side_bits=0.0,
             loc = val_loc[i:i + chunk] if val_loc is not None else None
             _, cums = model.level_cumsums(x, loc=loc, valid=v)
             px_x = phys(x)
+            # a multi-grid source (S2) pools the errors of its native grids
+            parts = getattr(source, "error_parts", None)
+            scale = getattr(source, "physical_scale", 1.0)
             for t in tuples:
                 out = model.eval_tuple(cums, t, x, valid=v).float()
-                m = v.unsqueeze(1).expand_as(out)
-                e = (phys(out) - px_x)[m]
+                if parts:
+                    e = torch.cat([p.reshape(-1) for p in
+                                   parts(phys(out), px_x, v).values()]) * scale
+                else:
+                    m = v.unsqueeze(1).expand_as(out)
+                    e = (phys(out) - px_x)[m]
                 errs[tname(t)].append(e.abs().cpu())
     bits = np.array([tuple_bits(model.specs, t, side_bits)
                      for t in tuples]) / px
