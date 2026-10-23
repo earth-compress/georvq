@@ -345,13 +345,15 @@ The header lists the rates the store supports. A rate is a depth tuple:
 how many residual levels of each of the two tiers to decode (coarse,
 one vector per 36 px window; fine, one vector per 60 m pixel, 6 px of
 the 10 m grid). Every rung keeps all eight coarse levels. `bits_px`
-counts every bit read per 10 m pixel, the transmitted window mean and
+counts every coded bit per 10 m pixel, the transmitted window mean and
 standard deviation of each band included, and `whole-product MB` is
-what reading the entire product at that rung fetches. The RMSE columns
-come from the store's quality array, which holds, for every 36 px
-window and every rung, the RMSE in DN of each grid's bands measured
-when the product was encoded. They are pooled here over the product's
-valid pixels, without decoding anything.
+what reading the entire product at that rung fetches, after zstd
+compression of the stored records. The RMSE columns come from the
+store's quality array, which holds, for every 36 px window and every
+rung, the RMSE in DN of each grid's bands measured when the product was
+encoded, rounded up to the next step of 7.5%. They are pooled here over
+the product's valid pixels, without decoding anything, and so sit a few
+percent above the RMSE of a decode.
 """)
 
 code("""
@@ -647,7 +649,8 @@ safe_srv.shutdown()
 costs = pd.DataFrame([dict(zip(("read", "requests", "bytes"), (name,) + cost(fn)), source_bytes=sb)
                       for name, fn, sb in reads]).set_index("read")
 costs["source / georvq"] = (costs["source_bytes"] / costs["bytes"]).round(1)
-print(f"open: {open_req} request, {mb(open_bytes)} of metadata")
+import zarr
+print(f"zarr-python {zarr.__version__}; open: {open_req} request, {mb(open_bytes)} of metadata")
 costs
 """)
 
@@ -869,9 +872,10 @@ one read the reader fetches the fine tier at the deepest level any
 window in the read needs, so the bytes fetched sit between the ideal
 per-window cost and the full-depth cost. Each grid has its own
 statistic, so a reader of the 20 m bands can bound `rmse_20m` instead.
-The quality values are stored to the nearest step of 7.5%, so a window
-read to a bound can come out up to 3.7% above it when decoded, as the
-histogram shows.
+The quality values are rounded up to the next step of 7.5%, so a window
+read to a bound that one of its rungs meets stays within it when
+decoded in the precision the values were measured in, fp32 for this
+release; a bf16 decode on a GPU can land a fraction of a DN above it.
 """)
 
 code("""
@@ -948,7 +952,7 @@ def ndvi(g10):
     nir = (g10[3].astype(np.float64) + off.get("B08", 0)) / qv_
     with np.errstate(invalid="ignore", divide="ignore"):
         v = (nir - red) / (nir + red)
-    v[(g10 == 0).any(0)] = np.nan
+    v[(g10 == 0).any(0) | ~np.isfinite(v)] = np.nan
     return v
 
 
@@ -957,12 +961,13 @@ nd = {"source": ndvi(src["10m"])} | {q: ndvi(dec[q]["10m"]) for q in SHOW}
 ok = np.isfinite(nd["source"])
 rows = []
 for q in SHOW:
+    ok = np.isfinite(nd["source"]) & np.isfinite(nd[q])
     d = (nd[q] - nd["source"])[ok]
     rows.append({"rung": q, "NDVI r": np.corrcoef(nd["source"][ok], nd[q][ok])[0, 1],
                  "RMSE": np.sqrt(np.mean(d * d)), "p99 |diff|": np.quantile(np.abs(d), 0.99),
                  "same side of 0.3": ((nd[q] > 0.3) == (nd["source"] > 0.3))[ok].mean()})
 nw_src, nw_dec = ndvi(src_whole["10m"]), ndvi(whole["10m"])
-okw = np.isfinite(nw_src)
+okw = np.isfinite(nw_src) & np.isfinite(nw_dec)
 print(f"whole product at 8-4: NDVI RMSE {np.sqrt(np.nanmean((nw_dec - nw_src)[okw] ** 2)):.4f}, "
       f"same side of 0.3 for {((nw_dec > 0.3) == (nw_src > 0.3))[okw].mean():.2%} of pixels")
 pd.DataFrame(rows).set_index("rung").style.format("{:.4f}")

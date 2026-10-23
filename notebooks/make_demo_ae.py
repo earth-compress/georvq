@@ -284,9 +284,10 @@ print(f"{'opened with':<12}{open_req} request, {mb(open_bytes)}")
 md("""
 The header lists the rates the store supports. A rate is a depth tuple:
 how many residual levels of each of the three tiers to decode (coarse,
-64 px cells; mid, 16 px; fine, 4 px). `bits_px` counts every bit read
+64 px cells; mid, 16 px; fine, 4 px). `bits_px` counts every coded bit
 per pixel, the transmitted window mean included, and `whole-tile bytes`
-is what reading the entire tile at that rate fetches.
+is what reading the entire tile at that rate fetches, which is less
+because the stored records are compressed with zstd.
 """)
 
 code("""
@@ -472,7 +473,8 @@ for q in [(8, 0, 0), (8, 8, 0), (8, 8, 8)]:
 costs = pd.DataFrame([dict(zip(("read", "requests", "bytes"), (name,) + cost(fn)), source_bytes=sb)
                       for name, fn, sb in reads]).set_index("read")
 costs["source / georvq"] = (costs["source_bytes"] / costs["bytes"]).round(1)
-print(f"open: {open_req} request, {mb(open_bytes)} of metadata")
+import zarr
+print(f"zarr-python {zarr.__version__}; open: {open_req} request, {mb(open_bytes)} of metadata")
 costs
 """)
 
@@ -810,8 +812,11 @@ md("""
 Coastal and border tiles are partly nodata (all 64 bands at -128). The
 store keeps the tile's validity mask once, losslessly, and the reader
 writes -128 back wherever it is unset, so nodata comes back exactly. A
-window with no valid pixel is not coded, and a chunk with none is not
-stored, which makes partial tiles smaller. The block shown is the
+window with no valid pixel is not coded and is stored as zeros, which
+compress to almost nothing, a chunk with none is not stored, and a read
+fetches only the chunks holding a valid pixel in the area it reads, so
+partial tiles are smaller and their nodata costs almost nothing to
+read. The block shown is the
 one whose valid share is closest to one half. In the AlphaEarth tiles
 nodata starts offshore, so the valid part of such a block is open sea,
 where the embeddings are close to constant. The colours are therefore

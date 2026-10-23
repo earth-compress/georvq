@@ -684,8 +684,9 @@ needs, so the bytes fetched sit between the ideal per-window cost and
 the full-depth cost, plus the quality array. On this tile 25% of the
 windows are read at full depth, and for 19% no rung meets the bound at
 all, so a read of the whole tile fetches all of its records. The quality values
-are coded in steps of 7.5%, so a window read at the cheapest rung that
-meets the bound can measure up to 3.7% above it when decoded.
+are rounded up to the next step of 7.5%, so a window read at the
+cheapest rung that meets the bound does not measure above it when
+decoded as the values were measured.
 """)
 
 code("""
