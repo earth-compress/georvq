@@ -92,7 +92,7 @@ Copernicus Sentinel-2 L1C products (ESA)
 
   Licence: Copernicus Sentinel data terms
   (https://sentinels.copernicus.eu/documents/247904/690755/Sentinel_Data_Legal_Notice)
-  Attribution: Contains modified Copernicus Sentinel data 2026.
+  Attribution: Contains modified Copernicus Sentinel data 2025 and 2026.
   Files:
     tests/golden/s2_v1_tile_inputs.npz
         a 144 x 144 px crop (10 m; 72 px at 20 m, 24 px at 60 m) of the
@@ -102,6 +102,10 @@ Copernicus Sentinel-2 L1C products (ESA)
     tests/golden/s2_v1_tile.georvq.zarr
         that crop encoded with the georvq S2 v1 codec (lossy), with a
         stand-in SAFE metadata zip built by tests/s2_safe_fixture.py.
+    notebooks/demo_s2.ipynb (cell outputs)
+        figures and values computed from
+        S2A_MSIL1C_20250531T100051_N0511_R122_T33TTG_20250531T104927 and
+        its georvq encoding.
   Changes: the crop was cut from the band images; encoded files are
   lossy encodings of it.
 

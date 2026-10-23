@@ -264,7 +264,8 @@ This work was funded by the Advanced Research and Invention Agency
 The code is licensed under the Apache License 2.0 (`LICENSE`), as are the
 model weights on Hugging Face. A few files are derived from third-party
 datasets and carry those datasets' terms instead: test fixtures and
-notebook outputs from AlphaEarth (CC-BY 4.0) and TESSERA (CC-BY-SA 4.0),
+notebook outputs from AlphaEarth (CC-BY 4.0), TESSERA (CC-BY-SA 4.0) and
+Copernicus Sentinel-2 (the Copernicus Sentinel data terms),
 a PCA basis fitted on Major TOM Core-S2L1C (CC-BY-SA 4.0), and ERA5
 statistics (CC-BY 4.0). `NOTICE` lists each file with its attribution,
 and the licence texts are in `LICENSES/`. Data encoded or decoded with the AE
