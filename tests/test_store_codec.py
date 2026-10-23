@@ -6,6 +6,7 @@ multiple of the window. Also the `assets` group, and `georvq.open` with
 no arguments through a bundle in the cache."""
 import json
 import os
+import warnings
 
 import numpy as np
 import pytest
@@ -24,7 +25,8 @@ from georvq.inference.api import Codec  # noqa: E402
 from georvq.inference.mean_codec import MeanChannel  # noqa: E402
 from georvq.inference.records import RecordReader  # noqa: E402
 from georvq.inference.store_codec import (ReleaseSpec, StoreCodec,  # noqa: E402
-                                          encode_product, quality_code)
+                                          encode_product, quality_code,
+                                          quality_value)
 from georvq.inference.store_dataset import open_dataset  # noqa: E402
 
 H, WD, WIN, BANDS = 50, 37, 16, 8
@@ -228,6 +230,51 @@ def test_quality_uses_the_spec_error(built):
         ds.read(quality="p90<=0.5")
         with pytest.raises(ValueError, match="p99"):
             ds.read(quality="p99<=0.5")
+
+
+def test_bound_reads_are_conservative(built):
+    """Quality codes round up, so a window read to a bound that its
+    quality values say a rung meets has an error within the bound."""
+    a = built["a"]
+    gh, gw = -(-H // WIN), -(-WD // WIN)
+
+    def window_errors(out):
+        p = np.full((BANDS, gh * WIN, gw * WIN), np.nan, np.float32)
+        q = np.full_like(p, np.nan)
+        p[:, :H, :WD], q[:, :H, :WD] = a, out
+        e = np.abs(p - q).mean(0)                    # NaN where invalid
+        with warnings.catch_warnings():              # windows with no valid pixel
+            warnings.simplefilter("ignore", RuntimeWarning)
+            return np.nanmean(e.reshape(gh, WIN, gw, WIN).transpose(0, 2, 1, 3)
+                              .reshape(gh, gw, -1), -1)
+
+    with open_dataset(built["store"], SPEC, codec=built["codec"]) as ds:
+        n = len(ds.rungs)
+        errs = np.stack([window_errors(ds.read(quality=r)) for r in ds.rungs], -1)
+        live = ~np.isnan(errs[..., 0])
+        codes = ds.quality_codes(0, gh, 0, gw)[..., :n]
+        assert (quality_value(codes)[live] >= errs[live] * (1 - 1e-5)).all()
+        for bound in np.quantile(errs[live], [0.2, 0.5, 0.8]):
+            k = ds.window_rungs(f"mean<={bound}")
+            met = (np.take_along_axis(quality_value(codes), k[..., None], -1)[..., 0]
+                   <= bound) & live
+            assert met.any()
+            got = window_errors(ds.read(quality=f"mean<={bound}"))
+            assert (got[met] <= bound * (1 + 1e-5)).all()
+
+
+def test_blank_window_reads_nothing(built):
+    """Window (1, 1) has no valid pixel and shares its base chunk with
+    valid windows: its records are zero, reading it fetches nothing, and
+    it decodes to nodata."""
+    with open_dataset(built["store"], SPEC, codec=built["codec"]) as ds:
+        g = ds.reader.group
+        assert not g["base"][1, 1].any() and not g["tier1"][1, 1].any()
+        assert g["base"][0, 0].any()
+        assert ds.reader.plan(1, 2, 1, 2, quality=True) == []
+        got = ds.read(window=Window(16, 16, 16, 16))
+        assert ds.reader.stats["values"] == 0
+        assert (got == OUT_NODATA).all()
 
 
 def test_assets_round_trip_and_are_checked(built, tmp_path):

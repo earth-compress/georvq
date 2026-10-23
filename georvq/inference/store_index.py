@@ -30,9 +30,10 @@ core columns are:
   when it has none;
 - `rungs`: per rung of the header's rung table, in order, `rung`
   ("8-8-2"), the header's nominal `bits_px`, and `bytes`, the bytes a
-  whole-product read at that rung reads: the records of base and of
-  each tier's levels up to the rung's depth, outside empty chunks, and
-  the mask array's stored bytes; quality excluded.
+  whole-product read at that rung reads: the stored (compressed) chunks
+  of base and of each tier's levels up to the rung's depth, the shard
+  indexes of the tiers read, and the mask array's stored bytes; quality
+  excluded.
 
 Only metadata and stored sizes are read, so the stores must be on a
 filesystem zarr-python can list, such as a local directory.
@@ -63,16 +64,20 @@ EDGE_POINTS = 21
 
 
 def rung_bytes(reader: RecordReader, mask_bytes: int) -> list:
-    """Per header rung: {rung, bits_px, bytes}, with bytes the record
+    """Per header rung: {rung, bits_px, bytes}, with bytes the stored
     bytes a whole-product read at the rung reads."""
     col = reader.column_bytes()
+    index = reader.shard_index_bytes()
     out = []
     for r in reader.header["rungs"]:
         t = [int(v) for v in r["tuple"]]
         cols = reader.columns_for(t, mask=False)
+        idx = sum(index[tier.name] for tier, L in zip(reader.layout.tiers, t)
+                  if not tier.in_base and L > 0)
         out.append({"rung": "-".join(map(str, t)),
                     "bits_px": float(r["bits_px"]),
-                    "bytes": int(sum(col.get(c, 0) for c in cols) + mask_bytes)})
+                    "bytes": int(sum(col.get(c, 0) for c in cols) + idx
+                                 + mask_bytes)})
     return out
 
 

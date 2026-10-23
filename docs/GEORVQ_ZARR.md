@@ -23,8 +23,8 @@ window grid:
 
 | array | shape | chunks |
 |---|---|---|
-| `base` | (window rows, window cols, base bytes) | one chunk per base chunk |
-| one per tier after the coarsest (`mid`, `fine`) | (window rows, window cols, levels, record bytes) | one shard for the whole array, with an inner chunk per level of each tier chunk |
+| `base` | (window rows, window cols, base bytes) | one chunk per base chunk, zstd |
+| one per tier after the coarsest (`mid`, `fine`) | (window rows, window cols, levels, record bytes) | one shard for the whole array, with an inner chunk per level of each tier chunk, zstd |
 | `mask` | (pixel rows, pixel cols), bool | one chunk per base chunk, zstd |
 | `quality/<decoder_id>` | (window rows, window cols, quality bytes) | as `base` |
 
@@ -39,9 +39,8 @@ locates them through the index, so the order does not matter. From
 zarr-python 3.3 a partial read of a shard merges neighbouring inner
 chunks and fetches them concurrently; earlier versions fetch them one at
 a time, which on Hugging Face made a whole-tile read about ten times
-slower. The code arrays have no compressor, because the records are
-already packed to their bit widths, and the edge chunks are padded with
-zero records.
+slower. The code arrays are compressed with zstd, and the edge chunks
+are padded with zero records.
 
 ## Records
 
@@ -56,11 +55,14 @@ bits, 448 bytes.
 
 The pixel validity mask is stored once, losslessly, as a bool array
 compressed with zstd, and a chunk with every pixel valid is not stored
-(the fill value is True). A chunk of any kind none of whose windows has
-a valid pixel is empty. The header lists it, its records are zero, and
-the tier arrays do not store it, so a partly valid tile is smaller. A
-reader does not read an empty chunk, nor a chunk of another kind whose
-windows in the read all lie in empty chunks.
+(the fill value is True). A window none of whose pixels is valid has
+zero records in every array, which is the arrays' fill value, so zstd
+reduces it to a few bytes, and a chunk or inner chunk holding only such
+windows is not stored. A chunk of any kind none of whose windows has a
+valid pixel is empty, and the header lists it. A reader reads the mask
+first, where the region it reads overlaps a mask chunk that the header
+lists as holding an invalid pixel, and then reads only the code chunks
+holding a window with a valid pixel in that region.
 
 ## Quality per decoder
 
@@ -81,8 +83,9 @@ quality of the decoder the header names until it is asked for another,
 and refuses a quality array that names another bitstream.
 
 For AE v2 the statistics are the mean and p99 of per-pixel `1 - cos`,
-stored as `code = round(32 * (log10(e) + 6))` clipped to 0..255 (0
-means `e <= 1e-6`).
+stored as `code = ceil(32 * (log10(e) + 6))` clipped to 0..255 (0
+means `e <= 1e-6`). The codes are rounded up, so the value a code
+stands for is never below the measured error.
 
 ## Header
 
@@ -108,10 +111,13 @@ request for the group's `zarr.json`.
 
 georvq's reader (`georvq/inference/records.py`) is built on an open
 `zarr.Group` and leaves all requests to zarr-python. For a window region
-and a depth tuple it lists the chunks of each kind the region overlaps,
-leaves out the ones in its cache and those ruled out by empty chunks,
-and makes one zarr-python read per array over the bounding box of the
-rest, every level down to the deepest needed, with the reads of
+and a depth tuple it reads the mask first (where the region overlaps a
+mask chunk holding an invalid pixel), lists the chunks of each kind the
+region overlaps, leaves out the ones in its cache and those with no
+window holding a valid pixel in the region, and makes one zarr-python
+read per array over the bounding box of the rest (split into runs of
+adjacent chunks when the box would hold a stored chunk that is not
+needed), every level down to the deepest needed, with the reads of
 different arrays running in parallel. The values are cached per
 (column, chunk) in memory, so later reads take what they share with
 earlier ones from the cache. Over HTTP, `storage_options` go to fsspec,
@@ -122,14 +128,19 @@ for example a token for a private repository.
 For an 8192 x 8192 AlphaEarth tile (128 x 128 windows of 64 px, with
 tiers `1:256:2048:8`, `4:192:8192:8`, `16:64:16384:8`), the chunk sizes
 are 8192 px for `base`, `mid`, `quality` and the mask (one chunk for
-the tile) and 2048 px for `fine` (4 x 4 chunks). The 2048 px fine chunk
-was chosen over the source's 1024 px block because each request to the
-Hugging Face CDN costs 0.55 to 0.65 s whatever its size up to a few MB,
-so a read covering many fine chunks is limited by the number of
-requests rather than by bytes. With 2048 px chunks a whole-tile read at
-`8-8-2` took about half as long as at `8-8-8`, where with 1024 px chunks
-the two took about the same. A fully valid tile is a 64.0 MB store of 12
-objects, of which `fine` takes 58.7 MB.
+the tile) and 1024 px for `fine` (8 x 8 chunks), the source's block
+size. The fine chunk was 2048 px until October 2026, chosen because each
+request to the Hugging Face CDN costs 0.55 to 0.65 s whatever its size
+up to a few MB, and zarr-python before 3.3 fetched each inner chunk of
+a shard with a request of its own. zarr-python 3.3 merges the requests
+for nearby inner chunks, and with it the 1024 px chunks cut what a
+1024 px read at `8-8-8` fetches from 6.1 MB in 10 requests to 4.5 MB in
+7, and a 4096 px read from 25.6 MB in 19 requests to 15.7 MB in 18,
+counted through a local server. The
+shard index grows from 2 kB to 8 kB and the number of objects in a
+store does not change. A fully valid tile is a 50.9 MB store of 11
+objects, of which `fine` takes 48.1 MB, against 64.0 MB for the same
+records uncompressed.
 
 ## Open points
 

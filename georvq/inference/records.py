@@ -12,20 +12,24 @@ window grid, written and read by zarr-python:
                          metadata under `georvq_aux`, proj: and spatial:
                          attributes, and zarr-python's consolidated
                          metadata
-    base   (wy, wx, base bytes)     one chunk per base chunk
+    base   (wy, wx, base bytes)     one chunk per base chunk, zstd
     <tier> (wy, wx, levels, bytes)  sharding_indexed, one shard for the
                                     array, inner chunks of one level of
-                                    one tier chunk
+                                    one tier chunk, zstd
     mask   (H, W) bool              one chunk per mask-kind chunk, zstd;
                                     chunks with every pixel valid omitted
-    quality/<decoder_id> (wy, wx, quality bytes)  chunked as base
+    quality/<decoder_id> (wy, wx, quality bytes)  chunked as base, zstd
     assets/<name> (bytes,) uint8    optional named byte blobs, one chunk
                                     each, no compression codec
 
-Code arrays have no compression codec, so each chunk holds the packed
-records of its windows. A chunk none of whose windows has a valid pixel
-is empty: the header lists it, its records are zero, and the tiers do
-not store it. Quality values measure one decoder's error at its rungs,
+Each code chunk holds the packed records of its windows, compressed with
+zstd. A window none of whose pixels is valid has zero records, which is
+the arrays' fill value, so such windows compress to almost nothing, and
+a chunk (or inner chunk of a shard) holding only such windows is not
+stored at all. A chunk none of whose windows has a valid pixel is also
+listed in the header as empty. A reader reads the mask first and fetches
+only the code chunks holding a window with a valid pixel in the region
+it reads. Quality values measure one decoder's error at its rungs,
 so each array under `quality/` is named by the `decoder_id` it was
 measured with, and its attributes (`georvq_quality`) carry that
 decoder's ids, release, rungs in record order, record fields and the
@@ -75,6 +79,7 @@ ASSETS_GROUP = "assets"
 ASSET_KEY = "georvq_asset"
 CACHE_BYTES = 512 * 1024 * 1024
 MASK_ZSTD_LEVEL = 19
+CODE_ZSTD_LEVEL = 19
 _WRITER_KEYS = ("format", "version", "status", "layout")
 _RESERVED = ("base", "mask", "quality", "assets")
 _TIER_NAME = re.compile(r"[A-Za-z0-9_]+")
@@ -444,8 +449,8 @@ class RecordWriter:
     added in any order, from independent encoders; `close` writes the
     store, so it does not depend on the order of `add_windows` calls.
     Every window of the product must be added. Records given for windows
-    of an empty chunk (no valid pixel in any of its windows) are not
-    stored.
+    without a valid pixel are not stored: the store holds zero records
+    for them.
 
     header: the codec, product, rungs and quality entries of the
     `georvq` attribute; with a quality column, `codec.decoder_id` names
@@ -567,9 +572,12 @@ class RecordWriter:
     def _header(self):
         """The `georvq` attribute: the header with the layout, its empty
         chunks and the mask chunks holding an invalid pixel. Zeroes the
-        records of empty chunks."""
+        records of every window without a valid pixel."""
         lay = self.layout.to_json()
         live = self._live()
+        gy, gx = self.window_grid
+        for rec in self._rec.values():
+            rec[:gy, :gx][~live] = 0
         empty_of = {}
         for g in lay["groups"]:
             kind = g["kind"]
@@ -577,10 +585,6 @@ class RecordWriter:
             n = self.layout.groups[kind].chunk_windows
             empty = [[i, j] for i in range(ny) for j in range(nx)
                      if not live[i * n:(i + 1) * n, j * n:(j + 1) * n].any()]
-            for i, j in empty:
-                for c in self.layout.groups[kind].columns:
-                    if c != "mask":
-                        self._rec[c][i * n:(i + 1) * n, j * n:(j + 1) * n] = 0
             g["chunk_grid"] = [ny, nx]
             g["empty_chunks"] = empty
             empty_of[kind] = {tuple(c) for c in empty}
@@ -619,14 +623,17 @@ class RecordWriter:
         def records(col):
             return self._rec[col][:gy, :gx]
 
+        # zero records (windows without a valid pixel) are the fill value:
+        # zstd reduces them to almost nothing, and a chunk or inner chunk
+        # holding nothing else is not written
         def plain(parent, name, col, attrs):
             n = lay.groups[lay.kind_of[col]].chunk_windows
             rb = lay.columns[col].record_bytes
             a = parent.create_array(
                 name, shape=(gy, gx, rb), dtype="uint8", chunks=(n, n, rb),
-                compressors=None, filters=None, fill_value=0,
-                dimension_names=["wy", "wx", f"{col}_byte"], attributes=attrs,
-                config={"write_empty_chunks": True})
+                compressors=ZstdCodec(level=CODE_ZSTD_LEVEL), filters=None,
+                fill_value=0, dimension_names=["wy", "wx", f"{col}_byte"],
+                attributes=attrs, config={"write_empty_chunks": False})
             a[...] = records(col)
 
         plain(root, "base", "base", win_attrs)
@@ -639,7 +646,8 @@ class RecordWriter:
             a = root.create_array(
                 t.name, shape=(gy, gx, t.levels, rb), dtype="uint8",
                 chunks=(n, n, 1, rb), shards=(ny * n, nx * n, t.levels, rb),
-                compressors=None, filters=None, fill_value=0,
+                compressors=ZstdCodec(level=CODE_ZSTD_LEVEL), filters=None,
+                fill_value=0,
                 dimension_names=["wy", "wx", f"{t.name}_level", f"{t.name}_byte"],
                 attributes=win_attrs, config={"write_empty_chunks": False})
             a[...] = np.stack([records(c) for c in t.columns], 2)
@@ -793,12 +801,17 @@ class RecordReader:
     opens works, including copies rechunked or recompressed with Zarr
     tools: only the shape and data type of each array are checked.
 
-    A read lists the (column, chunk) values it needs, leaves out the
-    cached ones, and makes one zarr-python read per array over the
-    bounding box of the rest, every level down to the deepest asked for;
-    the reads of different arrays run in parallel. No empty chunk is
-    read, nor any chunk whose windows in the read all lie in empty
-    chunks of any kind. `cache` defaults to a RecordCache of
+    A read first reads the mask where the region overlaps a mask chunk
+    holding an invalid pixel (the header lists those chunks), which
+    tells it the windows without a valid pixel. It then lists the
+    (column, chunk) values it needs, leaving out the cached ones, empty
+    chunks and every chunk whose windows in the region have no valid
+    pixel, and makes one zarr-python read per array over the bounding
+    box of the rest (split into runs of adjacent chunks when the box
+    would hold a stored chunk that is not needed), every level down to
+    the deepest asked for; the reads run
+    in parallel. Windows without a valid pixel read as zero records.
+    `cache` defaults to a RecordCache of
     `cache_bytes`. `stats` counts the values read and their bytes, and
     the values served from the cache and their bytes. `trace`, a Trace,
     records the reads and the unpacking when given.
@@ -986,27 +999,35 @@ class RecordReader:
         return [(i, j) for i in range(wy0 // n, (wy1 - 1) // n + 1)
                 for j in range(wx0 // n, (wx1 - 1) // n + 1)]
 
-    def skipped(self, kind, i, j, wy0, wy1, wx0, wx1) -> bool:
+    def skipped(self, kind, i, j, wy0, wy1, wx0, wx1, live=None) -> bool:
         """True when chunk (i, j) of `kind` is empty, or when none of its
-        windows inside [wy0:wy1, wx0:wx1] has a valid pixel as known from
-        the empty chunks of any kind. A read does not fetch it."""
+        windows inside [wy0:wy1, wx0:wx1] has a valid pixel, as known from
+        the empty chunks of any kind and, when given, from `live` ((wy1 -
+        wy0, wx1 - wx0) bool, the windows of the region with a valid
+        pixel). A read does not fetch it."""
         if (i, j) in self.empty[kind]:
             return True
         n = self.layout.groups[kind].chunk_windows
-        return bool(self.dead[max(wy0, i * n):min(wy1, (i + 1) * n),
-                              max(wx0, j * n):min(wx1, (j + 1) * n)].all())
+        y0, y1 = max(wy0, i * n), min(wy1, (i + 1) * n)
+        x0, x1 = max(wx0, j * n), min(wx1, (j + 1) * n)
+        if self.dead[y0:y1, x0:x1].all():
+            return True
+        return live is not None and not live[y0 - wy0:y1 - wy0,
+                                             x0 - wx0:x1 - wx0].any()
 
-    def needs(self, wy0, wy1, wx0, wx1, columns) -> list:
+    def needs(self, wy0, wy1, wx0, wx1, columns, live=None) -> list:
         """(column, chunk_row, chunk_col) values that a read of `columns`
         over the windows needs. Masks of chunks with every pixel valid,
-        and chunks that `skipped` rules out, are left out."""
+        and chunks that `skipped` rules out (for code columns, with
+        `live`), are left out."""
         out = []
         for c in columns:
             kind = self.layout.kind_of[c]
+            lv = None if c == "mask" else live
             for ch in self.chunks_of(kind, wy0, wy1, wx0, wx1):
                 if c == "mask" and ch not in self.masked:
                     continue
-                if self.skipped(kind, *ch, wy0, wy1, wx0, wx1):
+                if self.skipped(kind, *ch, wy0, wy1, wx0, wx1, lv):
                     continue
                 out.append((c,) + ch)
         return out
@@ -1021,41 +1042,75 @@ class RecordReader:
             return col
         return self.layout.kind_of[col]
 
-    def _regions(self, needs) -> dict:
-        """{array: (slices, needs)} of one zarr-python read per array, over
-        the bounding box of its needed chunks."""
+    def _reads(self, needs, region=None) -> list:
+        """(array, slices, needs) of the zarr-python reads of `needs`: one
+        per array over the bounding box of its needed chunks, unless that
+        box holds a stored chunk that is not needed, in which case one per
+        run of adjacent needed chunks in a chunk row. Within a shard a
+        chunk is not stored when all its windows lack a valid pixel, so
+        for a tier an unneeded chunk lying wholly inside `region` (the
+        window region read) or listed as empty does not count; for the
+        other arrays, whose chunks are separate objects, every unneeded
+        chunk does."""
         lay = self.layout
         by = {}
         for n in needs:
             by.setdefault(self._array_of(n[0]), []).append(n)
-        out = {}
+        out = []
         for name, ns in by.items():
-            i0, i1 = min(n[1] for n in ns), max(n[1] for n in ns) + 1
-            j0, j1 = min(n[2] for n in ns), max(n[2] for n in ns) + 1
+            chunks = {(n[1], n[2]) for n in ns}
+            i0, i1 = min(c[0] for c in chunks), max(c[0] for c in chunks) + 1
+            j0, j1 = min(c[1] for c in chunks), max(c[1] for c in chunks) + 1
+            box = {(i, j) for i in range(i0, i1) for j in range(j0, j1)}
+            if name not in ("base", "quality", "mask") and region is not None:
+                kind = lay.kind_of[ns[0][0]]
+                n = lay.groups[kind].chunk_windows
+                gy, gx = self.window_grid
+                wy0, wy1, wx0, wx1 = region
+                box -= {(i, j) for i, j in box if (i, j) in self.empty[kind]
+                        or (wy0 <= i * n and min(gy, (i + 1) * n) <= wy1
+                            and wx0 <= j * n and min(gx, (j + 1) * n) <= wx1)}
+            if box <= chunks:
+                boxes = [(i0, i1, j0, j1)]
+            else:
+                boxes = []
+                for i in range(i0, i1):
+                    js = sorted(j for r, j in chunks if r == i)
+                    for run in np.split(js, np.nonzero(np.diff(js) > 1)[0] + 1):
+                        if len(run):
+                            boxes.append((i, i + 1, int(run[0]), int(run[-1]) + 1))
             arr = self.arrays[name]
             if name == "mask":
-                p = lay.groups[lay.mask_kind].chunk_px
-                sl = (slice(i0 * p, min(arr.shape[0], i1 * p)),
-                      slice(j0 * p, min(arr.shape[1], j1 * p)))
+                k = lay.groups[lay.mask_kind].chunk_px
             else:
                 k = lay.groups[lay.kind_of[ns[0][0]]].chunk_windows
-                sl = (slice(i0 * k, min(arr.shape[0], i1 * k)),
-                      slice(j0 * k, min(arr.shape[1], j1 * k)))
-                if name not in ("base", "quality"):
+            for a0, a1, b0, b1 in boxes:
+                sub = [n for n in ns if a0 <= n[1] < a1 and b0 <= n[2] < b1]
+                sl = (slice(a0 * k, min(arr.shape[0], a1 * k)),
+                      slice(b0 * k, min(arr.shape[1], b1 * k)))
+                if name not in ("base", "quality", "mask"):
                     t = next(t for t in lay.tiers if t.name == name)
-                    depth = max(t.columns.index(n[0]) for n in ns) + 1
+                    depth = max(t.columns.index(n[0]) for n in sub) + 1
                     sl += (slice(0, depth),)
-            out[name] = (sl, ns)
+                out.append((name, sl, sub))
         return out
 
     def plan(self, wy0, wy1, wx0, wx1, depths=None, base=True, mask=True,
              quality=False) -> list:
         """(array name, slices) of the zarr-python reads a read would
-        make now."""
-        cols = self.columns_for(depths, base, mask, quality)
-        needs = [n for n in self.needs(wy0, wy1, wx0, wx1, cols)
+        make now: the mask's first, then the code arrays'. To know which
+        code chunks hold a window with a valid pixel, the plan reads the
+        mask itself, without caching it."""
+        cols = [c for c in self.columns_for(depths, base, mask, quality)
+                if c != "mask"]
+        mneeds = [n for n in self.needs(wy0, wy1, wx0, wx1, ["mask"])
+                  if not self.cache.has(self._key(n))]
+        live, _ = self.live_windows(wy0, wy1, wx0, wx1, keep=False)
+        needs = [n for n in self.needs(wy0, wy1, wx0, wx1, cols, live)
                  if not self.cache.has(self._key(n))]
-        return [(name, sl) for name, (sl, _) in self._regions(needs).items()]
+        region = (wy0, wy1, wx0, wx1)
+        return [(name, sl) for name, sl, _ in self._reads(mneeds)
+                + self._reads(needs, region)]
 
     # ---- values ----
 
@@ -1068,12 +1123,15 @@ class RecordReader:
         return np.frombuffer(v, np.uint8).reshape(p, p)[
             :shape[0], :shape[1]].astype(bool)
 
-    def values(self, needs) -> dict:
+    def values(self, needs, keep=True, region=None) -> dict:
         """{(column, chunk_row, chunk_col): value bytes} for `needs`, from
-        the cache where held and otherwise from zarr-python reads. A code
-        value holds the chunk's records, padded with zero records to the
-        full chunk at the edges; a mask value holds the chunk's pixels,
-        one byte each, padded to the full chunk."""
+        the cache where held and otherwise from zarr-python reads, which
+        are cached unless `keep` is False. `region`, the window region
+        the needs were listed for, lets a tier be read in one zarr-python
+        read more often (see `_reads`). A code value holds the chunk's
+        records, padded with zero records to the full chunk at the edges;
+        a mask value holds the chunk's pixels, one byte each, padded to
+        the full chunk."""
         out, missing, hits, hit_bytes = {}, [], 0, 0
         for n in needs:
             v = self.cache.get(self._key(n))
@@ -1089,21 +1147,21 @@ class RecordReader:
         if not missing:
             return out
         lay = self.layout
-        regions = self._regions(missing)
+        reads = self._reads(missing, region)
 
-        def get(name):
-            sl = regions[name][0]
+        def get(k):
+            name, sl, _ = reads[k]
             with span(self.trace, "get", name):
-                return name, np.asarray(self.arrays[name][sl])
-        if len(regions) > 1:
-            with ThreadPoolExecutor(len(regions)) as ex:
-                slabs = dict(ex.map(get, regions))
+                return k, np.asarray(self.arrays[name][sl])
+        if len(reads) > 1:
+            with ThreadPoolExecutor(min(len(reads), 16)) as ex:
+                slabs = dict(ex.map(get, range(len(reads))))
         else:
-            slabs = dict(map(get, regions))
+            slabs = dict(map(get, range(len(reads))))
         got = 0
         with span(self.trace, "cpu", "slice values"):
-            for name, (sl, ns) in regions.items():
-                slab = slabs[name]
+            for k, (name, sl, ns) in enumerate(reads):
+                slab = slabs[k]
                 r0, c0 = sl[0].start, sl[1].start
                 for n in ns:
                     col, i, j = n
@@ -1113,11 +1171,11 @@ class RecordReader:
                         sub = slab[i * p - r0:(i + 1) * p - r0,
                                    j * p - c0:(j + 1) * p - c0]
                     else:
-                        k = lay.groups[lay.kind_of[col]].chunk_windows
+                        m = lay.groups[lay.kind_of[col]].chunk_windows
                         rb = lay.columns[col].record_bytes
-                        blk = np.zeros((k, k, rb), np.uint8)
-                        sub = slab[i * k - r0:(i + 1) * k - r0,
-                                   j * k - c0:(j + 1) * k - c0]
+                        blk = np.zeros((m, m, rb), np.uint8)
+                        sub = slab[i * m - r0:(i + 1) * m - r0,
+                                   j * m - c0:(j + 1) * m - c0]
                         if name not in ("base", "quality"):
                             t = next(t for t in lay.tiers if t.name == name)
                             sub = sub[:, :, t.columns.index(col)]
@@ -1125,11 +1183,26 @@ class RecordReader:
                     v = blk.tobytes()
                     out[n] = v
                     got += len(v)
-                    self.cache.put(self._key(n), v)
+                    if keep:
+                        self.cache.put(self._key(n), v)
         with self._lock:
             self.stats["values"] += len(missing)
             self.stats["bytes"] += got
         return out
+
+    def live_windows(self, wy0, wy1, wx0, wx1, keep=True):
+        """((rows, cols) bool, mask values): the windows of [wy0:wy1,
+        wx0:wx1] that hold a valid pixel, and the mask values read to
+        find them. Only mask chunks holding an invalid pixel are read;
+        the windows of every other chunk are known from the header."""
+        mneeds = self.needs(wy0, wy1, wx0, wx1, ["mask"])
+        if not mneeds:
+            return ~self.dead[wy0:wy1, wx0:wx1], {}
+        vals = self.values(mneeds, keep=keep)
+        W = self.layout.window_px
+        gh, gw = wy1 - wy0, wx1 - wx0
+        valid = self._valid(vals, wy0, wy1, wx0, wx1)
+        return valid.reshape(gh, W, gw, W).any((1, 3)), vals
 
     def read(self, wy0, wy1, wx0, wx1, depths=None, base=True, mask=True,
              quality=False) -> dict:
@@ -1138,17 +1211,23 @@ class RecordReader:
         Returns {"base": (h, w, n), tier name: (h, w, L, n) for each
         tier outside base read at L > 0, "quality": (h, w, n), "valid":
         (h * W, w * W) pixel validity, False beyond the product}, with
-        only the parts asked for. Windows without a valid pixel that were
-        not read have zero records."""
+        only the parts asked for. The mask is read first, and only the
+        code chunks holding a window with a valid pixel in the region are
+        read; windows without a valid pixel have zero records."""
         if depths is None:
             depths = [t.levels for t in self.layout.tiers]
-        cols = self.columns_for(depths, base, mask, quality)
-        vals = self.values(self.needs(wy0, wy1, wx0, wx1, cols))
+        cols = [c for c in self.columns_for(depths, base, mask, quality)
+                if c != "mask"]
+        live, vals = self.live_windows(wy0, wy1, wx0, wx1)
+        vals = {**vals, **self.values(self.needs(wy0, wy1, wx0, wx1, cols,
+                                                 live),
+                                      region=(wy0, wy1, wx0, wx1))}
         with span(self.trace, "cpu", "unpack records"):
             return self._unpack(vals, wy0, wy1, wx0, wx1, depths, base,
-                                mask, quality)
+                                mask, quality, live)
 
-    def _unpack(self, vals, wy0, wy1, wx0, wx1, depths, base, mask, quality):
+    def _unpack(self, vals, wy0, wy1, wx0, wx1, depths, base, mask, quality,
+                live):
         gh, gw = wy1 - wy0, wx1 - wx0
         out = {}
 
@@ -1168,6 +1247,7 @@ class RecordReader:
                 arr[sy0 - wy0:sy1 - wy0, sx0 - wx0:sx1 - wx0] = unpack(
                     raw.reshape(-1, col.record_bytes), col.widths).reshape(
                     sy1 - sy0, sx1 - sx0, -1)
+            arr[~live] = 0
             return arr
 
         if base:
@@ -1179,28 +1259,34 @@ class RecordReader:
         if quality:
             out["quality"] = records("quality")
         if mask:
-            W = self.layout.window_px
-            kind = self.layout.mask_kind
-            p = self.layout.groups[kind].chunk_px
-            valid = np.zeros((gh * W, gw * W), bool)
-            y0, x0 = wy0 * W, wx0 * W
-            for i, j in self.chunks_of(kind, wy0, wy1, wx0, wx1):
-                py0, px0 = i * p, j * p
-                bh, bw = min(p, self.height - py0), min(p, self.width - px0)
-                sy0, sy1 = max(y0, py0), min(y0 + gh * W, py0 + bh)
-                sx0, sx1 = max(x0, px0), min(x0 + gw * W, px0 + bw)
-                if sy1 <= sy0 or sx1 <= sx0:
-                    continue
-                if self.skipped(kind, i, j, wy0, wy1, wx0, wx1):
-                    continue
-                if (i, j) in self.masked:
-                    blk = self._decode_mask(vals[("mask", i, j)], (bh, bw))
-                    valid[sy0 - y0:sy1 - y0, sx0 - x0:sx1 - x0] = \
-                        blk[sy0 - py0:sy1 - py0, sx0 - px0:sx1 - px0]
-                else:
-                    valid[sy0 - y0:sy1 - y0, sx0 - x0:sx1 - x0] = True
-            out["valid"] = valid
+            out["valid"] = self._valid(vals, wy0, wy1, wx0, wx1)
         return out
+
+    def _valid(self, vals, wy0, wy1, wx0, wx1) -> np.ndarray:
+        """(h * W, w * W) pixel validity of windows [wy0:wy1, wx0:wx1]
+        from the mask values in `vals`, False beyond the product."""
+        gh, gw = wy1 - wy0, wx1 - wx0
+        W = self.layout.window_px
+        kind = self.layout.mask_kind
+        p = self.layout.groups[kind].chunk_px
+        valid = np.zeros((gh * W, gw * W), bool)
+        y0, x0 = wy0 * W, wx0 * W
+        for i, j in self.chunks_of(kind, wy0, wy1, wx0, wx1):
+            py0, px0 = i * p, j * p
+            bh, bw = min(p, self.height - py0), min(p, self.width - px0)
+            sy0, sy1 = max(y0, py0), min(y0 + gh * W, py0 + bh)
+            sx0, sx1 = max(x0, px0), min(x0 + gw * W, px0 + bw)
+            if sy1 <= sy0 or sx1 <= sx0:
+                continue
+            if self.skipped(kind, i, j, wy0, wy1, wx0, wx1):
+                continue
+            if (i, j) in self.masked:
+                blk = self._decode_mask(vals[("mask", i, j)], (bh, bw))
+                valid[sy0 - y0:sy1 - y0, sx0 - x0:sx1 - x0] = \
+                    blk[sy0 - py0:sy1 - py0, sx0 - px0:sx1 - px0]
+            else:
+                valid[sy0 - y0:sy1 - y0, sx0 - x0:sx1 - x0] = True
+        return valid
 
     def read_mask(self, y0: int, y1: int, x0: int, x1: int) -> np.ndarray:
         """Validity (True = valid) of pixels [y0:y1, x0:x1]."""
@@ -1229,14 +1315,82 @@ class RecordReader:
         return out
 
     def column_bytes(self) -> dict:
-        """Bytes of the records of each code column outside empty chunks,
-        as a whole-product read takes them: chunks of `kind` times its
-        chunk's records."""
-        out = {}
-        for name, col in self.layout.columns.items():
-            kind = self.layout.kind_of[name]
-            g = self.layout.groups[kind]
-            ny, nx = self.chunk_grids[kind]
-            live = ny * nx - len(self.empty[kind])
-            out[name] = live * g.chunk_windows ** 2 * col.record_bytes
+        """Stored (compressed) bytes of each code column, as a
+        whole-product read fetches them: for base and quality the sizes
+        of the array's chunk objects, for a tier's level the sizes of its
+        inner chunks, from the shard index. `shard_index_bytes` gives the
+        indexes themselves. Needs a store that can be listed, such as a
+        local directory."""
+        out = {name: sum(_chunk_sizes(self.arrays[name]).values())
+               for name in ("base", "quality") if name in self.arrays}
+        for t in self.layout.tiers:
+            if t.in_base:
+                continue
+            per = {}
+            for (_, _, level, _), n in _inner_chunk_sizes(
+                    self.arrays[t.name]).items():
+                per[level] = per.get(level, 0) + n
+            for level, c in enumerate(t.columns):
+                out[c] = per.get(level, 0)
         return out
+
+    def shard_index_bytes(self) -> dict:
+        """{tier: bytes} of the shard indexes a read of the tier fetches."""
+        return {t.name: _shard_index_bytes(self.arrays[t.name])
+                for t in self.layout.tiers if not t.in_base}
+
+
+def _getsize(arr, key) -> int:
+    """Size of object `key` of array `arr`, 0 when it is not stored."""
+    from zarr.core.sync import sync
+    sp = arr.store_path
+    try:
+        return int(sync(sp.store.getsize(f"{sp.path}/{key}" if sp.path else key)))
+    except FileNotFoundError:
+        return 0
+
+
+def _chunk_sizes(arr) -> dict:
+    """{chunk coords: stored bytes} of an array's chunk objects."""
+    import itertools
+    grid = [-(-s // c) for s, c in zip(arr.shape, arr.chunks if arr.shards is None
+                                       else arr.shards)]
+    out = {}
+    for cc in itertools.product(*(range(g) for g in grid)):
+        n = _getsize(arr, arr.metadata.encode_chunk_key(cc))
+        if n:
+            out[cc] = n
+    return out
+
+
+def _shard_index_bytes(arr) -> int:
+    """Bytes of one shard's index: 16 per inner chunk and a crc32c."""
+    per = [s // c for s, c in zip(arr.shards, arr.chunks)]
+    return 16 * int(np.prod(per)) + 4
+
+
+def _inner_chunk_sizes(arr) -> dict:
+    """{inner chunk coords in the array: stored bytes} of a sharded
+    array, from each shard's index (little-endian uint64 offset and size
+    per inner chunk in C order, then a crc32c, at the shard's end)."""
+    import itertools
+
+    from zarr.abc.store import SuffixByteRequest
+    from zarr.core.buffer import default_buffer_prototype
+    from zarr.core.sync import sync
+    per = [s // c for s, c in zip(arr.shards, arr.chunks)]
+    nidx = _shard_index_bytes(arr)
+    sp = arr.store_path
+    out = {}
+    for sc in _chunk_sizes(arr):
+        key = arr.metadata.encode_chunk_key(sc)
+        buf = sync(sp.store.get(f"{sp.path}/{key}" if sp.path else key,
+                                prototype=default_buffer_prototype(),
+                                byte_range=SuffixByteRequest(nidx)))
+        idx = np.frombuffer(buf.to_bytes()[:-4], "<u8").reshape(-1, 2)
+        for k, ic in enumerate(itertools.product(*(range(p) for p in per))):
+            off, n = idx[k]
+            if off == n == np.uint64(2 ** 64 - 1):
+                continue
+            out[tuple(s * p + i for s, p, i in zip(sc, per, ic))] = int(n)
+    return out

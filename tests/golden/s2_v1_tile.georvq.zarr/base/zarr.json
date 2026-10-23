@@ -25,6 +25,13 @@
   "codecs": [
     {
       "name": "bytes"
+    },
+    {
+      "name": "zstd",
+      "configuration": {
+        "level": 19,
+        "checksum": false
+      }
     }
   ],
   "attributes": {

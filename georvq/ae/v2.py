@@ -81,10 +81,10 @@ RELEASE_URI = "hf://earth-compress/georvq-ae-v2"
 # only with trust_remote=True
 TRUSTED_RELEASES = ("hf://earth-compress/*",)
 ENV_BUNDLE = "GEORVQ_AE_BUNDLE"
-BASE_CHUNK_PX, MID_CHUNK_PX, FINE_CHUNK_PX = 8192, 8192, 2048
+BASE_CHUNK_PX, MID_CHUNK_PX, FINE_CHUNK_PX = 8192, 8192, 1024
 STRIP_PX = 1024
 QUALITY_STATS = ("mean", "p99")
-# quality code = round(Q_SCALE * (log10(e) + Q_OFFSET)), clipped to 0..255
+# quality code = ceil(Q_SCALE * (log10(e) + Q_OFFSET)), clipped to 0..255
 Q_SCALE, Q_OFFSET, Q_FLOOR = _sc.Q_SCALE, _sc.Q_OFFSET, _sc.Q_FLOOR
 ONNX_CHANNEL_NAME = _sc.ONNX_CHANNEL_NAME
 
@@ -197,8 +197,9 @@ AE_V2 = ReleaseSpec(
     quality_name="1 - cos",
     quality_error_text="1 - cos(decoded, source) per valid pixel, decoded "
                        "float field against the prepared source",
-    quality_encoding_text="code = round(32 * (log10(e) + 6)) clipped to "
-                          "0..255; 0 means e <= 1e-6",
+    quality_encoding_text="code = ceil(32 * (log10(e) + 6)) clipped to "
+                          "0..255, so that the value a code stands for is "
+                          "never below e; 0 means e <= 1e-6",
     check_model=_check_model, bundle_readme=_bundle_readme, licence=LICENCE,
     training_data=TRAINING_DATA)
 

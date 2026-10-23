@@ -175,6 +175,7 @@ def test_rung_bytes_account_for_the_store(tree):
         rec = tile_record(f)
         rd = RecordReader(f)
         col = rd.column_bytes()
+        index = rd.shard_index_bytes()
         stored = rd.stored_bytes()
         rungs = rd.header["rungs"]
         assert [r["rung"] for r in rec["rungs"]] == [
@@ -182,12 +183,18 @@ def test_rung_bytes_account_for_the_store(tree):
         for r, h in zip(rec["rungs"], rungs):
             assert r["bits_px"] == h["bits_px"]
             assert r["bytes"] == stored["mask"] + sum(
-                col[c] for c in rd.columns_for(h["tuple"], mask=False))
+                col[c] for c in rd.columns_for(h["tuple"], mask=False)) + sum(
+                index[t.name] for t, L in zip(rd.layout.tiers, h["tuple"])
+                if not t.in_base and L > 0)
         b = [r["bytes"] for r in rec["rungs"]]
         assert b == sorted(b) and b[0] > 0
         # the last rung is full depth
         full = stored["mask"] + sum(col[c] for c in rd.columns_for(None, mask=False))
-        assert b[-1] == full
+        assert b[-1] == full + sum(index.values())
+        # a level's stored bytes are its inner chunks: the tiers' arrays
+        # are their levels and their shard indexes
+        assert stored["base"] == col["base"] + os.path.getsize(
+            os.path.join(f, "base", "zarr.json"))
         assert rec["quality_bytes"] == sum(v for k, v in stored.items()
                                            if k.startswith("quality/"))
         # the arrays' stored bytes and the zarr.json of the root and of the
@@ -202,16 +209,22 @@ def test_rung_bytes_account_for_the_store(tree):
 
 
 def test_only_metadata_and_sizes_are_read(tree):
-    """Zeroing every chunk of a copy leaves the record unchanged."""
+    """Zeroing every chunk of a copy, all but the shard indexes, leaves
+    the record unchanged."""
     f = tree["files"][0]
     rec = tile_record(f)
+    rd = RecordReader(f)
+    keep = {t.name: rd.shard_index_bytes()[t.name] for t in rd.layout.tiers
+            if not t.in_base}
     g = tree["tmp"] / "blank.georvq.zarr"
     shutil.copytree(f, g)
     for p in _store_files(g):
         if os.path.basename(p) != "zarr.json":
             n = os.path.getsize(p)
-            with open(p, "wb") as fh:
-                fh.write(b"\0" * n)
+            top = os.path.relpath(p, g).split(os.sep)[0]
+            tail = keep.get(top, 0)
+            with open(p, "r+b") as fh:
+                fh.write(b"\0" * (n - tail))
     assert tile_record(g) == rec
 
 

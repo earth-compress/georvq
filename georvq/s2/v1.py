@@ -242,8 +242,9 @@ S2_V1 = ReleaseSpec(
                        "(rmse_10m: B02 B03 B04 B08; rmse_20m: B05 B06 B07 "
                        "B8A B11 B12; rmse_60m: B01 B09 B10), all of the "
                        "grid's bands pooled",
-    quality_encoding_text="code = round(32 * (log10(e) + 2)) clipped to "
-                          "0..255; 0 means e <= 0.01 DN",
+    quality_encoding_text="code = ceil(32 * (log10(e) + 2)) clipped to "
+                          "0..255, so that the value a code stands for is "
+                          "never below e; 0 means e <= 0.01 DN",
     quality_scale=Q_SCALE, quality_offset=Q_OFFSET, quality_floor=Q_FLOOR,
     quality_name="rmse_dn",
     check_model=_check_model, bundle_readme=_bundle_readme,

@@ -25,6 +25,13 @@
   "codecs": [
     {
       "name": "bytes"
+    },
+    {
+      "name": "zstd",
+      "configuration": {
+        "level": 19,
+        "checksum": false
+      }
     }
   ],
   "attributes": {
@@ -177,7 +184,7 @@
           "rmse_60m"
         ],
         "error": "RMSE in DN of the uint16 output against the source DN, over the window's valid pixels of one grid (rmse_10m: B02 B03 B04 B08; rmse_20m: B05 B06 B07 B8A B11 B12; rmse_60m: B01 B09 B10), all of the grid's bands pooled",
-        "encoding": "code = round(32 * (log10(e) + 2)) clipped to 0..255; 0 means e <= 0.01 DN",
+        "encoding": "code = ceil(32 * (log10(e) + 2)) clipped to 0..255, so that the value a code stands for is never below e; 0 means e <= 0.01 DN",
         "scale": 32.0,
         "offset": 2.0,
         "order": "per stat, one byte per rung in header rungs order",

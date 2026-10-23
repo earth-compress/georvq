@@ -444,7 +444,7 @@
           "p99"
         ],
         "error": "||decoded - source|| / ||source|| per valid pixel (relative L2 of the 128-band vector), decoded float field against the prepared source",
-        "encoding": "code = round(32 * (log10(e) + 6)) clipped to 0..255; 0 means e <= 1e-6",
+        "encoding": "code = ceil(32 * (log10(e) + 6)) clipped to 0..255, so that the value a code stands for is never below e; 0 means e <= 1e-6",
         "scale": 32.0,
         "offset": 6.0,
         "order": "per stat, one byte per rung in header rungs order",
@@ -1041,6 +1041,13 @@
         "codecs": [
           {
             "name": "bytes"
+          },
+          {
+            "name": "zstd",
+            "configuration": {
+              "level": 19,
+              "checksum": false
+            }
           }
         ],
         "attributes": {
@@ -1133,6 +1140,13 @@
               "codecs": [
                 {
                   "name": "bytes"
+                },
+                {
+                  "name": "zstd",
+                  "configuration": {
+                    "level": 19,
+                    "checksum": false
+                  }
                 }
               ],
               "index_codecs": [
@@ -1325,6 +1339,13 @@
               "codecs": [
                 {
                   "name": "bytes"
+                },
+                {
+                  "name": "zstd",
+                  "configuration": {
+                    "level": 19,
+                    "checksum": false
+                  }
                 }
               ],
               "index_codecs": [
@@ -1435,6 +1456,13 @@
         "codecs": [
           {
             "name": "bytes"
+          },
+          {
+            "name": "zstd",
+            "configuration": {
+              "level": 19,
+              "checksum": false
+            }
           }
         ],
         "attributes": {
@@ -1887,7 +1915,7 @@
                 "p99"
               ],
               "error": "||decoded - source|| / ||source|| per valid pixel (relative L2 of the 128-band vector), decoded float field against the prepared source",
-              "encoding": "code = round(32 * (log10(e) + 6)) clipped to 0..255; 0 means e <= 1e-6",
+              "encoding": "code = ceil(32 * (log10(e) + 6)) clipped to 0..255, so that the value a code stands for is never below e; 0 means e <= 1e-6",
               "scale": 32.0,
               "offset": 6.0,
               "order": "per stat, one byte per rung in header rungs order",

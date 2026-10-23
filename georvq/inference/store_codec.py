@@ -44,7 +44,7 @@ import numpy as np
 
 from georvq.inference.records import Layout, RecordWriter, span, tier_names
 
-# quality code = round(scale * (log10(e) + offset)), clipped to 0..255
+# quality code = ceil(scale * (log10(e) + offset)), clipped to 0..255
 Q_SCALE, Q_OFFSET, Q_FLOOR = 32.0, 6.0, 1e-6
 ONNX_CHANNEL_NAME = "mean_channel.npz"
 
@@ -186,8 +186,9 @@ class ReleaseSpec:
     quality_stats: tuple = ("mean", "p99")
     quality_error: Optional[Callable] = None
     quality_error_text: str = ""
-    quality_encoding_text: str = ("code = round(32 * (log10(e) + 6)) clipped "
-                                  "to 0..255; 0 means e <= 1e-6")
+    quality_encoding_text: str = ("code = ceil(32 * (log10(e) + 6)) clipped "
+                                  "to 0..255, so that the value a code stands "
+                                  "for is never below e; 0 means e <= 1e-6")
     quality_scale: float = Q_SCALE
     quality_offset: float = Q_OFFSET
     quality_floor: float = Q_FLOOR
@@ -284,12 +285,14 @@ def rung_bits(specs, depths, channel) -> int:
 
 
 def quality_code(e, scale=Q_SCALE, offset=Q_OFFSET, floor=Q_FLOOR) -> np.ndarray:
-    """Error e -> uint8 code round(scale * (log10(e) + offset)), clipped to
-    0..255; 0 means e <= floor. NaN (a window with no valid pixels) codes
-    as 0."""
+    """Error e -> uint8 code ceil(scale * (log10(e) + offset)), clipped to
+    0..255; 0 means e <= floor. Rounding up makes the error a code stands
+    for (`quality_value`) at least e, so a read bounded on it never
+    exceeds the bound in the measured decode (below code 255). NaN (a
+    window with no valid pixels) codes as 0."""
     e = np.asarray(e, dtype=np.float64)
     with np.errstate(divide="ignore", invalid="ignore"):
-        c = np.rint(scale * (np.log10(np.maximum(e, 1e-30)) + offset))
+        c = np.ceil(scale * (np.log10(np.maximum(e, 1e-30)) + offset))
     c = np.clip(np.nan_to_num(c, nan=0.0), 0, 255)
     c[~(e > floor)] = 0
     return c.astype(np.uint8)

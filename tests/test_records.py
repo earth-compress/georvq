@@ -219,9 +219,11 @@ def test_empty_chunks_are_not_stored(tmp_path, east_nodata):
                      "mid": [[i, j] for i in range(3) for j in (2, 3)],
                      "fine": [[i, j] for i in range(5) for j in range(3, 7)]}
     # the fine shard holds the 15 live chunks at 3 levels, and its index
-    rb = _layout().columns["fine_1"].record_bytes
     shard = os.path.getsize(tmp_path / "a.zarr" / "fine" / "c" / "0" / "0" / "0" / "0")
-    assert shard == 15 * 3 * 4 * rb + 16 * 5 * 7 * 3 + 4
+    inner = R._inner_chunk_sizes(g["fine"])
+    assert sorted(inner) == sorted((i, j, l, 0) for i in range(5)
+                                   for j in range(3) for l in range(3))
+    assert shard == sum(inner.values()) + 16 * 5 * 7 * 3 + 4
     with R.RecordReader(tmp_path / "a.zarr") as r:
         assert r.empty["fine"] == {(i, j) for i in range(5) for j in range(3, 7)}
         assert r.dead[:, 6:].all() and not r.dead[:, :6].any()
@@ -233,9 +235,10 @@ def test_empty_chunks_are_not_stored(tmp_path, east_nodata):
             gk = got[t][:, :, int(l) - 1] if l else got[k]
             assert (gk[live] == v[live]).all(), k
         assert not got["fine"][:, 6:].any() and not got["mid"][:, 8:].any()
-        # windows 6 and 7 are dead in the partial mid chunk column 1, and
-        # keep the records they were given
-        assert (got["mid"][:, 6:8, 0] == vals["mid_1"][:, 6:8]).all()
+        # windows 6 and 7 have no valid pixel in the partial mid chunk
+        # column 1: they are stored as zero records
+        assert not got["mid"][:, 6:8].any()
+        assert not g["mid"][:, 6:8].any() and not g["base"][:, 6:].any()
         assert (got["valid"][:H, :W] == east_nodata).all()
 
 
@@ -254,6 +257,55 @@ def test_reads_over_empty_chunks_read_nothing(tmp_path, east_nodata):
         needs = r.needs(2, 3, 5, 7, r.columns_for(FULL))
         assert {(n[0], n[1], n[2]) for n in needs if n[0].startswith("fine")} \
             == {(f"fine_{l}", 1, 2) for l in (1, 2, 3)}
+
+
+def test_blank_windows_cost_nothing_and_are_not_read(tmp_path):
+    """Valid west of column 100 of 128 x 256 px, 8 px windows: window
+    columns 0..12 hold a valid pixel and 13..31 none, so fine chunk
+    column 1 (windows 8..15) is partly blank and columns 2..3 are
+    empty."""
+    h, w = 128, 256
+    lay = R.Layout(8, {"base": 128, "mid": 128, "fine": 64},
+                   [("mean", 3, 12)],
+                   [("coarse", 1, None), ("mid", 1, [("mid", 16, 9)]),
+                    ("fine", 2, [("fine", 256, 11)])],
+                   [("mean", 2, 8)])
+    valid = np.zeros((h, w), bool)
+    valid[:, :100] = True
+    valid[5, 3] = False
+    vals = _write(tmp_path / "a.zarr", lay=lay, h=h, w=w, valid=valid, step=4)
+    g = zarr.open_group(str(tmp_path / "a.zarr"), mode="r")
+    live = np.zeros((16, 32), bool)
+    live[:, :13] = True
+    # blank windows are stored as zeros, and cost almost nothing: a fine
+    # inner chunk with 5 of its 8 window columns valid is 5/8 the size of
+    # a fully valid one, and fully blank ones are not stored
+    for name in ("base", "mid", "fine", "quality/" + DID):
+        assert not g[name][...][~live].any(), name
+    inner = R._inner_chunk_sizes(g["fine"])
+    assert {k[1] for k in inner} == {0, 1}
+    full, part = inner[(0, 0, 0, 0)], inner[(0, 1, 0, 0)]
+    rb = lay.columns["fine_1"].record_bytes
+    assert full >= 64 * rb and part <= 5 / 8 * full + 64
+    with R.RecordReader(tmp_path / "a.zarr") as r:
+        # every window with a valid pixel reads back unchanged
+        got = r.read(0, 16, 0, 32, quality=True)
+        for k, v in vals.items():
+            t, _, l = k.partition("_")
+            gk = got[t][:, :, int(l) - 1] if l else got[k]
+            assert (gk[live] == v[live]).all() and not gk[~live].any(), k
+        assert (got["valid"] == valid).all()
+    with R.RecordReader(tmp_path / "a.zarr") as r:
+        # an all-blank region of the partly blank chunk reads the mask
+        # and nothing else
+        assert [a for a, _ in r.plan(0, 8, 13, 16, quality=True)] == ["mask"]
+        before = r.stats["values"]
+        got = r.read(0, 8, 13, 16, quality=True)
+        assert r.stats["values"] - before == 1
+        assert not got["valid"].any() and not got["fine"].any()
+        # a region with one valid window column reads that chunk
+        r.read(0, 8, 12, 16)
+        assert ("fine_2", 0, 1) in {k[1:] for k in r.cache._d}
 
 
 def test_wholly_invalid_product(tmp_path):
@@ -277,9 +329,11 @@ def test_one_zarr_read_per_array(tmp_path, mask):
         plan = dict(r.plan(0, 10, 0, 13, quality=True))
         assert set(plan) == {"base", "mask", "mid", "fine", "quality"}
         assert plan["fine"] == (slice(0, 10), slice(0, 13), slice(0, 3))
-        # (5, 9) lies in mid chunk (1, 2) and fine chunk (2, 4)
-        plan = dict(r.plan(5, 6, 9, 10, depths=(3, 1, 2), mask=False))
-        assert plan == {"base": (slice(0, 10), slice(0, 13)),
+        # (5, 9) lies in mid chunk (1, 2) and fine chunk (2, 4); the mask
+        # of the base chunk holds an invalid pixel, so it is read first
+        plan = r.plan(5, 6, 9, 10, depths=(3, 1, 2), mask=False)
+        assert plan[0] == ("mask", (slice(0, H), slice(0, W)))
+        assert dict(plan[1:]) == {"base": (slice(0, 10), slice(0, 13)),
                         "mid": (slice(4, 8), slice(8, 12), slice(0, 1)),
                         "fine": (slice(4, 6), slice(8, 10), slice(0, 2))}
 

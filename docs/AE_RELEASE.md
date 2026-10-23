@@ -66,24 +66,25 @@ are kept as JSON in `georvq_aux`.
 
 Records are grouped into square chunks, with one array per kind of
 record. The chunk size differs by kind of record (`docs/GEORVQ_ZARR.md`):
-one `base` chunk covers the whole tile, and `fine` is chunked at 2048 px:
+one `base` chunk covers the whole tile, and `fine` is chunked at 1024 px:
 
 | kind | chunk | per window |
 |---|---|---|
 | `base` (`mask` chunked alike) | 8192 px (the whole tile) | mean (55 B) and the 8 coarse levels (11 B), 66 B |
 | `mid` | 8192 px (the whole tile) | per level, 16 cells x 13 bits, 26 B |
-| `fine` | 2048 px (4 x 4 chunks) | per level, 256 cells x 14 bits, 448 B |
+| `fine` | 1024 px (8 x 8 chunks) | per level, 256 cells x 14 bits, 448 B |
 | `quality/<decoder_id>` | 8192 px | mean and p99 of `1 - cos` per rung, 46 B |
 
 Each level of a chunk of a tier is its own inner chunk of the tier's
 shard, so reading a tier to depth `L` reads `L` inner chunks per chunk,
-which zarr-python fetches together. Code arrays are stored uncompressed
-with fixed bit widths. The validity mask is stored once for the tile,
-compressed, and has no stored chunk for a fully valid tile, and windows
-with no valid pixel are not coded. On the tile measured below (2021,
-zone 44N, 11% nodata) the store is 64.0 MB, of which `base` takes
-1.08 MB, the mask 0.01 MB, `mid` 3.41 MB, `fine` 58.7 MB, `quality`
-0.76 MB and the group metadata 0.05 MB.
+which zarr-python fetches together. Code arrays are stored with fixed
+bit widths and compressed with zstd. The validity mask is stored once
+for the tile, compressed, and has no stored chunk for a fully valid
+tile, and windows with no valid pixel are not coded and are stored as
+zero records, which take almost no space. On the tile measured below
+(2021, zone 44N, 11% nodata) the store is 56.8 MB, of which `base`
+takes 0.96 MB, the mask 0.01 MB, `mid` 3.06 MB, `fine` 52.5 MB,
+`quality` 0.24 MB and the group metadata 0.04 MB.
 
 Functionally, most users will not need to worry about anything beyond this, as our reader handles the filesystem and requests for you. For those interested to learn more about how those stores are arranged, refer to `docs/GEORVQ_ZARR.md`. 
 
@@ -135,15 +136,18 @@ source pixels. `quality` takes a rung (`"8-8-2"`, `"8,8,2"` or a
 tuple), a bound on a quality statistic (`"mean<=X"` or `"p99<=X"`), or
 `None` for full depth. A bound is resolved per window to the cheapest
 rung whose encode-time statistic meets it, and to full depth where none
-does, at the cost of one extra read of the quality array. You should
-expect a bound to hold to within a few percent rather than exactly,
-because the statistics are stored log-quantised. The statistics are
+does, at the cost of one extra read of the quality array. A bound holds
+in the decode the statistics were measured with, because the statistics
+are stored log-quantised and rounded up. The statistics are
 `1 - cos` of the decoded float field against the prepared source, over
 the window's valid pixels, measured with the decode precision the header
 records. They are stored with 32 codes per decade, a step of about 7.5%,
-and the bound is applied to the stored value, so a bound is met to within
-half a step. For example, `p99<=0.02` admits windows whose measured p99
-is up to about 0.0198.
+rounded up to the next step, and the bound is applied to the stored
+value, so a window read to a bound that one of its rungs meets is never
+above it, while a window whose statistic is less than one step below
+the bound may be read one rung deeper than it needs. For example,
+`p99<=0.02` admits no window whose measured p99 is above 0.02, and may
+pass over windows between about 0.0186 and 0.02.
 
 The same reads are available from the command line, together with
 commands to inspect a store, fetch the release it names and encode new

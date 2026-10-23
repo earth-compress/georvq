@@ -456,7 +456,7 @@ def test_ae_instance_layout_matches_the_spec():
     assert ch.cost_bits() == 440
     lay = v2.layout(specs, 64, ch, n_rungs=23)
     assert {k: (g.chunk_px, g.chunk_windows) for k, g in lay.groups.items()} == {
-        "base": (8192, 128), "mid": (8192, 128), "fine": (2048, 32),
+        "base": (8192, 128), "mid": (8192, 128), "fine": (1024, 16),
         "quality": (8192, 128)}
     assert lay.column_order == (["base", "mask"] + [f"mid_{i}" for i in range(1, 9)]
                                 + [f"fine_{i}" for i in range(1, 9)] + ["quality"])
@@ -466,7 +466,7 @@ def test_ae_instance_layout_matches_the_spec():
     n = {k: g.chunk_windows ** 2 for k, g in lay.groups.items()}
     assert [rb[c] * n[lay.kind_of[c]] for c in ("base", "mid_1", "fine_1",
                                                  "quality")] == [
-        1081344, 425984, 458752, 753664]
+        1081344, 425984, 114688, 753664]
     assert [t.name for t in lay.tiers] == ["coarse", "mid", "fine"]
     assert lay.tiers[0].in_base
     assert v2.rung_bits(specs, (8, 8, 2), ch) == 440 + 88 + 8 * 16 * 13 + 2 * 256 * 14
@@ -483,10 +483,15 @@ def test_output_name_and_info(setup, capsys):
 
 
 def test_quality_code_round_trip():
-    e = np.array([0.0, 1e-7, 1e-6, 1e-3, 0.02, 1.0, np.nan])
+    e = np.array([0.0, 1e-7, 1e-6, 1e-3, 0.02, 1.0, 0.0123, np.nan])
     c = v2.quality_code(e)
     assert list(c[:3]) == [0, 0, 0] and c[-1] == 0
-    assert np.allclose(v2.quality_value(c[3:6]), e[3:6], rtol=0.04)
+    # codes round up: the value of a code is the smallest step at or
+    # above the error, so a bound on it is never exceeded
+    v = v2.quality_value(c[3:7])
+    assert (v >= e[3:7] * (1 - 1e-12)).all()
+    assert (v2.quality_value(c[3:7] - 1) < e[3:7]).all()
+    assert np.allclose(v, e[3:7], rtol=0.075)
 
 
 @pytest.fixture(scope="module")

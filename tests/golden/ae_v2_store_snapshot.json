@@ -436,7 +436,7 @@
      "quality": {
       "column": "quality",
       "decode_precision": "fp32",
-      "encoding": "code = round(32 * (log10(e) + 6)) clipped to 0..255; 0 means e <= 1e-6",
+      "encoding": "code = ceil(32 * (log10(e) + 6)) clipped to 0..255, so that the value a code stands for is never below e; 0 means e <= 1e-6",
       "error": "1 - cos(decoded, source) per valid pixel, decoded float field against the prepared source",
       "name": "1 - cos",
       "offset": 6.0,
@@ -631,6 +631,13 @@
    "codecs": [
     {
      "name": "bytes"
+    },
+    {
+     "configuration": {
+      "checksum": false,
+      "level": 19
+     },
+     "name": "zstd"
     }
    ],
    "data_type": "uint8",
@@ -721,6 +728,13 @@
       "codecs": [
        {
         "name": "bytes"
+       },
+       {
+        "configuration": {
+         "checksum": false,
+         "level": 19
+        },
+        "name": "zstd"
        }
       ],
       "index_codecs": [
@@ -913,6 +927,13 @@
       "codecs": [
        {
         "name": "bytes"
+       },
+       {
+        "configuration": {
+         "checksum": false,
+         "level": 19
+        },
+        "name": "zstd"
        }
       ],
       "index_codecs": [
@@ -977,7 +998,7 @@
      ],
      "quality": {
       "decode_precision": "fp32",
-      "encoding": "code = round(32 * (log10(e) + 6)) clipped to 0..255; 0 means e <= 1e-6",
+      "encoding": "code = ceil(32 * (log10(e) + 6)) clipped to 0..255, so that the value a code stands for is never below e; 0 means e <= 1e-6",
       "error": "1 - cos(decoded, source) per valid pixel, decoded float field against the prepared source",
       "name": "1 - cos",
       "offset": 6.0,
@@ -1121,6 +1142,13 @@
    "codecs": [
     {
      "name": "bytes"
+    },
+    {
+     "configuration": {
+      "checksum": false,
+      "level": 19
+     },
+     "name": "zstd"
     }
    ],
    "data_type": "uint8",

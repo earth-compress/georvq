@@ -350,7 +350,7 @@
      "quality": {
       "column": "quality",
       "decode_precision": "fp32",
-      "encoding": "code = round(32 * (log10(e) + 6)) clipped to 0..255; 0 means e <= 1e-6",
+      "encoding": "code = ceil(32 * (log10(e) + 6)) clipped to 0..255, so that the value a code stands for is never below e; 0 means e <= 1e-6",
       "error": "||decoded - source|| / ||source|| per valid pixel (relative L2 of the 128-band vector), decoded float field against the prepared source",
       "name": "rel_l2",
       "offset": 6.0,
@@ -529,6 +529,13 @@
    "codecs": [
     {
      "name": "bytes"
+    },
+    {
+     "configuration": {
+      "checksum": false,
+      "level": 19
+     },
+     "name": "zstd"
     }
    ],
    "data_type": "uint8",
@@ -619,6 +626,13 @@
       "codecs": [
        {
         "name": "bytes"
+       },
+       {
+        "configuration": {
+         "checksum": false,
+         "level": 19
+        },
+        "name": "zstd"
        }
       ],
       "index_codecs": [
@@ -811,6 +825,13 @@
       "codecs": [
        {
         "name": "bytes"
+       },
+       {
+        "configuration": {
+         "checksum": false,
+         "level": 19
+        },
+        "name": "zstd"
        }
       ],
       "index_codecs": [
@@ -875,7 +896,7 @@
      ],
      "quality": {
       "decode_precision": "fp32",
-      "encoding": "code = round(32 * (log10(e) + 6)) clipped to 0..255; 0 means e <= 1e-6",
+      "encoding": "code = ceil(32 * (log10(e) + 6)) clipped to 0..255, so that the value a code stands for is never below e; 0 means e <= 1e-6",
       "error": "||decoded - source|| / ||source|| per valid pixel (relative L2 of the 128-band vector), decoded float field against the prepared source",
       "name": "rel_l2",
       "offset": 6.0,
@@ -1010,6 +1031,13 @@
    "codecs": [
     {
      "name": "bytes"
+    },
+    {
+     "configuration": {
+      "checksum": false,
+      "level": 19
+     },
+     "name": "zstd"
     }
    ],
    "data_type": "uint8",
