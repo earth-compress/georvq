@@ -56,8 +56,7 @@ md("""
 
 `DATA_ROOT` holds the coded stores (`{product}.georvq.zarr`) and their
 index. It can be a local directory or an HTTP URL, and points at the
-published sample on Hugging Face, or, while `STAGED` is set, at a local
-copy of the sample before it is uploaded. `STORAGE_OPTIONS` go to
+published sample on Hugging Face. `STORAGE_OPTIONS` go to
 fsspec when the stores are read by URL, for example a token for a
 private repository. `SOURCE_ROOT` holds the source SAFE products, used
 here only for comparison.
@@ -67,7 +66,7 @@ product's entry in the Copernicus Data Space Ecosystem (CDSE)
 catalogue, which anyone can read and which gives the product's size
 and checksums. Downloading the product itself from CDSE needs a free
 CDSE account, so the notebook does not download it. To run the
-comparisons with `STAGED = False`, download the product the cell below
+comparisons, download the product the cell below
 prints, unzip it into `SOURCE_ROOT` and rerun. The section on read
 times reads the same product's band images from Google Cloud's public
 copy of the Sentinel-2 archive, which needs no account.
@@ -76,9 +75,7 @@ The codec weights are not in the stores. On the first pixel read,
 `georvq.open` finds the bundle the store's header names: in
 `$GEORVQ_S2_BUNDLE`, in the cache at `~/.cache/georvq/bundles/<bitstream_id>/`,
 or by downloading the decoder-only bundle from the Hugging Face
-release (`decoder/` in `earth-compress/georvq-s2-v1`, 108 MB). While
-`STAGED` is set the release is not on Hugging Face yet, so the
-configuration cell points `$GEORVQ_S2_BUNDLE` at the staged bundle.
+release (`decoder/` in `earth-compress/georvq-s2-v1`, 108 MB).
 On a machine with a GPU the torch backend uses it; everything below
 also runs on CPU (a 1080 px window takes about 2 s to decode on 32 CPU
 threads, a whole product about 4 minutes).
@@ -89,21 +86,11 @@ import os
 from rasterio.windows import Window
 
 # ---- configuration: the only cell that names locations ----
-# STAGED = True reads the sample staged on cirrus before upload; set it to
-# False to read the published sample and model from Hugging Face.
-STAGED = True
-if STAGED:
-    DATA_ROOT = "/data/georvq-releases/s2-v1/sample"
-    # local SAFE products, in the CDSE layout <year>/<month>/<day>/<name>.SAFE
-    SOURCE_ROOT = "/mnt/raid/data/s2get/Sentinel-2/MSI/L1C"
-    # the model repository is not uploaded yet: decode with the staged bundle
-    os.environ["GEORVQ_S2_BUNDLE"] = "/data/georvq-releases/s2-v1/bundle"
-    DEBLOCKER = "/data/georvq-releases/s2-v1/hf/model/deblocker/deblocker.pt"
-else:
-    DATA_ROOT = "https://huggingface.co/datasets/earth-compress/georvq-s2-v1-sample/resolve/main"
-    # the SAFE product downloaded from CDSE (free account) and unzipped here
-    SOURCE_ROOT = os.path.expanduser("~/sentinel-2")
-    DEBLOCKER = None                  # downloaded from earth-compress/georvq-s2-v1 when used
+DATA_ROOT = "https://huggingface.co/datasets/earth-compress/georvq-s2-v1-sample/resolve/main"
+# the SAFE product downloaded from CDSE (free account) and unzipped here,
+# flat or in the CDSE layout <year>/<month>/<day>/<name>.SAFE
+SOURCE_ROOT = os.path.expanduser("~/sentinel-2")
+DEBLOCKER = None                  # downloaded from earth-compress/georvq-s2-v1 when used
 STORAGE_OPTIONS = None    # e.g. {"headers": {"Authorization": "Bearer <token>"}}
 # Google Cloud's public copy of the Sentinel-2 archive, read in the timing section
 SOURCE_REMOTE = "https://storage.googleapis.com/gcp-public-data-sentinel-2/tiles"
