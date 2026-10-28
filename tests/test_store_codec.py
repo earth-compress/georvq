@@ -296,6 +296,24 @@ def test_blank_window_reads_nothing(built):
         assert (got == OUT_NODATA).all()
 
 
+def test_strip_without_valid_pixels_encodes(built, tmp_path):
+    """A whole encode strip (rows 0..32) without a valid pixel, as at a
+    swath edge: its windows are stored blank and decode to nodata, and
+    the rest of the product reads as when the strip held data."""
+    a = built["a"].copy()
+    a[:, :32] = np.nan
+    out = tmp_path / "edge.georvq.zarr"
+    encode_product(Product(a), out, built["codec"], release="test-v1")
+    with open_dataset(out, SPEC, codec=built["codec"]) as ds, \
+            open_dataset(built["store"], SPEC, codec=built["codec"]) as full:
+        g = ds.reader.group
+        assert not g["base"][:2].any() and not g["tier1"][:2].any()
+        assert ds.reader.plan(0, 2, 0, 3, quality=True) == []
+        assert (ds.read(window=Window(0, 0, WD, 32)) == OUT_NODATA).all()
+        rest = Window(0, 32, WD, H - 32)
+        assert np.array_equal(ds.read(window=rest), full.read(window=rest))
+
+
 def test_assets_round_trip_and_are_checked(built, tmp_path):
     import shutil
     with open_dataset(built["store"], SPEC) as ds:
