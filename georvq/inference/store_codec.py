@@ -359,7 +359,8 @@ class BlockRecords:
     def add_to(self, writer, window_row=0, window_col=0):
         """Add the region's windows to a RecordWriter, its top-left
         window at (window_row, window_col) of the product's grid."""
-        writer.add_windows(window_row, window_col, self.dense(), self.valid)
+        writer.add_windows(window_row, window_col, self.dense(), self.valid,
+                           grid=self.grid)
 
 
 def _as_arrays(raw) -> tuple:

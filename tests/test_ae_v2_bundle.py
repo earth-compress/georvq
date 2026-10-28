@@ -55,8 +55,12 @@ def _find_bundle():
         bid = str(g["bitstream_id"])
     for d in (os.environ.get(ENV_BUNDLE), bundle_path(bid), LOCAL_BUNDLE):
         meta = os.path.join(d or "", "bundle.json")
-        if d and os.path.exists(meta) and \
-                json.load(open(meta)).get("bitstream_id") == bid:
+        if not (d and os.path.exists(meta)):
+            continue
+        m = json.load(open(meta))
+        # the tests encode, so a decoder-only bundle (as a reader's cache
+        # holds) does not serve
+        if m.get("bitstream_id") == bid and m.get("variant") != "decoder":
             return d
     return None
 

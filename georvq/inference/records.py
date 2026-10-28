@@ -503,13 +503,15 @@ class RecordWriter:
         return None
 
     def add_windows(self, window_row: int, window_col: int, records: dict,
-                    valid=None) -> None:
+                    valid=None, grid=None) -> None:
         """records: {column: (h, w, n_values) ints} for the windows
         [window_row:+h, window_col:+w]; a tier name instead of a column
         takes (h, w, levels, n_values). Every array gives the same
         (h, w), inside the window grid. Columns left out are zero.
         valid: pixel validity of the region clipped to the product,
-        None for fully valid."""
+        None for fully valid. grid: the region's (h, w), needed only
+        when `records` is empty, which adds the region with every
+        record zero (a region without a valid pixel)."""
         wy, wx = int(window_row), int(window_col)
         cols = {}
         for key, arr in records.items():
@@ -525,9 +527,9 @@ class RecordWriter:
                 cols[key] = arr
             else:
                 raise ValueError(f"no column or tier named {key!r}")
-        if not cols:
-            raise ValueError("no records given")
-        shapes = {a.shape[:2] for a in cols.values()}
+        if not cols and grid is None:
+            raise ValueError("no records given, and no grid for the region")
+        shapes = {a.shape[:2] for a in cols.values()} or {tuple(grid)}
         if len(shapes) != 1:
             raise ValueError(f"records cover different window regions {shapes}")
         h, w = shapes.pop()
