@@ -35,10 +35,10 @@
 # are comparable with this run's.
 #
 # Rate: the statistics are charged at bits_per_band 10, 260 bits per
-# window (0.201 b/px), close to the 256-bit RVQ+PCA channel S2 v1 ships
-# them with. As for AE, bits_per_band is accounting only; the model is
-# trained on the exact statistics, and a channel is fitted afterwards
-# (the S2 v1 one, scratch/s2-stats, reads only the store). The rungs then
+# window (0.201 b/px), against 299 for the log-offset channel S2 v1
+# ships them with (georvq.s2.v1.stats_channel). As for AE, bits_per_band
+# is accounting only; the model is trained on the exact statistics, and
+# the channel is chosen afterwards. The rungs then
 # cost 0.281 (8-0) to 3.170 (8-8) b/px.
 #
 # Recipe, with the differences from beta_arch_w36:

@@ -2,7 +2,7 @@
   "shape": [
     4,
     4,
-    45
+    51
   ],
   "data_type": "uint8",
   "chunk_grid": {
@@ -11,7 +11,7 @@
       "chunk_shape": [
         2,
         2,
-        45
+        51
       ]
     }
   },

@@ -77,10 +77,10 @@
     "spatial:registration": "pixel",
     "georvq_quality": {
       "decoder_id": "e2309f95ff0d5cb4",
-      "bitstream_id": "9bfbc0c72d526ad7",
+      "bitstream_id": "9273c4698f99587b",
       "release": {
         "name": "golden",
-        "bitstream_id": "9bfbc0c72d526ad7",
+        "bitstream_id": "9273c4698f99587b",
         "decoder_id": "e2309f95ff0d5cb4",
         "uri": "hf://earth-compress/georvq-s2-v1",
         "revision": null
@@ -91,72 +91,72 @@
             8,
             0
           ],
-          "bits_window": 360,
-          "bits_px": 0.2777777777777778
+          "bits_window": 403,
+          "bits_px": 0.3109567901234568
         },
         {
           "tuple": [
             8,
             1
           ],
-          "bits_window": 828,
-          "bits_px": 0.6388888888888888
+          "bits_window": 871,
+          "bits_px": 0.6720679012345679
         },
         {
           "tuple": [
             8,
             2
           ],
-          "bits_window": 1296,
-          "bits_px": 1.0
+          "bits_window": 1339,
+          "bits_px": 1.033179012345679
         },
         {
           "tuple": [
             8,
             3
           ],
-          "bits_window": 1764,
-          "bits_px": 1.3611111111111112
+          "bits_window": 1807,
+          "bits_px": 1.3942901234567902
         },
         {
           "tuple": [
             8,
             4
           ],
-          "bits_window": 2232,
-          "bits_px": 1.7222222222222223
+          "bits_window": 2275,
+          "bits_px": 1.7554012345679013
         },
         {
           "tuple": [
             8,
             5
           ],
-          "bits_window": 2700,
-          "bits_px": 2.0833333333333335
+          "bits_window": 2743,
+          "bits_px": 2.1165123456790123
         },
         {
           "tuple": [
             8,
             6
           ],
-          "bits_window": 3168,
-          "bits_px": 2.4444444444444446
+          "bits_window": 3211,
+          "bits_px": 2.4776234567901234
         },
         {
           "tuple": [
             8,
             7
           ],
-          "bits_window": 3636,
-          "bits_px": 2.8055555555555554
+          "bits_window": 3679,
+          "bits_px": 2.8387345679012346
         },
         {
           "tuple": [
             8,
             8
           ],
-          "bits_window": 4104,
-          "bits_px": 3.1666666666666665
+          "bits_window": 4147,
+          "bits_px": 3.1998456790123457
         }
       ],
       "fields": [

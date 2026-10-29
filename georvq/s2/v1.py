@@ -7,10 +7,11 @@ a fine tier of one vector per 60 m pixel, both 8 levels of 8192 codes.
 The model reads the 13 bands on their native grids, each window
 normalised per band by the mean and standard deviation of its valid
 pixels, and decodes the three grids separately. Those 26 statistics
-travel in each window's base record through an `RVQPCAMeanChannel` with
-a per-band transform (means in DN over a per-band error budget, standard
-deviations in log space), so the decoded pixels are the decoder's
-standardised field times the decoded deviation plus the decoded mean.
+travel in each window's base record through a `LogOffsetChannel`
+(`stats_channel`, 299 bits: each mean in 13 bits of ln(DN + 1000) over 0
+to 20475 DN, each standard deviation in 10 bits of ln(DN) over 1 to 10000
+DN), so the decoded pixels are the decoder's standardised field times
+the decoded deviation plus the decoded mean.
 
 The store layout is that of every release (georvq.inference.records,
 docs/GEORVQ_ZARR.md), with 2196 px chunks for `base`, the fine tier and
@@ -73,6 +74,21 @@ MAX_VALUE = 10000.0       # georvq.sources.s2.MAX_VALUE: DN per unit of x
 FACTORS = tuple(f for _, f, _ in GRIDS)
 QUALITY_STATS = tuple(f"rmse_{g}" for g, _, _ in GRIDS)
 Q_SCALE, Q_OFFSET, Q_FLOOR = 32.0, 2.0, 0.01
+# The statistics channel, in DN. Each band's mean is coded on a log scale
+# offset by MEAN_OFFSET_DN, so that its step is about 0.37 DN near 0 and
+# grows in proportion above the offset (0.75 DN at 1000, 3.7 DN at 9000);
+# each deviation's step is 0.9% (10 bits of ln over four decades). At 12
+# and 8 bits the decoded 60 m bands lost up to 18% and 2.7% RMSE against
+# the exact statistics (scratch/stats-channel on the main checkout). The
+# channel was accepted on the rule that the decode RMSE with it is at most
+# max(0.5%, 0.1 DN) above the exact-statistics decode, per product, grid
+# and rung, on six test products.
+# The ranges are absolute rather than fitted to the training corpus,
+# whose windows are mostly clear: the RVQ+PCA channel fitted to it
+# saturated over bright cloud. STD_MIN_DN is the normaliser's floor
+# (georvq.sources.s2.S2Normalizer clamps the deviation at 1e-4 in x).
+MEAN_OFFSET_DN, MEAN_MAX_DN, MEAN_BITS = 1000.0, 20475.0, 13
+STD_MIN_DN, STD_MAX_DN, STD_BITS = 1.0, 10000.0, 10
 META_ASSET = "safe_meta"
 TRAINING_DATA = ("Major TOM Core-S2L1C (CC-BY-SA 4.0), "
                  "https://huggingface.co/datasets/Major-TOM/Core-S2L1C; "
@@ -250,6 +266,22 @@ S2_V1 = ReleaseSpec(
     check_model=_check_model, bundle_readme=_bundle_readme,
     training_data=TRAINING_DATA,
     raw_factors=FACTORS, output_grids=GRIDS, channel_values=2 * len(BANDS))
+
+
+def stats_channel():
+    """The S2 v1 statistics channel: for the 13 means (in the model's band
+    order, x = DN / 10000), 13 bits of ln(DN + 1000) over 0 to 20475 DN;
+    for the 13 standard deviations, 10 bits of ln(DN) over 1 to 10000 DN.
+    299 bits per window."""
+    from georvq.inference.mean_codec import LogOffsetChannel
+    nb = len(BANDS)
+    one = np.ones(nb)
+    return LogOffsetChannel(
+        scale=np.full(2 * nb, MAX_VALUE),
+        offset=np.r_[one * MEAN_OFFSET_DN, one * 0.0],
+        lo=np.r_[one * 0.0, one * STD_MIN_DN],
+        hi=np.r_[one * MEAN_MAX_DN, one * STD_MAX_DN],
+        bits=np.r_[np.full(nb, MEAN_BITS), np.full(nb, STD_BITS)])
 
 
 def stats_vector(stats) -> np.ndarray:
@@ -545,11 +577,13 @@ def reconstruct_safe(store, out_dir, quality=None, rows=STRIP_PX, log=None,
 # bundles
 # --------------------------------------------------------------------------
 
-def build_bundle(ckpt, channel_npz, out_dir, notes="", onnx=False) -> dict:
-    """Bundle a training checkpoint and its statistics channel; `onnx`
-    adds the decoder's ONNX export (georvq.s2.onnx) under onnx/."""
+def build_bundle(ckpt, out_dir, channel=None, notes="", onnx=False) -> dict:
+    """Bundle a training checkpoint with a statistics channel (a channel
+    or its .npz; default `stats_channel()`); `onnx` adds the decoder's
+    ONNX export (georvq.s2.onnx) under onnx/."""
     from georvq.inference.bundle import build_bundle as _build
-    return _build(ckpt, channel_npz, out_dir, S2_V1, notes=notes, onnx=onnx,
+    return _build(ckpt, stats_channel() if channel is None else channel,
+                  out_dir, S2_V1, notes=notes, onnx=onnx,
                   extra={"licence_stores": STORES_LICENCE})
 
 
@@ -598,10 +632,12 @@ def main(argv=None):
     r.add_argument("--backend", default=None, choices=["torch", "onnx"])
     r.add_argument("--device", default=None)
     r.add_argument("--bundle", default=None)
-    b = sub.add_parser("bundle", help="checkpoint + stats channel -> bundle")
+    b = sub.add_parser("bundle", help="checkpoint -> bundle")
     b.add_argument("ckpt")
-    b.add_argument("channel_npz")
     b.add_argument("out_dir")
+    b.add_argument("--channel", default=None,
+                   help="a statistics channel .npz (default the release's, "
+                        "stats_channel())")
     b.add_argument("--notes", default="")
     b.add_argument("--onnx", action="store_true")
     f = sub.add_parser("fetch", help="find or download the bundle of a store "
@@ -626,7 +662,7 @@ def main(argv=None):
         print(m, file=sys.stderr)
 
     if args.cmd == "bundle":
-        meta = build_bundle(args.ckpt, args.channel_npz, args.out_dir,
+        meta = build_bundle(args.ckpt, args.out_dir, channel=args.channel,
                             notes=args.notes, onnx=args.onnx)
         print(json.dumps({k: meta[k] for k in ("bitstream_id", "decoder_id")}))
         return 0

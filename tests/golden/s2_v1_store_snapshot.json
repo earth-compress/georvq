@@ -1,10 +1,10 @@
 {
  "chunks": {
   "base": {
-   "0.0.0": "3a0048bb8c3a1904befa26c5d93c27ba342f69de59edd4c09e94b21145f9572e",
-   "0.1.0": "913c6e2c32d99e4baff62cf421a494730cb043924f2c6bf46406573b59c641bd",
-   "1.0.0": "a53ce966c3a1dbec9e5797024431ac75ac8198a5071315281bd5dcc0aba1360b",
-   "1.1.0": "0be8d300a686942eb84603444dcf1f33ac473ab0ecfb082029ac2ef774f2e10d"
+   "0.0.0": "7d53383cb58f0e8986166599f464482aebbf84501467e69509afd835b5958ccb",
+   "0.1.0": "d3df611a0ed2e328b050d285287637c60643ba96ec09e4aaefaad7f2cd114b77",
+   "1.0.0": "1243325017ec6731024a269f0832f64da0543fafa2038095c4a75244a8c17225",
+   "1.1.0": "9f708085c3ef06573fa9ee74be84d743c33df866e53401e4afc80934d5d68d94"
   },
   "mask": {
    "0.0": "6bb73e5e372887d7c843353c021f8e2459a4b0a2b37e053173191b425be78014",
@@ -78,8 +78,8 @@
       "decoder_id": "fedcba9876543210",
       "format": "georvq-s2/v1",
       "mean_channel": {
-       "bits": 209,
-       "kind": "rvq-pca"
+       "bits": 299,
+       "kind": "log-offset"
       },
       "min_depths": [
        3,
@@ -104,14 +104,14 @@
        {
         "fields": [
          {
-          "bits": 1,
-          "count": 1,
-          "name": "mean_rvq"
+          "bits": 13,
+          "count": 13,
+          "name": "log_0"
          },
          {
-          "bits": 8,
-          "count": 26,
-          "name": "mean_pca_0"
+          "bits": 10,
+          "count": 13,
+          "name": "log_13"
          },
          {
           "bits": 5,
@@ -120,7 +120,7 @@
          }
         ],
         "name": "base",
-        "record_bytes": 28
+        "record_bytes": 40
        },
        {
         "fields": [
@@ -441,32 +441,32 @@
      },
      "rungs": [
       {
-       "bits_px": 0.1728395061728395,
-       "bits_window": 224,
+       "bits_px": 0.24228395061728394,
+       "bits_window": 314,
        "tuple": [
         3,
         0
        ]
       },
       {
-       "bits_px": 0.3117283950617284,
-       "bits_window": 404,
+       "bits_px": 0.38117283950617287,
+       "bits_window": 494,
        "tuple": [
         3,
         1
        ]
       },
       {
-       "bits_px": 0.4506172839506173,
-       "bits_window": 584,
+       "bits_px": 0.5200617283950617,
+       "bits_window": 674,
        "tuple": [
         3,
         2
        ]
       },
       {
-       "bits_px": 0.5895061728395061,
-       "bits_window": 764,
+       "bits_px": 0.6589506172839507,
+       "bits_window": 854,
        "tuple": [
         3,
         3
@@ -610,7 +610,7 @@
      "chunk_shape": [
       3,
       3,
-      28
+      40
      ]
     },
     "name": "regular"
@@ -644,7 +644,7 @@
    "shape": [
     6,
     6,
-    28
+    40
    ],
    "storage_transformers": [],
    "zarr_format": 3
@@ -787,32 +787,32 @@
      },
      "rungs": [
       {
-       "bits_px": 0.1728395061728395,
-       "bits_window": 224,
+       "bits_px": 0.24228395061728394,
+       "bits_window": 314,
        "tuple": [
         3,
         0
        ]
       },
       {
-       "bits_px": 0.3117283950617284,
-       "bits_window": 404,
+       "bits_px": 0.38117283950617287,
+       "bits_window": 494,
        "tuple": [
         3,
         1
        ]
       },
       {
-       "bits_px": 0.4506172839506173,
-       "bits_window": 584,
+       "bits_px": 0.5200617283950617,
+       "bits_window": 674,
        "tuple": [
         3,
         2
        ]
       },
       {
-       "bits_px": 0.5895061728395061,
-       "bits_window": 764,
+       "bits_px": 0.6589506172839507,
+       "bits_window": 854,
        "tuple": [
         3,
         3

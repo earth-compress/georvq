@@ -231,9 +231,10 @@ def write_bundle(out_dir, model, cfg, channel, spec, source=None, notes="",
 
 def build_bundle(ckpt, mean_npz, out_dir, spec, notes="", onnx=False,
                  extra=None) -> dict:
-    """Bundle a training checkpoint and its mean channel tables, the full
-    bundle in `out_dir` and the decoder-only one in `out_dir/decoder`;
-    `onnx` and `extra` as for write_bundle."""
+    """Bundle a training checkpoint and its mean channel (its tables'
+    .npz, or a channel), the full bundle in `out_dir` and the
+    decoder-only one in `out_dir/decoder`; `onnx` and `extra` as for
+    write_bundle."""
     from georvq.factory import from_checkpoint
     from georvq.inference.mean_codec import load_channel
     from georvq.repro import load_checkpoint
@@ -242,7 +243,8 @@ def build_bundle(ckpt, mean_npz, out_dir, spec, notes="", onnx=False,
         raise NotImplementedError("checkpoints with fitted prep constants "
                                   "are not bundled")
     model = from_checkpoint(ckpt, "cpu")
-    channel = load_channel(os.fspath(mean_npz))
+    channel = (mean_npz if hasattr(mean_npz, "id_state")
+               else load_channel(os.fspath(mean_npz)))
     source = {"checkpoint": os.path.basename(os.fspath(ckpt)),
               "step": ck.get("step"), "config_hash": ck.get("config_hash"),
               "git": ck.get("git"), "metrics": ck.get("metrics")}

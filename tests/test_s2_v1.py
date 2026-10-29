@@ -15,7 +15,6 @@ pytest.importorskip("zarr")
 import georvq  # noqa: E402
 from georvq.config import Config  # noqa: E402
 from georvq.factory import build_model  # noqa: E402
-from georvq.inference.mean_codec import RVQPCAMeanChannel  # noqa: E402
 from georvq.s2 import safe as S  # noqa: E402
 from georvq.s2 import v1  # noqa: E402
 from tests.s2_safe_fixture import make_safe, synthetic_bands  # noqa: E402
@@ -24,20 +23,6 @@ N = 144                                   # 10 m pixels of the test crop
 WIN = 36
 CHUNK_PX = {"base": 72, "tier1": 72}
 T10 = (10.0, 0.0, 399960.0, 0.0, -10.0, 5800020.0)
-
-
-def tiny_channel():
-    """An RVQ-PCA channel for the 26 S2 statistics with the release's kind
-    of transform: means over 5 DN, log standard deviations times 10."""
-    nb = len(S.BANDS)
-    scale = np.concatenate([np.full(nb, 1e4 / 5), np.full(nb, 10.0)])
-    lg = np.r_[np.zeros(nb, bool), np.ones(nb, bool)]
-    mu0 = np.r_[np.full(nb, 400.0), np.full(nb, -45.0)]
-    s = np.r_[np.full(nb, 300.0), np.full(nb, 8.0)]
-    books = np.zeros((1, 2, 2 * nb), np.float32)
-    return RVQPCAMeanChannel(books, mu0, np.eye(2 * nb), s,
-                             np.full(2 * nb, 8), np.full(2 * nb, 3.0),
-                             pre_scale=scale, pre_log=lg)
 
 
 def tiny_cfg():
@@ -58,7 +43,7 @@ def tiny_codec():
     model = build_model(cfg, "cpu")
     for rvq in model.rvqs:
         rvq.project_books()
-    return v1.S2V1Codec(model, tiny_channel())
+    return v1.S2V1Codec(model, v1.stats_channel())
 
 
 @pytest.fixture(scope="module")

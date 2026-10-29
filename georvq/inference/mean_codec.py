@@ -22,12 +22,18 @@ The constants travel in the release bundle beside the codebooks. They
 are part of what the decoder needs, so a change to them is a change to
 the bitstream.
 
-Both coders here share one interface, which the store codec
+`LogOffsetChannel` codes each value instead over a fixed absolute
+range, on a logarithmic scale with an offset, so that it has no corpus
+constants and cannot saturate on a value that is in range but unlike the
+corpus. Its parameters and decode tables travel in the bundle in the
+same way.
+
+The coders here share one interface, which the store codec
 (`georvq.inference.store_codec`) relies on: `kind`, `bands`,
 `record_fields()` (the fields of its part of a window's base record, as
 (name, count, bits)), `field_widths()`, `encode`, `decode`,
 `round_trip`, `cost_bits`, `id_state()` (the arrays `bitstream_id`
-hashes), `save` and `load`. `load_channel(path)` reads either kind from
+hashes), `save` and `load`. `load_channel(path)` reads any kind from
 its `.npz`.
 """
 from __future__ import annotations
@@ -379,6 +385,161 @@ class RVQPCAMeanChannel:
                 *self._transform_arrays().values()]
 
 
+class LogOffsetChannel:
+    """Fixed-range quantizer of each value's logarithm, with an offset.
+
+    Value d of a window, x in model units, is coded from v = scale[d] * x
+    (for example DN), clipped to [lo[d], hi[d]], as
+
+        q = rint((ln(v + offset[d]) - ln(lo[d] + offset[d])) / step[d]),
+        step[d] = (ln(hi[d] + offset[d]) - ln(lo[d] + offset[d]))
+                  / (2 ** bits[d] - 1),
+
+    so the reconstruction error is about step[d] * (v + offset[d]) / 2:
+    nearly uniform below the offset and relative above it. With offset 0
+    it codes ln(v) uniformly. The ranges are absolute rather than fitted
+    to a corpus, so no value inside them clips, however far it lies from
+    the data the codec was trained on, and every window costs exactly
+    `cost_bits()`.
+
+    scale, offset, lo, hi: (D,) float64; bits: (D,) in 1..16, with
+    lo + offset > 0 and hi > lo.
+
+    Decoding is a table lookup. The tables (`levels`, the reconstruction
+    of every code of every value in model units, float32, padded to the
+    widest code) are computed once in float64 and saved with the
+    parameters, and a decoder reads them rather than recomputing them,
+    so every backend decodes the same floats; `load` checks that the
+    saved tables match the parameters. Encoding rounds in float64, so a
+    value within rounding of a decision boundary may take either
+    neighbouring code on different hardware, which changes the code
+    sent, not how a code decodes.
+    """
+
+    kind = "log-offset"
+
+    def __init__(self, scale, offset, lo, hi, bits, levels=None):
+        self.scale = np.asarray(scale, dtype=np.float64)
+        self.offset = np.asarray(offset, dtype=np.float64)
+        self.lo = np.asarray(lo, dtype=np.float64)
+        self.hi = np.asarray(hi, dtype=np.float64)
+        self.bits = np.asarray(bits, dtype=np.int64)
+        D = self.bits.shape[0] if self.bits.ndim == 1 else -1
+        for name, a in (("scale", self.scale), ("offset", self.offset),
+                        ("lo", self.lo), ("hi", self.hi), ("bits", self.bits)):
+            if a.ndim != 1 or a.shape[0] != D:
+                raise ValueError(f"{name} must have shape (D,) like bits")
+        if (self.bits < 1).any() or (self.bits > 16).any():
+            raise ValueError("bits must be in 1..16")
+        if not (self.scale > 0).all():
+            raise ValueError("scale must be positive")
+        if not (self.lo + self.offset > 0).all():
+            raise ValueError("lo + offset must be positive")
+        if not (self.hi > self.lo).all():
+            raise ValueError("hi must exceed lo")
+        self.step = ((np.log(self.hi + self.offset)
+                      - np.log(self.lo + self.offset))
+                     / ((1 << self.bits) - 1))
+        want = self._tables()
+        if levels is None:
+            self.levels = want
+        else:
+            self.levels = np.asarray(levels, dtype=np.float32)
+            if self.levels.shape != want.shape:
+                raise ValueError(f"levels must have shape {want.shape}")
+            # saved tables are used as they are; they must describe the
+            # parameters saved with them to within float32 rounding
+            if not np.allclose(self.levels, want, rtol=1e-6, atol=0):
+                raise ValueError("levels do not match the parameters")
+
+    def _tables(self) -> np.ndarray:
+        """(D, 2 ** max(bits)) float32 reconstruction of every code, in
+        model units; entries past a value's last code repeat it."""
+        n = 1 << int(self.bits.max())
+        q = np.minimum(np.arange(n)[None], ((1 << self.bits) - 1)[:, None])
+        a = np.log(self.lo + self.offset)[:, None]
+        v = np.exp(a + q * self.step[:, None]) - self.offset[:, None]
+        # the ends of the range exactly, so that lo (a window's floor,
+        # often) and hi decode to themselves
+        v[q == 0] = np.broadcast_to(self.lo[:, None], v.shape)[q == 0]
+        top = q == ((1 << self.bits) - 1)[:, None]
+        v[top] = np.broadcast_to(self.hi[:, None], v.shape)[top]
+        return (v / self.scale[:, None]).astype(np.float32)
+
+    @property
+    def bands(self) -> int:
+        return int(self.bits.shape[0])
+
+    def field_widths(self) -> np.ndarray:
+        """Bit widths of a packed record: one code per value."""
+        return self.bits.copy()
+
+    def cost_bits(self) -> int:
+        return int(self.bits.sum())
+
+    def record_fields(self) -> list:
+        """The channel's fields in a base record: runs of values sharing a
+        bit width, named by their first value."""
+        out = []
+        bits = [int(b) for b in self.bits]
+        k = 0
+        while k < len(bits):
+            j = k
+            while j < len(bits) and bits[j] == bits[k]:
+                j += 1
+            out.append((f"log_{k}", j - k, bits[k]))
+            k = j
+        return out
+
+    def id_state(self) -> list:
+        """What a decoder must agree on, for `bitstream_id(extra=...)`."""
+        return [self.scale, self.offset, self.lo, self.hi,
+                self.bits.astype(np.int32), self.levels]
+
+    # ---- code ----
+
+    def clipped(self, x) -> np.ndarray:
+        """(N, D) bool: values outside [lo, hi] by more than float32
+        rounding, which `encode` saturates."""
+        v = np.asarray(x, dtype=np.float64) * self.scale
+        tol = 1e-6 * np.maximum(np.abs(self.lo), np.abs(self.hi))
+        return (v < self.lo - tol) | (v > self.hi + tol)
+
+    def encode(self, x) -> np.ndarray:
+        """(N, D) float -> (N, D) int64 codes, value d in [0, 2 ** bits[d])."""
+        v = np.clip(np.asarray(x, dtype=np.float64) * self.scale, self.lo,
+                    self.hi)
+        u = (np.log(v + self.offset) - np.log(self.lo + self.offset)) \
+            / self.step
+        return np.clip(np.rint(u), 0, (1 << self.bits) - 1).astype(np.int64)
+
+    def decode(self, codes) -> np.ndarray:
+        """Inverse of `encode` -> (N, D) float32, by table lookup."""
+        q = np.asarray(codes, dtype=np.int64)
+        if q.ndim != 2 or q.shape[1] != self.bands:
+            raise ValueError(f"codes must have shape (N, {self.bands})")
+        if (q < 0).any() or (q >= (1 << self.bits)).any():
+            raise ValueError("code out of range")
+        return self.levels[np.arange(self.bands)[None], q]
+
+    def round_trip(self, x) -> np.ndarray:
+        """The values the decoder will see."""
+        return self.decode(self.encode(x))
+
+    # ---- persistence ----
+
+    def save(self, path):
+        np.savez(path, scale=self.scale, offset=self.offset, lo=self.lo,
+                 hi=self.hi, bits=self.bits.astype(np.int32),
+                 levels=self.levels)
+
+    @classmethod
+    def load(cls, path) -> "LogOffsetChannel":
+        z = np.load(path, allow_pickle=False)
+        return cls(z["scale"], z["offset"], z["lo"], z["hi"], z["bits"],
+                   z["levels"])
+
+
 def coded_space(x, pre_scale=None, pre_log=None) -> np.ndarray:
     """(N, D) values -> the space an `RVQPCAMeanChannel` with this
     transform fits and codes in: log on the `pre_log` dimensions, then
@@ -397,7 +558,8 @@ def coded_space(x, pre_scale=None, pre_log=None) -> np.ndarray:
 
 
 CHANNELS = {MeanChannel.kind: MeanChannel,
-            RVQPCAMeanChannel.kind: RVQPCAMeanChannel}
+            RVQPCAMeanChannel.kind: RVQPCAMeanChannel,
+            LogOffsetChannel.kind: LogOffsetChannel}
 
 
 def channel_kind(path) -> str:
@@ -407,6 +569,8 @@ def channel_kind(path) -> str:
         names = set(z.files)
     if {"books", "V"} <= names:
         return RVQPCAMeanChannel.kind
+    if {"levels", "offset", "lo", "hi"} <= names:
+        return LogOffsetChannel.kind
     if {"mu0", "scale"} <= names:
         return MeanChannel.kind
     raise ValueError(f"{path}: not a saved mean channel (arrays "
