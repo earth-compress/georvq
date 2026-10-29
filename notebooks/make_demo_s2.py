@@ -36,7 +36,7 @@ Sentinel-2 Level-1C products come from ESA as SAFE directories, one per
 at 10 m (10980 x 10980 px), six at 20 m and three at 60 m, about 400 to
 750 MB of JPEG 2000 band images per product. The s2-v1 release codes
 each product as one Zarr store of about 53 MB that can be read at 9
-rates, from 0.28 to 3.17 bits per 10 m pixel, by window, over HTTP.
+rates, from 0.31 to 3.20 bits per 10 m pixel, by window, over HTTP.
 The reader returns uint16 DN on each band's own grid, with the
 product's CRS, transform and nodata, and the store keeps the rest of
 the SAFE product, so that a SAFE directory can be written back from it
@@ -518,7 +518,7 @@ The curve puts the 9 rungs on one axis, one colour per grid. The solid
 lines are measured on this window here. The dashed lines cover the
 whole product and come from the store's quality array (the RMSE
 columns of the table above), so they need no decoding. Every rung
-carries the 360 bits per window of the coarse tier and the statistics,
+carries the 403 bits per window of the coarse tier and the statistics,
 and each fine level adds 468 bits, which gives the even spacing in
 rate.
 """)

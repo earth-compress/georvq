@@ -3,7 +3,7 @@
     "georvq": {
       "codec": {
         "format": "georvq-s2/v1",
-        "bitstream_id": "9bfbc0c72d526ad7",
+        "bitstream_id": "9273c4698f99587b",
         "decoder_id": "e2309f95ff0d5cb4",
         "tiers": [
           "1:128:8192:8",
@@ -16,12 +16,12 @@
           0
         ],
         "mean_channel": {
-          "kind": "rvq-pca",
-          "bits": 256
+          "kind": "log-offset",
+          "bits": 299
         },
         "release": {
           "name": "golden",
-          "bitstream_id": "9bfbc0c72d526ad7",
+          "bitstream_id": "9273c4698f99587b",
           "decoder_id": "e2309f95ff0d5cb4",
           "uri": "hf://earth-compress/georvq-s2-v1",
           "revision": null
@@ -90,72 +90,72 @@
             8,
             0
           ],
-          "bits_window": 360,
-          "bits_px": 0.2777777777777778
+          "bits_window": 403,
+          "bits_px": 0.3109567901234568
         },
         {
           "tuple": [
             8,
             1
           ],
-          "bits_window": 828,
-          "bits_px": 0.6388888888888888
+          "bits_window": 871,
+          "bits_px": 0.6720679012345679
         },
         {
           "tuple": [
             8,
             2
           ],
-          "bits_window": 1296,
-          "bits_px": 1.0
+          "bits_window": 1339,
+          "bits_px": 1.033179012345679
         },
         {
           "tuple": [
             8,
             3
           ],
-          "bits_window": 1764,
-          "bits_px": 1.3611111111111112
+          "bits_window": 1807,
+          "bits_px": 1.3942901234567902
         },
         {
           "tuple": [
             8,
             4
           ],
-          "bits_window": 2232,
-          "bits_px": 1.7222222222222223
+          "bits_window": 2275,
+          "bits_px": 1.7554012345679013
         },
         {
           "tuple": [
             8,
             5
           ],
-          "bits_window": 2700,
-          "bits_px": 2.0833333333333335
+          "bits_window": 2743,
+          "bits_px": 2.1165123456790123
         },
         {
           "tuple": [
             8,
             6
           ],
-          "bits_window": 3168,
-          "bits_px": 2.4444444444444446
+          "bits_window": 3211,
+          "bits_px": 2.4776234567901234
         },
         {
           "tuple": [
             8,
             7
           ],
-          "bits_window": 3636,
-          "bits_px": 2.8055555555555554
+          "bits_window": 3679,
+          "bits_px": 2.8387345679012346
         },
         {
           "tuple": [
             8,
             8
           ],
-          "bits_window": 4104,
-          "bits_px": 3.1666666666666665
+          "bits_window": 4147,
+          "bits_px": 3.1998456790123457
         }
       ],
       "quality": {
@@ -353,102 +353,17 @@
         "columns": [
           {
             "name": "base",
-            "record_bytes": 45,
+            "record_bytes": 51,
             "fields": [
               {
-                "name": "mean_rvq",
-                "count": 2,
-                "bits": 12
+                "name": "log_0",
+                "count": 13,
+                "bits": 13
               },
               {
-                "name": "mean_pca_0",
-                "count": 1,
+                "name": "log_13",
+                "count": 13,
                 "bits": 10
-              },
-              {
-                "name": "mean_pca_1",
-                "count": 1,
-                "bits": 11
-              },
-              {
-                "name": "mean_pca_2",
-                "count": 2,
-                "bits": 10
-              },
-              {
-                "name": "mean_pca_4",
-                "count": 1,
-                "bits": 11
-              },
-              {
-                "name": "mean_pca_5",
-                "count": 3,
-                "bits": 10
-              },
-              {
-                "name": "mean_pca_8",
-                "count": 1,
-                "bits": 9
-              },
-              {
-                "name": "mean_pca_9",
-                "count": 1,
-                "bits": 10
-              },
-              {
-                "name": "mean_pca_10",
-                "count": 1,
-                "bits": 9
-              },
-              {
-                "name": "mean_pca_11",
-                "count": 1,
-                "bits": 10
-              },
-              {
-                "name": "mean_pca_12",
-                "count": 1,
-                "bits": 9
-              },
-              {
-                "name": "mean_pca_13",
-                "count": 2,
-                "bits": 10
-              },
-              {
-                "name": "mean_pca_15",
-                "count": 2,
-                "bits": 8
-              },
-              {
-                "name": "mean_pca_17",
-                "count": 1,
-                "bits": 7
-              },
-              {
-                "name": "mean_pca_18",
-                "count": 2,
-                "bits": 9
-              },
-              {
-                "name": "mean_pca_20",
-                "count": 2,
-                "bits": 7
-              },
-              {
-                "name": "mean_pca_22",
-                "count": 1,
-                "bits": 6
-              },
-              {
-                "name": "mean_pca_23",
-                "count": 2,
-                "bits": 8
-              },
-              {
-                "name": "mean_pca_25",
-                "count": 1,
-                "bits": 6
               },
               {
                 "name": "tier0",
@@ -1169,7 +1084,7 @@
         "shape": [
           4,
           4,
-          45
+          51
         ],
         "data_type": "uint8",
         "chunk_grid": {
@@ -1178,7 +1093,7 @@
             "chunk_shape": [
               2,
               2,
-              45
+              51
             ]
           }
         },
@@ -1584,10 +1499,10 @@
           "spatial:registration": "pixel",
           "georvq_quality": {
             "decoder_id": "e2309f95ff0d5cb4",
-            "bitstream_id": "9bfbc0c72d526ad7",
+            "bitstream_id": "9273c4698f99587b",
             "release": {
               "name": "golden",
-              "bitstream_id": "9bfbc0c72d526ad7",
+              "bitstream_id": "9273c4698f99587b",
               "decoder_id": "e2309f95ff0d5cb4",
               "uri": "hf://earth-compress/georvq-s2-v1",
               "revision": null
@@ -1598,72 +1513,72 @@
                   8,
                   0
                 ],
-                "bits_window": 360,
-                "bits_px": 0.2777777777777778
+                "bits_window": 403,
+                "bits_px": 0.3109567901234568
               },
               {
                 "tuple": [
                   8,
                   1
                 ],
-                "bits_window": 828,
-                "bits_px": 0.6388888888888888
+                "bits_window": 871,
+                "bits_px": 0.6720679012345679
               },
               {
                 "tuple": [
                   8,
                   2
                 ],
-                "bits_window": 1296,
-                "bits_px": 1.0
+                "bits_window": 1339,
+                "bits_px": 1.033179012345679
               },
               {
                 "tuple": [
                   8,
                   3
                 ],
-                "bits_window": 1764,
-                "bits_px": 1.3611111111111112
+                "bits_window": 1807,
+                "bits_px": 1.3942901234567902
               },
               {
                 "tuple": [
                   8,
                   4
                 ],
-                "bits_window": 2232,
-                "bits_px": 1.7222222222222223
+                "bits_window": 2275,
+                "bits_px": 1.7554012345679013
               },
               {
                 "tuple": [
                   8,
                   5
                 ],
-                "bits_window": 2700,
-                "bits_px": 2.0833333333333335
+                "bits_window": 2743,
+                "bits_px": 2.1165123456790123
               },
               {
                 "tuple": [
                   8,
                   6
                 ],
-                "bits_window": 3168,
-                "bits_px": 2.4444444444444446
+                "bits_window": 3211,
+                "bits_px": 2.4776234567901234
               },
               {
                 "tuple": [
                   8,
                   7
                 ],
-                "bits_window": 3636,
-                "bits_px": 2.8055555555555554
+                "bits_window": 3679,
+                "bits_px": 2.8387345679012346
               },
               {
                 "tuple": [
                   8,
                   8
                 ],
-                "bits_window": 4104,
-                "bits_px": 3.1666666666666665
+                "bits_window": 4147,
+                "bits_px": 3.1998456790123457
               }
             ],
             "fields": [

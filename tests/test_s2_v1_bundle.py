@@ -51,12 +51,11 @@ HERE = os.path.dirname(__file__)
 INPUTS = os.path.join(HERE, "golden/s2_v1_tile_inputs.npz")
 GOLDEN = os.path.join(HERE, "golden/s2_v1_golden.npz")
 TILE = os.path.join(HERE, "golden/s2_v1_tile.georvq.zarr")
-LOCAL_BUNDLE = "/data/georvq-releases/s2-v1/bundle"
-CKPT = os.environ.get(
-    "GEORVQ_S2_V1_CKPT", "/home/ali/projects/georvq-release-format/"
-    "checkpoints/s2_v1/s2_v1.pt")
-CHANNEL = os.environ.get("GEORVQ_S2_V1_CHANNEL",
-                         "/data/georvq-releases/s2-v1/stats_channel.npz")
+LOCAL_BUNDLE = "/data/georvq-releases/s2-v1-channel/bundle"
+CKPT = os.environ.get("GEORVQ_S2_V1_CKPT",
+                      "/data/georvq-releases/s2-v1/s2_v1.pt")
+# the release's channel (v1.stats_channel) unless a .npz is given
+CHANNEL = os.environ.get("GEORVQ_S2_V1_CHANNEL")
 GOLDEN_RUNGS = ((8, 0), (8, 1), (8, 4), (8, 8))
 THREADS = 8
 N = 144
@@ -181,12 +180,11 @@ def released():
 
 def test_released_bundle_decodes_like_its_checkpoint(released):
     codec, arrays, _, blk = released
-    if not (os.path.exists(CKPT) and os.path.exists(CHANNEL)):
-        pytest.skip("source checkpoint not present (set GEORVQ_S2_V1_CKPT "
-                    "and GEORVQ_S2_V1_CHANNEL)")
+    if not os.path.exists(CKPT):
+        pytest.skip("source checkpoint not present (set GEORVQ_S2_V1_CKPT)")
     from georvq.inference.store_codec import quiet_build
     with quiet_build():
-        ref = v1.S2V1Codec.load(CKPT, CHANNEL, "cpu")
+        ref = v1.S2V1Codec.load(CKPT, CHANNEL or v1.stats_channel(), "cpu")
     assert (ref.bitstream_id, ref.decoder_id) == (codec.bitstream_id,
                                                   codec.decoder_id)
     torch.set_grad_enabled(False)

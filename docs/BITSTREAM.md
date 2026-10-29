@@ -50,8 +50,9 @@ truncating levels at decode time (the matryoshka property). It contains:
 - optional refinements, as described above.
 
 Sources with a per-tile stats normaliser, such as S2 and DEM, charge
-their stats in the rate figures (`side_bits`), but no release ships such
-a source and `Packet` does not carry the stats. The byte format S2's
+their stats in the rate figures (`side_bits`), but `Packet` does not
+carry the stats. The S2 v1 release sends them in each window's base
+record (`georvq.s2.v1.stats_channel`). The byte format S2's
 stats are sized for is that of `georvq.inference.stats_codec.StatsPacker`,
 `[n:1B][n component bytes]`, with two raw escapes, `n=255` for float16
 and `n=254` for float32.
