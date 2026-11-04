@@ -1,4 +1,4 @@
-"""HTTP helpers for the demo notebooks (demo_ae.ipynb, demo_tessera.ipynb).
+"""HTTP helpers for the demo notebooks (demo_ae.ipynb, demo_s2.ipynb).
 
 `serve` starts a threaded HTTP server on 127.0.0.1 that answers single
 Range requests (and HEAD) in one of two modes:

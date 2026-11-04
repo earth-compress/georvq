@@ -61,9 +61,6 @@ TESSERA embeddings (University of Cambridge)
         codec.
     tests/golden/tessera_v2_tile.georvq.zarr
         that crop encoded with the georvq Tessera v2 codec (lossy).
-    notebooks/demo_tessera.ipynb (cell outputs)
-        figures and values computed from TESSERA tiles and their georvq
-        encodings.
     lab/experiments/bitplane-structure-probes-2026-09-04/rungs_tessera.npy
         rates and errors measured on TESSERA embeddings.
   Changes: the crop was cut from the distributed int8 embeddings and
