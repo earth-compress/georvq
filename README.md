@@ -175,16 +175,16 @@ xhat = codec.decode(codec.encode(x), depths=[20, 13, 0])
 Each shipped source also has its own release layer on top of this
 generic code, which sets the container, the side channels and the
 executables for that source. Two are shipped. They share the store
-format and the kind of mean channel, and differ in the mean channel's
-rate, in the output they return and in the quality statistic, and each
+format, and differ in the mean channel's kind and rate, in the output
+they return and in the quality statistic, and each
 of those choices was measured on its source.
 
 The AlphaEarth release (`georvq/ae/v2.py`, `docs/AE_RELEASE.md`) codes
-each source tile with a model that transmits each window's mean (440
+each source tile with a model that transmits each window's mean (672
 bits per window), and writes one Zarr store per tile
 (`docs/GEORVQ_ZARR.md`). The reader stands in for the source tile's
 rasterio dataset and fetches only the chunks that a window and rate
-need. The rate is picked from 23 rungs (0.11-7.5 b/px), or from a bound
+need. The rate is picked from 23 rungs (0.17-7.6 b/px), or from a bound
 on the error measured at encode time:
 
 ```python

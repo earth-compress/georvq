@@ -20,7 +20,7 @@ from georvq.ae.v2_bundle import build_bundle, load_bundle  # noqa: E402
 from georvq.ae.v2_resolve import BundleError  # noqa: E402
 from georvq.config import load_config  # noqa: E402
 from georvq.factory import build_model  # noqa: E402
-from georvq.inference.mean_codec import RVQPCAMeanChannel  # noqa: E402
+from georvq.inference.mean_codec import RotatedChannel  # noqa: E402
 from georvq.inference.records import RecordReader  # noqa: E402
 from georvq.repro import save_checkpoint  # noqa: E402
 
@@ -65,10 +65,7 @@ def tiny(tmp_path_factory):
     save_checkpoint(ckpt, model, cfg, 7)
     rng = np.random.default_rng(0)
     means = rng.normal(size=(256, 64)).astype(np.float32) * 0.05
-    books = means[:8][None].copy()
-    a = ((means[:, None] - books[0][None]) ** 2).sum(-1).argmin(1)
-    channel = RVQPCAMeanChannel.fit_residual(books, means - books[0][a],
-                                             total_bits=96)
+    channel = RotatedChannel.fit_pca(means, means, total_bits=128)
     npz = tmp / "mean.npz"
     channel.save(npz)
     bundle = tmp / "bundle"

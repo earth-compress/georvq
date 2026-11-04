@@ -33,7 +33,7 @@ from georvq.ae.v2_bundle import (build_bundle, book_from_int, book_to_int,
                                  load_bundle)
 from georvq.config import load_config
 from georvq.factory import build_model
-from georvq.inference.mean_codec import RVQPCAMeanChannel
+from georvq.inference.mean_codec import RotatedChannel
 from georvq.model.vq_quant import QuantizedBookVQ
 from georvq.repro import save_checkpoint
 
@@ -42,7 +42,7 @@ INPUTS = os.path.join(HERE, "golden/divfull_val_tokens.npz")
 GOLDEN = os.path.join(HERE, "golden/ae_v2_golden.npz")
 # maintainer's copy, tried after GEORVQ_AE_V2_BUNDLE, GEORVQ_AE_BUNDLE
 # and the bundle cache entry for the golden bitstream id
-LOCAL_BUNDLE = "/home/ali/projects/georvq/scratch/ae-v2/bundle_v2"
+LOCAL_BUNDLE = "/data/georvq-releases/ae-v2-channel/bundle"
 
 
 def _find_bundle():
@@ -71,7 +71,7 @@ CKPT = os.environ.get(
     "/home/ali/projects/georvq/scratch/ae-v2/ownk_sc4_step80000.pt")
 MEAN_NPZ = os.environ.get(
     "GEORVQ_AE_V2_MEAN",
-    "/home/ali/projects/georvq/scratch/ae-v2/meanrvq/mean_channel_v2.npz")
+    "/data/georvq-releases/ae-v2-channel/mean_channel.npz")
 TILE = os.path.join(HERE, "golden/ae_v2_tile.georvq.zarr")
 GOLDEN_RUNGS = ((2, 0, 0), (8, 8, 2), (8, 8, 8))
 TILE_GRID = (2, 4)           # the eight windows as a 2 x 4 window tile
@@ -136,10 +136,7 @@ def tiny(tmp_path_factory):
 
     rng = np.random.default_rng(0)
     means = rng.normal(size=(256, 64)).astype(np.float32) * 0.05
-    books = means[:8][None].copy()
-    a = ((means[:, None] - books[0][None]) ** 2).sum(-1).argmin(1)
-    channel = RVQPCAMeanChannel.fit_residual(books, means - books[0][a],
-                                             total_bits=96)
+    channel = RotatedChannel.fit_pca(means, means, total_bits=128)
     npz = tmp / "mean.npz"
     channel.save(npz)
     out = tmp / "bundle"

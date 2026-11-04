@@ -33,7 +33,7 @@ md("""
 The AlphaEarth Foundations annual embeddings come as 8192 x 8192 pixel
 tiles of 64 int8 bands at 10 m, about 1 to 3 GB each. The ae-v2 release
 codes each tile as one Zarr store of about 64 MB that can be read at 23
-rates, from 0.11 to 7.5 bits per pixel, by window, over HTTP. The
+rates, from 0.17 to 7.6 bits per pixel, by window, over HTTP. The
 reader returns int8 arrays in the source's layout, so code written for
 the source tiles can read these stores instead.
 
@@ -59,7 +59,7 @@ The codec weights are not in the stores. On the first pixel read,
 `georvq.open` finds the bundle the store's header names: in
 `$GEORVQ_AE_BUNDLE`, in the cache at `~/.cache/georvq/bundles/<bitstream_id>/`,
 or by downloading the decoder-only bundle from the Hugging Face
-release (`decoder/` in `earth-compress/georvq-ae-v2`, 135 MB). On a machine with a GPU
+release (`decoder/` in `earth-compress/georvq-ae-v2`, 134 MB). On a machine with a GPU
 the torch backend uses it; everything below also runs on CPU, more
 slowly (a 1024 px window takes about 10 s to decode on 16 CPU threads).
 """)

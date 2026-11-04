@@ -14,7 +14,7 @@ from georvq.ae.v2 import requant_ae_np  # noqa: E402
 from georvq.config import TierSpec, load_config  # noqa: E402
 from georvq.factory import build_model  # noqa: E402
 from georvq.inference.api import Codec  # noqa: E402
-from georvq.inference.mean_codec import RVQPCAMeanChannel  # noqa: E402
+from georvq.inference.mean_codec import RotatedChannel, load_channel  # noqa: E402
 from georvq.inference.records import RecordReader  # noqa: E402
 from georvq.model.codec import sample_path_depths  # noqa: E402
 
@@ -60,22 +60,6 @@ def _field(h, w, seed=0):
     return (f / np.linalg.norm(f, axis=0, keepdims=True)).astype(np.float32)
 
 
-def _books(x, L=2, K=16, seed=0):
-    rng = np.random.default_rng(seed)
-    r, books = x.copy(), []
-    for _ in range(L):
-        C = r[rng.choice(len(r), K, replace=False)].copy()
-        for _ in range(8):
-            a = ((r[:, None] - C[None]) ** 2).sum(-1).argmin(1)
-            for k in range(K):
-                if (a == k).any():
-                    C[k] = r[a == k].mean(0)
-        a = ((r[:, None] - C[None]) ** 2).sum(-1).argmin(1)
-        r = r - C[a]
-        books.append(C)
-    return np.stack(books), r
-
-
 @pytest.fixture(scope="module")
 def setup(tmp_path_factory):
     torch.manual_seed(0)
@@ -113,8 +97,7 @@ def setup(tmp_path_factory):
         .transpose(1, 3, 0, 2, 4).reshape(-1, 64, WIN, WIN).copy()), "cpu")
     means = model.patch_stats(xs, vs).numpy()
     means = means[vs.reshape(len(vs), -1).any(1).numpy()]
-    books, resid = _books(means)
-    channel = RVQPCAMeanChannel.fit_residual(books, resid, total_bits=136)
+    channel = RotatedChannel.fit_pca(means, means, total_bits=192)
     codec = v2.AEV2Codec(model, channel)
 
     # bottom-up source, as the AEF tiles are stored
@@ -450,10 +433,11 @@ def test_ae_instance_layout_matches_the_spec():
     specs = [TierSpec(grid=1, dim=256, codes=2048, depth=8),
              TierSpec(grid=4, dim=192, codes=8192, depth=8),
              TierSpec(grid=16, dim=64, codes=16384, depth=8)]
-    bits = np.array([7] * 32 + [6] * 32)
-    ch = RVQPCAMeanChannel(np.zeros((2, 4096, 64)), np.zeros(64), np.eye(64),
-                           np.ones(64), bits, np.ones(64))
-    assert ch.cost_bits() == 440
+    # the release's widths: 6 x 12, 26 x 11, 26 x 10, 6 x 9 bits
+    bits = np.array([12] * 6 + [11] * 26 + [10] * 26 + [9] * 6)
+    ch = RotatedChannel(np.zeros(64), np.eye(64), -np.ones(64), np.ones(64),
+                        bits)
+    assert ch.cost_bits() == 672
     lay = v2.layout(specs, 64, ch, n_rungs=23)
     assert {k: (g.chunk_px, g.chunk_windows) for k, g in lay.groups.items()} == {
         "base": (8192, 128), "mid": (8192, 128), "fine": (1024, 16),
@@ -461,15 +445,15 @@ def test_ae_instance_layout_matches_the_spec():
     assert lay.column_order == (["base", "mask"] + [f"mid_{i}" for i in range(1, 9)]
                                 + [f"fine_{i}" for i in range(1, 9)] + ["quality"])
     rb = {n: c.record_bytes for n, c in lay.columns.items()}
-    assert (rb["base"], rb["mid_1"], rb["fine_8"], rb["quality"]) == (66, 26, 448, 46)
+    assert (rb["base"], rb["mid_1"], rb["fine_8"], rb["quality"]) == (95, 26, 448, 46)
     # bytes of one chunk's value per column
     n = {k: g.chunk_windows ** 2 for k, g in lay.groups.items()}
     assert [rb[c] * n[lay.kind_of[c]] for c in ("base", "mid_1", "fine_1",
                                                  "quality")] == [
-        1081344, 425984, 114688, 753664]
+        1556480, 425984, 114688, 753664]
     assert [t.name for t in lay.tiers] == ["coarse", "mid", "fine"]
     assert lay.tiers[0].in_base
-    assert v2.rung_bits(specs, (8, 8, 2), ch) == 440 + 88 + 8 * 16 * 13 + 2 * 256 * 14
+    assert v2.rung_bits(specs, (8, 8, 2), ch) == 672 + 88 + 8 * 16 * 13 + 2 * 256 * 14
 
 
 def test_output_name_and_info(setup, capsys):
@@ -547,8 +531,8 @@ def test_onnx_export_refuses_a_swapped_channel(setup, onnx_export, tmp_path):
     out, _ = onnx_export
     bad = tmp_path / "bad"
     shutil.copytree(out, bad)
-    ch = RVQPCAMeanChannel.load(str(bad / v2.ONNX_CHANNEL_NAME))
-    ch.mu0 = ch.mu0 + 0.01
+    ch = load_channel(str(bad / v2.ONNX_CHANNEL_NAME))
+    ch.mu0 = ch.mu0 + np.float32(0.01)
     ch.save(str(bad / v2.ONNX_CHANNEL_NAME))
     with pytest.raises(ValueError, match="mean channel"):
         v2.AEV2OnnxCodec(str(bad))

@@ -1,10 +1,10 @@
 {
  "chunks": {
   "base": {
-   "0.0.0": "b299d97ad02db323c2e28c2fbc142068e2633a0701df72f79f7751db0e6fd0dd",
-   "0.1.0": "4701e064228134e41b5c8c8ad93be5e0f8b28b26b9e01795f37fe967c7e8cc50",
-   "1.0.0": "89391aff7ce84206e23ec3cee59496504c8598751c213f804f3f728173121c7f",
-   "1.1.0": "82262adab11453d9595ca82477c616e4660a958ecedb5de947d74d2f91ce5731"
+   "0.0.0": "8f5244dbaa27246b5170f6af8df711e841f3b53a8755322d5fc2b90dbe68952e",
+   "0.1.0": "3ee7d47af6f34d64d1b8cc2fbe3dc4a16824b0103b6355717f0655ffcea500f5",
+   "1.0.0": "7ad45ea48019e1d09eda9ea5e807af7c96e84696f92d86c7c002c496fefda135",
+   "1.1.0": "ac3e19038b0edd01beaf3712e37483d9fb340d49e0d063cd8167488bae5808ae"
   },
   "fine": {
    "0.0.0.0": "66687aadf862bd776c8fc18b8e9f8e20089714856ee233b3902a591d0d5f2925",
@@ -164,8 +164,8 @@
       "decoder_id": "fedcba9876543210",
       "format": "georvq-ae/v2",
       "mean_channel": {
-       "bits": 48,
-       "kind": "rvq-pca"
+       "bits": 88,
+       "kind": "rotated"
       },
       "min_depths": [
        1,
@@ -192,24 +192,19 @@
        {
         "fields": [
          {
-          "bits": 4,
-          "count": 2,
-          "name": "mean_rvq"
-         },
-         {
           "bits": 3,
           "count": 8,
-          "name": "mean_pca_0"
+          "name": "rot_0"
          },
          {
           "bits": 2,
           "count": 8,
-          "name": "mean_pca_8"
+          "name": "rot_8"
          },
          {
-          "bits": 0,
+          "bits": 1,
           "count": 48,
-          "name": "mean_pca_16"
+          "name": "rot_16"
          },
          {
           "bits": 5,
@@ -218,7 +213,7 @@
          }
         ],
         "name": "base",
-        "record_bytes": 8
+        "record_bytes": 13
        },
        {
         "fields": [
@@ -449,8 +444,8 @@
      },
      "rungs": [
       {
-       "bits_px": 0.20703125,
-       "bits_window": 53,
+       "bits_px": 0.36328125,
+       "bits_window": 93,
        "tuple": [
         1,
         0,
@@ -458,29 +453,11 @@
        ]
       },
       {
-       "bits_px": 0.2265625,
-       "bits_window": 58,
+       "bits_px": 0.3828125,
+       "bits_window": 98,
        "tuple": [
         2,
         0,
-        0
-       ]
-      },
-      {
-       "bits_px": 0.24609375,
-       "bits_window": 63,
-       "tuple": [
-        3,
-        0,
-        0
-       ]
-      },
-      {
-       "bits_px": 0.32421875,
-       "bits_window": 83,
-       "tuple": [
-        3,
-        1,
         0
        ]
       },
@@ -489,13 +466,31 @@
        "bits_window": 103,
        "tuple": [
         3,
+        0,
+        0
+       ]
+      },
+      {
+       "bits_px": 0.48046875,
+       "bits_window": 123,
+       "tuple": [
+        3,
+        1,
+        0
+       ]
+      },
+      {
+       "bits_px": 0.55859375,
+       "bits_window": 143,
+       "tuple": [
+        3,
         2,
         0
        ]
       },
       {
-       "bits_px": 0.65234375,
-       "bits_window": 167,
+       "bits_px": 0.80859375,
+       "bits_window": 207,
        "tuple": [
         3,
         2,
@@ -503,8 +498,8 @@
        ]
       },
       {
-       "bits_px": 0.90234375,
-       "bits_window": 231,
+       "bits_px": 1.05859375,
+       "bits_window": 271,
        "tuple": [
         3,
         2,
@@ -617,7 +612,7 @@
      "chunk_shape": [
       8,
       8,
-      8
+      13
      ]
     },
     "name": "regular"
@@ -651,7 +646,7 @@
    "shape": [
     13,
     11,
-    8
+    13
    ],
    "storage_transformers": [],
    "zarr_format": 3
@@ -1018,8 +1013,8 @@
      },
      "rungs": [
       {
-       "bits_px": 0.20703125,
-       "bits_window": 53,
+       "bits_px": 0.36328125,
+       "bits_window": 93,
        "tuple": [
         1,
         0,
@@ -1027,29 +1022,11 @@
        ]
       },
       {
-       "bits_px": 0.2265625,
-       "bits_window": 58,
+       "bits_px": 0.3828125,
+       "bits_window": 98,
        "tuple": [
         2,
         0,
-        0
-       ]
-      },
-      {
-       "bits_px": 0.24609375,
-       "bits_window": 63,
-       "tuple": [
-        3,
-        0,
-        0
-       ]
-      },
-      {
-       "bits_px": 0.32421875,
-       "bits_window": 83,
-       "tuple": [
-        3,
-        1,
         0
        ]
       },
@@ -1058,13 +1035,31 @@
        "bits_window": 103,
        "tuple": [
         3,
+        0,
+        0
+       ]
+      },
+      {
+       "bits_px": 0.48046875,
+       "bits_window": 123,
+       "tuple": [
+        3,
+        1,
+        0
+       ]
+      },
+      {
+       "bits_px": 0.55859375,
+       "bits_window": 143,
+       "tuple": [
+        3,
         2,
         0
        ]
       },
       {
-       "bits_px": 0.65234375,
-       "bits_window": 167,
+       "bits_px": 0.80859375,
+       "bits_window": 207,
        "tuple": [
         3,
         2,
@@ -1072,8 +1067,8 @@
        ]
       },
       {
-       "bits_px": 0.90234375,
-       "bits_window": 231,
+       "bits_px": 1.05859375,
+       "bits_window": 271,
        "tuple": [
         3,
         2,

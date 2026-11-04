@@ -169,8 +169,8 @@ A release engineer, shipping a trained codec, works in
 source-specific release layer. `georvq/ae/` and `georvq/tessera/` are two
 worked examples of the same contract, and reading them side by side is
 the quickest way to see which decisions are policy. Both send a
-transmitted mean through an RVQ-PCA channel and write the same store
-format, but they differ in the mean channel's rate, in the output they
+transmitted mean and write the same store format, but they differ in
+the mean channel's kind and rate, in the output they
 return and in the quality statistic. Each of these differences was measured, and the measurements
 are in `docs/AE_RELEASE.md` and `docs/TESSERA_RELEASE.md`.
 

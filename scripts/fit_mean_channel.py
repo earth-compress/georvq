@@ -1,19 +1,34 @@
-"""Fit the RVQ-PCA mean channel of a release (`RVQPCAMeanChannel`).
+"""Fit the mean channel of a release: `RotatedChannel` (`--kind rotated`,
+the AE v2 release's) or the RVQ-PCA `RVQPCAMeanChannel` (`--kind rvq-pca`,
+Tessera v2's).
 
 A stats_cond model trains against the exact per-window mean; the release
 codes that mean with a channel fitted afterwards on the training split's
 window means. The channel depends only on the store and the split, not
 on the trained model. The preset (`--config`) gives the store, the split,
 the source, the window and the band count; the defaults are those of the
-AE v2 release. Three stages:
+AE v2 release.
 
-1. Per-window means. Each chip goes through the source's `prep` (for AE,
-   dequant, per-pixel L2 normalisation, nodata zeroed; for Tessera,
-   x = q * scale / XNORM with the scale planes read from the store's
-   sidecars) and each of its non-overlapping windows gets the masked mean
-   over valid pixels, as the model's `patch_stats` computes it. Windows
-   with no valid pixel are dropped. About 80 minutes on 24 CPU workers
-   for chips_1024.
+Stage 1, per-window means, is shared. Each chip goes through the
+source's `prep` (for AE, dequant, per-pixel L2 normalisation, nodata
+zeroed; for Tessera, x = q * scale / XNORM with the scale planes read
+from the store's sidecars) and each of its non-overlapping windows gets
+the masked mean over valid pixels, as the model's `patch_stats` computes
+it. Windows with no valid pixel are dropped. About 80 minutes on 24 CPU
+workers for chips_1024.
+
+`--kind rotated` (`RotatedChannel.fit_pca`): the principal axes of
+`--pca-sample` training means drawn with seed 0, every component bounded
+by the hard bound of a mean of unit vectors (|y| <= 1 + |mu0|) and
+companded by its standard deviation, and `--total-bits` shared greedily
+by the squared error removed on `--alloc-sample` training means drawn
+with seed 1. The AE v2 release used 672 bits:
+
+    python scripts/fit_mean_channel.py --kind rotated --means means.npz \\
+        --out mean_channel.npz
+
+`--kind rvq-pca` runs two further stages:
+
 2. RVQ levels of K codes over all training means. Each level is seeded by
    distortion-driven splitting (`greedy_split_init`) and refined by Lloyd
    iterations, on what the previous levels leave.
@@ -21,17 +36,18 @@ AE v2 release. Three stages:
    fitted on a fixed random sample of training residuals, with the bits
    left after the RVQ indices allocated greedily across components.
 
-The release used 2 levels of 4096 (24 bits) and 440 bits in all:
+The first AE v2 channel used 2 levels of 4096 (24 bits) and 440 bits
+in all:
 
-    python scripts/fit_mean_channel.py --means means.npz \\
-        --out mean_channel.npz
+    python scripts/fit_mean_channel.py --kind rvq-pca --means means.npz \\
+        --total-bits 440 --out mean_channel.npz
 
 `--means` caches stage 1 (2.6 GB for chips_1024): it is read when the
 file exists and written otherwise. `--books` takes RVQ books from an npz
 with arrays L0, L1, ... and skips stage 2, and `--books-out` writes the
 books stage 2 fits in that form.
 
-The released tables were fitted on a GPU, and a CPU run does not
+Those RVQ-PCA tables were fitted on a GPU, and a CPU run does not
 reproduce them bit for bit. Stage 1 is exact. Stage 3 run on CPU from the
 released books and means gives the same books, bit allocation and clips,
 but mu0, s and V differ (V by up to 1.3e-4), because the nearest-code
@@ -44,7 +60,8 @@ accumulate in another order and the random draws are not the GPU's,
 but a full CPU refit from the means (65 minutes on 16 cores, 22 GB)
 also reaches a median relative L2 error of 0.00604. The
 tables enter the bitstream_id, so a refit is a new mean channel and the
-released mean_channel.npz is the one that decodes released files.
+released mean_channel.npz is the one that decodes released files. The
+rotated fit runs in float64 numpy and has no such device dependence.
 """
 from __future__ import annotations
 
@@ -58,6 +75,7 @@ import numpy as np
 import torch
 
 from georvq.config import load_config
+from georvq.inference.mean_codec import RotatedChannel
 from georvq.data.store import open_store
 from georvq.inference.mean_codec import RVQPCAMeanChannel
 from georvq.model.vq import _chunked_assign
@@ -293,7 +311,14 @@ def main():
                     help="share of pending split candidates accepted per round")
     ap.add_argument("--resid-sample", type=int, default=2_000_000,
                     help="training residuals the PCA coder is fitted on")
-    ap.add_argument("--total-bits", type=int, default=440)
+    ap.add_argument("--kind", choices=["rotated", "rvq-pca"],
+                    default="rotated")
+    ap.add_argument("--pca-sample", type=int, default=2_000_000,
+                    help="rotated: training means the axes are fitted on")
+    ap.add_argument("--alloc-sample", type=int, default=400_000,
+                    help="rotated: training means the bits are allocated on")
+    ap.add_argument("--total-bits", type=int, default=None,
+                    help="default 672 (rotated) or 440 (rvq-pca)")
     ap.add_argument("--device", default=None,
                     help="default: cuda when available, else cpu")
     ap.add_argument("--out", required=True)
@@ -315,6 +340,22 @@ def main():
                      Mva=Mva, Fva=Fva, Cva=Cva, Pva=Pva)
     print(f"means: train {Mtr.shape}, val {Mva.shape}", flush=True)
 
+    if a.kind == "rotated":
+        n = len(Mtr)
+
+        def draw(seed, k):
+            return Mtr[np.sort(np.random.default_rng(seed).choice(
+                n, min(k, n), replace=False))]
+        ch = RotatedChannel.fit_pca(draw(0, a.pca_sample),
+                                    draw(1, a.alloc_sample),
+                                    a.total_bits or 672)
+        ch.save(a.out)
+        rel = np.median(np.linalg.norm(ch.round_trip(Mva) - Mva, axis=1)
+                        / np.linalg.norm(Mva, axis=1))
+        print(f"wrote {a.out}: {ch.cost_bits()} bits, widths "
+              f"{ch.bits.min()} to {ch.bits.max()}, val median relative L2 "
+              f"{rel:.5f}", flush=True)
+        return
     if a.books:
         bk = np.load(a.books)
         books = np.stack([bk[f"L{i}"] for i in range(a.levels)])
@@ -322,7 +363,7 @@ def main():
         books = fit_books(Mtr, a.levels, a.K, a.iters, a.split_frac, dev)
         if a.books_out:
             np.savez(a.books_out, **{f"L{i}": b for i, b in enumerate(books)})
-    ch = fit_channel(Mtr, books, a.total_bits, a.resid_sample, dev)
+    ch = fit_channel(Mtr, books, a.total_bits or 440, a.resid_sample, dev)
     ch.save(a.out)
     rel = np.median(np.linalg.norm(ch.round_trip(Mva) - Mva, axis=1)
                     / np.linalg.norm(Mva, axis=1))

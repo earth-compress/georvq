@@ -2,7 +2,7 @@
 
 The bundle format, its int8 codebooks and its checks are those of
 georvq.inference.bundle, for the release `georvq.ae.v2.AE_V2`; the mean
-channel file holds `RVQPCAMeanChannel` tables. Loading a bundle gives an
+channel file holds `RotatedChannel` tables. Loading a bundle gives an
 `AEV2Codec`.
 """
 from __future__ import annotations

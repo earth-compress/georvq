@@ -2,7 +2,9 @@
 
 An AE v2 store holds one AlphaEarth annual tile (64-band int8, nodata
 -128) coded by a `stats_cond` model whose per-window mean travels through
-an `RVQPCAMeanChannel`, as the arrays of georvq.inference.records, with
+a `RotatedChannel` (672 bits: the training means' principal axes, each
+component companded over the hard bound of a mean of unit vectors, so
+that no mean is clipped), as the arrays of georvq.inference.records, with
 a chunk size per kind:
 
 - `base`, one 8192 px chunk (the whole tile): per window the mean
@@ -87,6 +89,10 @@ QUALITY_STATS = ("mean", "p99")
 # quality code = ceil(Q_SCALE * (log10(e) + Q_OFFSET)), clipped to 0..255
 Q_SCALE, Q_OFFSET, Q_FLOOR = _sc.Q_SCALE, _sc.Q_OFFSET, _sc.Q_FLOOR
 ONNX_CHANNEL_NAME = _sc.ONNX_CHANNEL_NAME
+# the released channel is fitted by scripts/fit_mean_channel.py
+# (--kind rotated, 672 bits); an RVQ+PCA channel, which clips window means
+# unlike its training corpus, is refused
+MEAN_CHANNEL_KIND = "rotated"
 
 _GDAL_ENV = {"GDAL_NUM_THREADS": "ALL_CPUS"}
 TRAINING_DATA = ("the AlphaEarth Foundations Satellite Embedding dataset "
@@ -159,6 +165,9 @@ def _check_model(model, channel):
     if sc is None or not sc.subtract_mean or sc.use_std:
         raise ValueError("AE v2 needs a stats_cond model with a "
                          "transmitted mean and no std")
+    if channel.kind != MEAN_CHANNEL_KIND:
+        raise ValueError(f"AE v2 sends the mean through a "
+                         f"{MEAN_CHANNEL_KIND!r} channel, not {channel.kind!r}")
 
 
 def _cos_error(out, x):
