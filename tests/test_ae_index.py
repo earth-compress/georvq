@@ -17,7 +17,7 @@ from georvq.ae import v2  # noqa: E402
 from georvq.ae.index import build_index, tile_record  # noqa: E402
 from georvq.config import load_config  # noqa: E402
 from georvq.factory import build_model  # noqa: E402
-from georvq.inference.mean_codec import RVQPCAMeanChannel  # noqa: E402
+from georvq.inference.mean_codec import RotatedChannel  # noqa: E402
 from georvq.inference.records import RecordReader  # noqa: E402
 from georvq.inference.store_index import CORE  # noqa: E402
 
@@ -48,13 +48,7 @@ def tiny_codec():
     model = build_model(cfg, "cpu").eval()
     rng = np.random.default_rng(0)
     r = rng.normal(size=(128, 64)) * 0.05
-    books = []
-    for _ in range(2):
-        C = r[rng.choice(len(r), 16, replace=False)].copy()
-        a = ((r[:, None] - C[None]) ** 2).sum(-1).argmin(1)
-        r = r - C[a]
-        books.append(C)
-    channel = RVQPCAMeanChannel.fit_residual(np.stack(books), r, total_bits=136)
+    channel = RotatedChannel.fit_pca(r, r, total_bits=192)
     return v2.AEV2Codec(model, channel)
 
 

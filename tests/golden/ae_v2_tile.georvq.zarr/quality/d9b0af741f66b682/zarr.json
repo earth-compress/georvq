@@ -77,10 +77,10 @@
     "spatial:registration": "pixel",
     "georvq_quality": {
       "decoder_id": "d9b0af741f66b682",
-      "bitstream_id": "f6ad2ff121a473df",
+      "bitstream_id": "400e751734db103d",
       "release": {
         "name": "golden",
-        "bitstream_id": "f6ad2ff121a473df",
+        "bitstream_id": "400e751734db103d",
         "decoder_id": "d9b0af741f66b682",
         "uri": "hf://earth-compress/georvq-ae-v2",
         "revision": null
@@ -92,8 +92,8 @@
             0,
             0
           ],
-          "bits_window": 462,
-          "bits_px": 0.11279296875
+          "bits_window": 694,
+          "bits_px": 0.16943359375
         },
         {
           "tuple": [
@@ -101,8 +101,8 @@
             0,
             0
           ],
-          "bits_window": 473,
-          "bits_px": 0.115478515625
+          "bits_window": 705,
+          "bits_px": 0.172119140625
         },
         {
           "tuple": [
@@ -110,8 +110,8 @@
             0,
             0
           ],
-          "bits_window": 484,
-          "bits_px": 0.1181640625
+          "bits_window": 716,
+          "bits_px": 0.1748046875
         },
         {
           "tuple": [
@@ -119,8 +119,8 @@
             0,
             0
           ],
-          "bits_window": 495,
-          "bits_px": 0.120849609375
+          "bits_window": 727,
+          "bits_px": 0.177490234375
         },
         {
           "tuple": [
@@ -128,8 +128,8 @@
             0,
             0
           ],
-          "bits_window": 506,
-          "bits_px": 0.12353515625
+          "bits_window": 738,
+          "bits_px": 0.18017578125
         },
         {
           "tuple": [
@@ -137,8 +137,8 @@
             0,
             0
           ],
-          "bits_window": 517,
-          "bits_px": 0.126220703125
+          "bits_window": 749,
+          "bits_px": 0.182861328125
         },
         {
           "tuple": [
@@ -146,8 +146,8 @@
             0,
             0
           ],
-          "bits_window": 528,
-          "bits_px": 0.12890625
+          "bits_window": 760,
+          "bits_px": 0.185546875
         },
         {
           "tuple": [
@@ -155,8 +155,8 @@
             1,
             0
           ],
-          "bits_window": 736,
-          "bits_px": 0.1796875
+          "bits_window": 968,
+          "bits_px": 0.236328125
         },
         {
           "tuple": [
@@ -164,8 +164,8 @@
             2,
             0
           ],
-          "bits_window": 944,
-          "bits_px": 0.23046875
+          "bits_window": 1176,
+          "bits_px": 0.287109375
         },
         {
           "tuple": [
@@ -173,8 +173,8 @@
             3,
             0
           ],
-          "bits_window": 1152,
-          "bits_px": 0.28125
+          "bits_window": 1384,
+          "bits_px": 0.337890625
         },
         {
           "tuple": [
@@ -182,8 +182,8 @@
             4,
             0
           ],
-          "bits_window": 1360,
-          "bits_px": 0.33203125
+          "bits_window": 1592,
+          "bits_px": 0.388671875
         },
         {
           "tuple": [
@@ -191,8 +191,8 @@
             5,
             0
           ],
-          "bits_window": 1568,
-          "bits_px": 0.3828125
+          "bits_window": 1800,
+          "bits_px": 0.439453125
         },
         {
           "tuple": [
@@ -200,8 +200,8 @@
             6,
             0
           ],
-          "bits_window": 1776,
-          "bits_px": 0.43359375
+          "bits_window": 2008,
+          "bits_px": 0.490234375
         },
         {
           "tuple": [
@@ -209,8 +209,8 @@
             7,
             0
           ],
-          "bits_window": 1984,
-          "bits_px": 0.484375
+          "bits_window": 2216,
+          "bits_px": 0.541015625
         },
         {
           "tuple": [
@@ -218,8 +218,8 @@
             8,
             0
           ],
-          "bits_window": 2192,
-          "bits_px": 0.53515625
+          "bits_window": 2424,
+          "bits_px": 0.591796875
         },
         {
           "tuple": [
@@ -227,8 +227,8 @@
             8,
             1
           ],
-          "bits_window": 5776,
-          "bits_px": 1.41015625
+          "bits_window": 6008,
+          "bits_px": 1.466796875
         },
         {
           "tuple": [
@@ -236,8 +236,8 @@
             8,
             2
           ],
-          "bits_window": 9360,
-          "bits_px": 2.28515625
+          "bits_window": 9592,
+          "bits_px": 2.341796875
         },
         {
           "tuple": [
@@ -245,8 +245,8 @@
             8,
             3
           ],
-          "bits_window": 12944,
-          "bits_px": 3.16015625
+          "bits_window": 13176,
+          "bits_px": 3.216796875
         },
         {
           "tuple": [
@@ -254,8 +254,8 @@
             8,
             4
           ],
-          "bits_window": 16528,
-          "bits_px": 4.03515625
+          "bits_window": 16760,
+          "bits_px": 4.091796875
         },
         {
           "tuple": [
@@ -263,8 +263,8 @@
             8,
             5
           ],
-          "bits_window": 20112,
-          "bits_px": 4.91015625
+          "bits_window": 20344,
+          "bits_px": 4.966796875
         },
         {
           "tuple": [
@@ -272,8 +272,8 @@
             8,
             6
           ],
-          "bits_window": 23696,
-          "bits_px": 5.78515625
+          "bits_window": 23928,
+          "bits_px": 5.841796875
         },
         {
           "tuple": [
@@ -281,8 +281,8 @@
             8,
             7
           ],
-          "bits_window": 27280,
-          "bits_px": 6.66015625
+          "bits_window": 27512,
+          "bits_px": 6.716796875
         },
         {
           "tuple": [
@@ -290,8 +290,8 @@
             8,
             8
           ],
-          "bits_window": 30864,
-          "bits_px": 7.53515625
+          "bits_window": 31096,
+          "bits_px": 7.591796875
         }
       ],
       "fields": [

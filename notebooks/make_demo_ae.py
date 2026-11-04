@@ -33,7 +33,7 @@ md("""
 The AlphaEarth Foundations annual embeddings come as 8192 x 8192 pixel
 tiles of 64 int8 bands at 10 m, about 1 to 3 GB each. The ae-v2 release
 codes each tile as one Zarr store of about 64 MB that can be read at 23
-rates, from 0.11 to 7.5 bits per pixel, by window, over HTTP. The
+rates, from 0.17 to 7.6 bits per pixel, by window, over HTTP. The
 reader returns int8 arrays in the source's layout, so code written for
 the source tiles can read these stores instead.
 

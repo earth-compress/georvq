@@ -1,5 +1,5 @@
 # A single from-scratch run that reproduces the recipe of the AE v2
-# release (bitstream f6ad2ff121a473df, weights ownk_sc4_step80000.pt).
+# release (bitstream 400e751734db103d, weights ownk_sc4_step80000.pt).
 # Those weights came from the ownk warm-start chain, which is not in the
 # repository:
 #   sc2 (job 784): from scratch, 5,000 steps at batch 256 inside the
@@ -25,10 +25,10 @@
 # the chain they never stopped, but sc4's resets revived no codes.
 #
 # MEAN. stats_cond is trained against the exact window mean; bits_per_band
-# 6 is accounting only. The release codes the mean with an RVQ-PCA channel
-# (440 bits) fitted after training by scripts/fit_mean_channel.py,
-# which reads only the store, so the released mean_channel.npz also fits
-# a model from this run.
+# 6 is accounting only. The release codes the mean with a rotated channel
+# (672 bits) fitted after training by scripts/fit_mean_channel.py
+# --kind rotated, which reads only the store, so the released
+# mean_channel.npz also fits a model from this run.
 #
 # LAUNCH. One A100 80GB, on which sc3 trained batch 2048. The 16,000-slot
 # pool is 94 GiB of host RAM; sc3 ran 45 h under --mem=160G with this

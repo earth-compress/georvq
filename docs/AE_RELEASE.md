@@ -4,7 +4,7 @@ This document describes the released georvq codec for the AlphaEarth Foundations
 embedding tiles. The model that this codec uses is [released on Hugging Face](https://huggingface.co/earth-compress/georvq-ae-v2). 
 We use this codec to encode source tiles into a Zarr store that contains the compressed
 blobs used by the decoder. These Zarr stores can be streamed from their location on the cloud at any of 23 bitrates, with windowed
-range reads over HTTP, allowing users to access lossily compressed AlphaEarth Foundations data at bitrates from ~0.1-7.5 bits per pixel, with cosine similarity going from 97.2% to 99.8%. The code that this release uses is in `georvq/ae/v2.py`, on the shared store codec and reader in `georvq/inference/store_codec.py` and `georvq/inference/store_dataset.py`, and the store format is defined in `georvq/inference/records.py`.
+range reads over HTTP, allowing users to access lossily compressed AlphaEarth Foundations data at bitrates from ~0.2-7.6 bits per pixel, with cosine similarity going from 97.2% to 99.8%. The code that this release uses is in `georvq/ae/v2.py`, on the shared store codec and reader in `georvq/inference/store_codec.py` and `georvq/inference/store_dataset.py`, and the store format is defined in `georvq/inference/records.py`.
 
 ## Who is this for
 
@@ -25,16 +25,16 @@ Note: this information only makes sense if you are familiar with the georvq code
   further training or fine-tuning.
 - Each window's mean is subtracted before the encoder and added back
   after the decoder, so it has to be transmitted with every window, at
-  every rung. It costs 440 bits (55 bytes) per window, against 22 bits
+  every rung. It costs 672 bits (84 bytes) per window, against 22 bits
   for the two coarse levels of the cheapest rung, so at the lowest rates
-  the mean is most of the bitstream. It is coded by
-  `RVQPCAMeanChannel`, with two RVQ levels of 4096 codes (2 x 12 bits)
-  followed by a PCA residual coder with a fixed allocation of 416 bits.
-  Its median relative L2 error on held-out validation means is 0.0060,
-  and on the validation set, decoding with the coded mean instead of the
-  exact one costs about 0.0001 cosine at every rung. The mean channel's
-  tables enter the `bitstream_id`.
-- The `bitstream_id` is `f6ad2ff121a473df` and the `decoder_id` is
+  the mean is most of the bitstream. It is coded by `RotatedChannel`:
+  the mean is rotated onto the principal axes of the training window
+  means, and each component is companded by its standard deviation and
+  coded over the hard bound of a mean of unit vectors in 9 to 12 bits,
+  so that no mean is clipped. Its median relative L2 error on held-out
+  validation means is 0.0012. The mean channel's tables enter the
+  `bitstream_id`.
+- The `bitstream_id` is `400e751734db103d` and the `decoder_id` is
   `d9b0af741f66b682`. A store records the `bitstream_id` and `decoder_id`
   it was encoded with, and a reader holding a different codec refuses to
   decode it.
@@ -70,7 +70,7 @@ one `base` chunk covers the whole tile, and `fine` is chunked at 1024 px:
 
 | kind | chunk | per window |
 |---|---|---|
-| `base` (`mask` chunked alike) | 8192 px (the whole tile) | mean (55 B) and the 8 coarse levels (11 B), 66 B |
+| `base` (`mask` chunked alike) | 8192 px (the whole tile) | mean (84 B) and the 8 coarse levels (11 B), 95 B |
 | `mid` | 8192 px (the whole tile) | per level, 16 cells x 13 bits, 26 B |
 | `fine` | 1024 px (8 x 8 chunks) | per level, 256 cells x 14 bits, 448 B |
 | `quality/<decoder_id>` | 8192 px | mean and p99 of `1 - cos` per rung, 46 B |
@@ -181,7 +181,7 @@ release record that readers use to find the bundle.
 The 23 rungs fill one tier at a time: coarse from 2 to 8 levels, then
 mid from 1 to 8, then fine from 1 to 8. A level costs 11 bits per
 window in the coarse tier, 208 in mid and 3,584 in fine, and every rung
-also carries the 440-bit mean. The table gives two quality columns.
+also carries the 672-bit mean. The table gives two quality columns.
 "val cos" is cosine on the held-out validation windows, scored through
 the training run's own validation harness with the coded mean at both
 ends, so it is the figure that the training run itself reports. "Real
@@ -193,16 +193,16 @@ depth they range from 0.9963 to 0.9998.
 
 | rung | bits/window | b/px | val cos | real tiles |
 |---|---|---|---|---|
-| 2-0-0 | 462 | 0.113 | 0.9722 | 0.9733 |
-| 8-0-0 | 528 | 0.129 | 0.9798 | 0.9805 |
-| 8-1-0 | 736 | 0.180 | 0.9858 | – |
-| 8-2-0 | 944 | 0.230 | 0.9886 | – |
-| 8-4-0 | 1,360 | 0.332 | 0.9912 | 0.9913 |
-| 8-8-0 | 2,192 | 0.535 | 0.9932 | 0.9933 |
-| 8-8-1 | 5,776 | 1.410 | 0.9951 | – |
-| 8-8-2 | 9,360 | 2.285 | 0.9962 | 0.9963 |
-| 8-8-4 | 16,528 | 4.035 | 0.9973 | 0.9974 |
-| 8-8-8 | 30,864 | 7.535 | 0.9981 | 0.9981 |
+| 2-0-0 | 694 | 0.169 | 0.9722 | 0.9733 |
+| 8-0-0 | 760 | 0.186 | 0.9798 | 0.9805 |
+| 8-1-0 | 968 | 0.236 | 0.9858 | – |
+| 8-2-0 | 1,176 | 0.287 | 0.9886 | – |
+| 8-4-0 | 1,592 | 0.389 | 0.9912 | 0.9913 |
+| 8-8-0 | 2,424 | 0.592 | 0.9932 | 0.9933 |
+| 8-8-1 | 6,008 | 1.467 | 0.9951 | – |
+| 8-8-2 | 9,592 | 2.342 | 0.9962 | 0.9963 |
+| 8-8-4 | 16,760 | 4.092 | 0.9973 | 0.9974 |
+| 8-8-8 | 31,096 | 7.592 | 0.9981 | 0.9981 |
 
 The header's `rungs` field lists all 23 with their bits per window and
 per pixel, and `info` prints them.

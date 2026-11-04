@@ -37,7 +37,7 @@ from rasterio.transform import Affine  # noqa: E402
 from georvq.ae import v2  # noqa: E402
 from georvq.config import load_config  # noqa: E402
 from georvq.factory import build_model  # noqa: E402
-from georvq.inference.mean_codec import RVQPCAMeanChannel  # noqa: E402
+from georvq.inference.mean_codec import RotatedChannel  # noqa: E402
 
 HERE = os.path.dirname(__file__)
 SNAPSHOT = os.path.join(HERE, "golden/ae_v2_store_snapshot.json")
@@ -51,13 +51,12 @@ AUX_KEYS = ["band_tags", "block_shapes", "descriptions", "image_structure",
 
 
 def _channel(bands=64):
-    """A fixed RVQ-PCA mean channel: 2 x 16 codes and 40 PCA bits."""
-    rng = np.random.default_rng(0)
-    books = rng.integers(-8, 9, size=(2, 16, bands)).astype(np.float32) / 64
-    bits = np.zeros(bands, np.int64)
+    """A fixed rotated mean channel: the identity, uniform over [-1, 1],
+    8 values at 3 bits, 8 at 2 and the rest at 1 (88 bits)."""
+    bits = np.ones(bands, np.int64)
     bits[:8], bits[8:16] = 3, 2
-    return RVQPCAMeanChannel(books, np.zeros(bands), np.eye(bands),
-                             np.full(bands, 0.1), bits, np.full(bands, 2.0))
+    return RotatedChannel(np.zeros(bands), np.eye(bands), -np.ones(bands),
+                          np.ones(bands), bits)
 
 
 def _codec():
