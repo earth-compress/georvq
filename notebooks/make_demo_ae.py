@@ -59,7 +59,7 @@ The codec weights are not in the stores. On the first pixel read,
 `georvq.open` finds the bundle the store's header names: in
 `$GEORVQ_AE_BUNDLE`, in the cache at `~/.cache/georvq/bundles/<bitstream_id>/`,
 or by downloading the decoder-only bundle from the Hugging Face
-release (`decoder/` in `earth-compress/georvq-ae-v2`, 135 MB). On a machine with a GPU
+release (`decoder/` in `earth-compress/georvq-ae-v2`, 134 MB). On a machine with a GPU
 the torch backend uses it; everything below also runs on CPU, more
 slowly (a 1024 px window takes about 10 s to decode on 16 CPU threads).
 """)

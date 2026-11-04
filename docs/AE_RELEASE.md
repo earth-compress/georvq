@@ -82,8 +82,8 @@ bit widths and compressed with zstd. The validity mask is stored once
 for the tile, compressed, and has no stored chunk for a fully valid
 tile, and windows with no valid pixel are not coded and are stored as
 zero records, which take almost no space. On the tile measured below
-(2021, zone 44N, 11% nodata) the store is 56.8 MB, of which `base`
-takes 0.96 MB, the mask 0.01 MB, `mid` 3.06 MB, `fine` 52.5 MB,
+(2021, zone 44N, 11% nodata) the store is 57.3 MB, of which `base`
+takes 1.40 MB, the mask 0.01 MB, `mid` 3.06 MB, `fine` 52.5 MB,
 `quality` 0.24 MB and the group metadata 0.04 MB.
 
 Functionally, most users will not need to worry about anything beyond this, as our reader handles the filesystem and requests for you. For those interested to learn more about how those stores are arranged, refer to `docs/GEORVQ_ZARR.md`. 
@@ -193,14 +193,14 @@ depth they range from 0.9963 to 0.9998.
 
 | rung | bits/window | b/px | val cos | real tiles |
 |---|---|---|---|---|
-| 2-0-0 | 694 | 0.169 | 0.9722 | 0.9733 |
+| 2-0-0 | 694 | 0.169 | 0.9722 | 0.9734 |
 | 8-0-0 | 760 | 0.186 | 0.9798 | 0.9805 |
 | 8-1-0 | 968 | 0.236 | 0.9858 | – |
 | 8-2-0 | 1,176 | 0.287 | 0.9886 | – |
 | 8-4-0 | 1,592 | 0.389 | 0.9912 | 0.9913 |
 | 8-8-0 | 2,424 | 0.592 | 0.9932 | 0.9933 |
 | 8-8-1 | 6,008 | 1.467 | 0.9951 | – |
-| 8-8-2 | 9,592 | 2.342 | 0.9962 | 0.9963 |
+| 8-8-2 | 9,592 | 2.342 | 0.9962 | 0.9964 |
 | 8-8-4 | 16,760 | 4.092 | 0.9973 | 0.9974 |
 | 8-8-8 | 31,096 | 7.592 | 0.9981 | 0.9981 |
 
