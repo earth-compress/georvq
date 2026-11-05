@@ -91,8 +91,8 @@ SOURCE_STORE = "https://data.source.coop/tessera/tessera/zarr/v1.1-dclimate"
 # the bucket behind SOURCE_STORE, which reads are sent to (georvq.tessera.tiles)
 SOURCE_BUCKET = ("https://s3.us-west-2.amazonaws.com/us-west-2.opendata.source.coop/"
                  "tessera/tessera/zarr/v1.1-dclimate")
-# a large file already on Hugging Face, to measure latency and throughput there
-PROBE_URL = "https://huggingface.co/earth-compress/georvq-ae-v2/resolve/main/weights.npz"
+# a large file of the release on Hugging Face, to measure latency and throughput there
+PROBE_URL = "https://huggingface.co/earth-compress/georvq-tessera-v1.1/resolve/main/decoder/weights.npz"
 
 TILE = "2025/grid_-3.45_54.35"              # the Cumbrian coast at Ravenglass, England
 # a 512 px window of TILE, inside one 1024 px chunk of the fine tier
@@ -585,7 +585,7 @@ reused, so loading the weights is not timed.
 The first cell measures the latency (time to first byte of small range
 requests) and the single-stream throughput (one 16 MB range request)
 from this machine to Hugging Face, using a large file already published
-there (`PROBE_URL`, the AE v2 weights). With a local `DATA_ROOT`
+there (`PROBE_URL`, the release's decoder weights). With a local `DATA_ROOT`
 (`SIMULATE_REMOTE = True`), the coded store is then served from a local
 range server that waits that latency before each response and limits
 each response to that throughput, as a stand-in for the hosted store.
