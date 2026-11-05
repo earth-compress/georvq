@@ -132,7 +132,7 @@ georvq-train -c configs/ae/hybrid_rate.yaml --gpu 0 train.init_from=checkpoints/
 Presets are grouped by source under `configs/<source>/`. `configs/ae/`
 holds `pyr64`, the standard recipe, and the exploratory `stage1`,
 `hybrid_rate`, `cascade` and `satclip_select`. `configs/tessera/` holds
-the lineage ending at the released `tessera_v2`, and
+the lineage ending at the released `tessera_v11`, and
 `s2/`, `dem/` and `era5/` hold the presets for those sources.
 `smoke.yaml` (CI) is at the top level. A preset's `data.store_dir`
 points at the group server, so override it for your own store.
@@ -167,8 +167,8 @@ directories, holding the weights, the config and the `bitstream_id`,
 that decode anywhere georvq is installed:
 
 ```python
-from georvq.tessera.v2 import load_bundle
-codec = load_bundle("georvq-tessera-v2", device="cuda").codec
+from georvq.tessera.v1_1 import load_bundle
+codec = load_bundle("georvq-tessera-v1.1", device="cuda").codec
 xhat = codec.decode(codec.encode(x), depths=[20, 13, 0])
 ```
 
@@ -193,14 +193,14 @@ ds = georvq.open(url)
 a = ds.read(window=((0, 1024), (0, 1024)), quality="8-8-2")
 ```
 
-The Tessera release (`georvq/tessera/v2.py`, `docs/TESSERA_RELEASE.md`)
-codes each geotessera tile (128 bands) as one Zarr store, readable at 42
-rungs across 0.23–9.8 b/px. It transmits each window's mean (896 bits
-per window) and returns float32 embeddings:
+The Tessera release (`georvq/tessera/v1_1.py`, `docs/TESSERA_RELEASE.md`)
+codes each tile of the Tessera v1.1 embeddings (128 bands) as one Zarr
+store, readable at 42 rungs across 0.32–9.9 b/px. It transmits each
+window's mean (1280 bits per window) and returns float32 embeddings:
 
 ```python
 import georvq
-ds = georvq.open("2024/grid_-9.35_30.15.georvq.zarr")
+ds = georvq.open("2024/grid_26.15_44.45.georvq.zarr")
 a = ds.read(quality="20-13-0")
 ```
 
@@ -233,10 +233,10 @@ pytest                 # adds the resume and real-checkpoint tests
 ```
 
 The golden decode tests (`tests/test_ae_v2_bundle.py` for the AlphaEarth
-release, `tests/test_tessera_v2_bundle.py` for the Tessera release) verify
+release, `tests/test_tessera_v1_1_bundle.py` for the Tessera release) verify
 that released weights still encode and decode bit for bit, and skip
 themselves where the bundle is not present (`GEORVQ_AE_V2_BUNDLE`,
-`GEORVQ_AE_BUNDLE`, `GEORVQ_TESSERA_V2_BUNDLE`, `GEORVQ_TESSERA_BUNDLE`). The recorded hashes hold
+`GEORVQ_AE_BUNDLE`, `GEORVQ_TESSERA_V1_1_BUNDLE`, `GEORVQ_TESSERA_BUNDLE`). The recorded hashes hold
 on torch 2.10 or later with numpy 2; older versions give different codes.
 
 ## Development

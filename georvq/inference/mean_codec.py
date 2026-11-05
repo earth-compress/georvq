@@ -30,8 +30,8 @@ same way.
 
 `RotatedChannel` rotates the vector by a fixed orthogonal basis and
 codes each component over a fixed range, optionally companded, so that
-with the hard bounds of a mean of unit vectors it cannot saturate
-either.
+with hard bounds of the data (those of a mean of unit vectors, or of
+values that lie in a fixed box) it cannot saturate either.
 
 The coders here share one interface, which the store codec
 (`georvq.inference.store_codec`) relies on: `kind`, `bands`,
@@ -132,262 +132,6 @@ class MeanChannel:
     def load(cls, path) -> "MeanChannel":
         z = np.load(path, allow_pickle=False)
         return cls(z["mu0"], z["scale"], int(z["bits"]), float(z["clip"]))
-
-
-def _uniform(c, s, b, clip):
-    """Fixed-length b-bit uniform quantizer on [-clip*s, clip*s] with
-    midpoint reconstruction: (codes, reconstruction)."""
-    if b == 0:
-        return np.zeros(c.shape, np.int64), np.zeros_like(c)
-    n = 1 << b
-    lo, w = -clip * s, 2 * clip * s
-    q = np.clip(np.floor((c - lo) / w * n), 0, n - 1).astype(np.int64)
-    return q, (lo + (q + 0.5) * w / n).astype(c.dtype)
-
-
-class RVQPCAMeanChannel:
-    """Residual-VQ then PCA coder for the stats_cond mean vector.
-
-    A few RVQ levels capture the mean's non-linear structure (land-cover
-    clusters); what they leave is coded in a PCA basis fitted on that
-    residual, with a fixed-length uniform quantizer per component. The
-    bit allocation is fixed when the channel is built, so every window
-    costs exactly `cost_bits()` and packs to `record_bytes()` bytes.
-
-    books: (L, K, D) RVQ codebooks, K a power of two.
-    mu0:   (D,) mean of the RVQ residual; V: (D, D) its PCA basis (columns,
-           decreasing variance); s: (D,) per-component std.
-    bits:  (D,) bits per component (0 = not sent); clip: (D,) per-component
-           half-range in units of s, used at that component's bit count.
-
-    pre_scale, pre_log: optional (D,) fixed transform into the space the
-           tables were fitted in, y = log(x) * pre_scale on the dimensions
-           where pre_log is set and y = x * pre_scale elsewhere. It lets one
-           coder weight its dimensions unequally (a per-dimension error
-           budget) or code positive quantities to a relative error. Without
-           it the tables code x directly, as for AE and Tessera, and the
-           saved file holds no transform arrays.
-
-    Encode searches the RVQ levels greedily in float32; near-ties may
-    resolve differently across hardware, which changes which (valid)
-    codes are sent, not how they decode. Decode is a fixed float32
-    computation from the codes and the shipped tables.
-    """
-
-    kind = "rvq-pca"
-
-    def __init__(self, books, mu0, V, s, bits, clip, pre_scale=None,
-                 pre_log=None):
-        self.books = np.asarray(books, dtype=np.float32)
-        self.mu0 = np.asarray(mu0, dtype=np.float32)
-        self.V = np.asarray(V, dtype=np.float32)
-        self.s = np.asarray(s, dtype=np.float32)
-        self.bits = np.asarray(bits, dtype=np.int64)
-        self.clip = np.asarray(clip, dtype=np.float32)
-        L, K, D = self.books.shape
-        if K & (K - 1):
-            raise ValueError("codebook size must be a power of two")
-        for name, a in (("mu0", self.mu0), ("s", self.s), ("bits", self.bits),
-                        ("clip", self.clip)):
-            if a.shape != (D,):
-                raise ValueError(f"{name} must have shape ({D},)")
-        if self.V.shape != (D, D):
-            raise ValueError(f"V must have shape ({D}, {D})")
-        if (self.bits < 0).any() or (self.bits > 16).any():
-            raise ValueError("component bits must be in 0..16")
-        self.pre_scale = self.pre_log = None
-        if pre_scale is not None or pre_log is not None:
-            self.pre_scale = (np.ones(D, np.float32) if pre_scale is None
-                              else np.asarray(pre_scale, dtype=np.float32))
-            self.pre_log = (np.zeros(D, bool) if pre_log is None
-                            else np.asarray(pre_log, dtype=bool))
-            if self.pre_scale.shape != (D,) or self.pre_log.shape != (D,):
-                raise ValueError(f"pre_scale and pre_log must have shape "
-                                 f"({D},)")
-            if not (self.pre_scale > 0).all():
-                raise ValueError("pre_scale must be positive")
-
-    @property
-    def bands(self) -> int:
-        return int(self.books.shape[2])
-
-    @property
-    def index_bits(self) -> int:
-        return int(self.books.shape[1]).bit_length() - 1
-
-    def field_widths(self) -> np.ndarray:
-        """Bit widths of a packed record: RVQ indices, then components."""
-        L = self.books.shape[0]
-        return np.concatenate([np.full(L, self.index_bits), self.bits])
-
-    def cost_bits(self) -> int:
-        return int(self.field_widths().sum())
-
-    def record_bytes(self) -> int:
-        from georvq.inference.bitpack import record_bytes
-        return record_bytes(self.field_widths())
-
-    def record_fields(self) -> list:
-        """The channel's fields in a base record: the RVQ indices, then
-        runs of PCA components sharing a bit width, named by their first
-        component."""
-        out = [("mean_rvq", int(self.books.shape[0]), self.index_bits)]
-        bits = [int(b) for b in self.bits]
-        k = 0
-        while k < len(bits):
-            j = k
-            while j < len(bits) and bits[j] == bits[k]:
-                j += 1
-            out.append((f"mean_pca_{k}", j - k, bits[k]))
-            k = j
-        return out
-
-    # ---- transform ----
-
-    def to_coded(self, x) -> np.ndarray:
-        """(N, D) values -> the space the tables code (identity without a
-        transform)."""
-        return coded_space(x, self.pre_scale, self.pre_log)
-
-    def from_coded(self, y) -> np.ndarray:
-        """Inverse of `to_coded`."""
-        y = np.asarray(y, dtype=np.float32)
-        if self.pre_scale is None:
-            return y
-        x = y / self.pre_scale
-        x[:, self.pre_log] = np.exp(x[:, self.pre_log])
-        return x.astype(np.float32)
-
-    # ---- code ----
-
-    def encode(self, mu) -> np.ndarray:
-        """(N, D) float -> (N, L + D) int64 fields: RVQ indices, then
-        per-component codes (0 for components given no bits)."""
-        r = self.to_coded(mu)
-        idx = []
-        for C in self.books:
-            d = ((r * r).sum(1, keepdims=True) - 2 * r @ C.T
-                 + (C * C).sum(1)[None])
-            j = d.argmin(1)
-            idx.append(j)
-            r = r - C[j]
-        c = (r - self.mu0) @ self.V
-        q = np.zeros(c.shape, np.int64)
-        for k in range(c.shape[1]):
-            q[:, k], _ = _uniform(c[:, k], self.s[k], int(self.bits[k]),
-                                  float(self.clip[k]))
-        return np.concatenate([np.stack(idx, 1), q], 1)
-
-    def decode(self, fields) -> np.ndarray:
-        """Inverse of `encode` -> (N, D) float32."""
-        f = np.asarray(fields, dtype=np.int64)
-        L = self.books.shape[0]
-        out = np.zeros((f.shape[0], self.bands), np.float32)
-        for l in range(L):
-            out += self.books[l][f[:, l]]
-        ch = np.zeros((f.shape[0], self.bands), np.float32)
-        for k in range(self.bands):
-            b = int(self.bits[k])
-            if b:
-                n = 1 << b
-                lo, w = -self.clip[k] * self.s[k], 2 * self.clip[k] * self.s[k]
-                ch[:, k] = lo + (f[:, L + k] + 0.5) * w / n
-        return self.from_coded(out + self.mu0 + ch @ self.V.T)
-
-    def round_trip(self, mu) -> np.ndarray:
-        """The mean the decoder will see; encode the window against this."""
-        return self.decode(self.encode(mu))
-
-    def pack(self, fields) -> np.ndarray:
-        from georvq.inference.bitpack import pack
-        return pack(fields, self.field_widths())
-
-    def unpack(self, data) -> np.ndarray:
-        from georvq.inference.bitpack import unpack
-        return unpack(data, self.field_widths())
-
-    # ---- building the residual coder ----
-
-    @classmethod
-    def fit_residual(cls, books, residual, total_bits: int,
-                     clips=(1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 5.0),
-                     bmax: int = 14, pre_scale=None,
-                     pre_log=None) -> "RVQPCAMeanChannel":
-        """PCA coder for `residual` (N, D), the means minus their RVQ
-        reconstruction, with `total_bits - L * index_bits` bits shared
-        across components greedily from an empirical distortion table
-        (1- or 2-bit steps, best drop per bit). Each (component, bits)
-        pair keeps the clip range with the lowest distortion. With a
-        transform (`pre_scale`, `pre_log`), `books` and `residual` are in
-        the coded space (`coded_space`), and the channel carries the
-        transform."""
-        books = np.asarray(books, dtype=np.float32)
-        L, K, D = books.shape
-        budget = int(total_bits) - L * (int(K).bit_length() - 1)
-        if budget < 0:
-            raise ValueError("total_bits is below the RVQ index cost")
-        X = np.asarray(residual, dtype=np.float64)
-        mu0 = X.mean(0)
-        Xc = X - mu0
-        var, V = np.linalg.eigh(Xc.T @ Xc / len(Xc))
-        o = np.argsort(var)[::-1]
-        V, var = V[:, o], np.maximum(var[o], 1e-20)
-        s = np.sqrt(var)
-        C = Xc @ V
-        Dt = np.zeros((D, bmax + 1))
-        Ct = np.ones((D, bmax + 1)) * clips[-1]
-        for k in range(D):
-            Dt[k, 0] = (C[:, k] ** 2).mean()
-            for b in range(1, bmax + 1):
-                errs = [((C[:, k] - _uniform(C[:, k], s[k], b, cl)[1]) ** 2)
-                        .mean() for cl in clips]
-                j = int(np.argmin(errs))
-                Dt[k, b], Ct[k, b] = errs[j], clips[j]
-        bits = np.zeros(D, np.int64)
-        left = budget
-        while left > 0:
-            best = None
-            for k in range(D):
-                for step in (1, 2):
-                    if step > left or bits[k] + step > bmax:
-                        continue
-                    g = (Dt[k, bits[k]] - Dt[k, bits[k] + step]) / step
-                    if best is None or g > best[0]:
-                        best = (g, k, step)
-            if best is None or best[0] <= 0:
-                break
-            _, k, step = best
-            bits[k] += step
-            left -= step
-        clip = np.array([Ct[k, bits[k]] for k in range(D)])
-        return cls(books, mu0, V, s, bits, clip, pre_scale, pre_log)
-
-    # ---- persistence ----
-
-    def _transform_arrays(self) -> dict:
-        if self.pre_scale is None:
-            return {}
-        return {"pre_scale": self.pre_scale,
-                "pre_log": self.pre_log.astype(np.uint8)}
-
-    def save(self, path):
-        np.savez(path, books=self.books, mu0=self.mu0, V=self.V, s=self.s,
-                 bits=self.bits.astype(np.int32), clip=self.clip,
-                 **self._transform_arrays())
-
-    @classmethod
-    def load(cls, path) -> "RVQPCAMeanChannel":
-        z = np.load(path, allow_pickle=False)
-        pre = ((z["pre_scale"], z["pre_log"].astype(bool))
-               if "pre_scale" in z.files else (None, None))
-        return cls(z["books"], z["mu0"], z["V"], z["s"], z["bits"], z["clip"],
-                   *pre)
-
-    def id_state(self) -> list:
-        """What a decoder must agree on, for `bitstream_id(extra=...)`."""
-        return [self.books, self.mu0, self.V, self.s,
-                self.bits.astype(np.int32), self.clip,
-                *self._transform_arrays().values()]
 
 
 class LogOffsetChannel:
@@ -695,25 +439,40 @@ class RotatedChannel:
 
     @classmethod
     def fit_pca(cls, pca_means, alloc_means, total_bits, compand=True,
-                bmax=16) -> "RotatedChannel":
-        """A channel for window means of unit vectors: mu0 and V the mean
-        and principal axes of `pca_means` (N, D), every component bounded
-        by the hard bound |y| <= 1 + |mu0|, companded by its standard
-        deviation when `compand`, and `total_bits` shared greedily (each
-        component at least 1 bit) by the squared error each extra bit
-        removes on `alloc_means`."""
+                bmax=16, box=None) -> "RotatedChannel":
+        """A channel for window means: mu0 and V the mean and principal
+        axes of `pca_means` (N, D), every component bounded by a hard
+        bound, companded by its standard deviation when `compand`, and
+        `total_bits` shared greedily (each component at least 1 bit) by
+        the squared error each extra bit removes on `alloc_means`.
+
+        Without `box` the means are of unit vectors, and the bound is
+        |y| <= 1 + |mu0| on every component. With `box`, a scalar or (D,),
+        every value of every pixel lies in [-box, box], so the window mean
+        does too, and component k of y = (x - mu0) @ V is bounded by
+        +-|V[:, k]| . box - mu0 . V[:, k], computed from the float32 mu0
+        and V the channel stores."""
         X = np.asarray(pca_means, dtype=np.float64)
         mu0 = X.mean(0)
         var, V = np.linalg.eigh(np.cov((X - mu0).T))
         o = np.argsort(var)[::-1]
         V, sd = V[:, o], np.sqrt(var[o])
         D = X.shape[1]
-        B = 1.0 + float(np.linalg.norm(mu0))
+        if box is None:
+            B = 1.0 + float(np.linalg.norm(mu0))
+            lo, hi = -np.full(D, B), np.full(D, B)
+        else:
+            b = np.broadcast_to(np.asarray(box, np.float64), (D,))
+            V32 = V.astype(np.float32).astype(np.float64)
+            c = mu0.astype(np.float32).astype(np.float64) @ V32
+            w = np.abs(V32).T @ b
+            lo, hi = -w - c, w - c
         scale = sd if compand else np.zeros(D)
         Y = (np.asarray(alloc_means, dtype=np.float64) - mu0) @ V
 
         def dist(k, b):
-            one = cls(np.zeros(1), np.eye(1), [-B], [B], [b], [scale[k]])
+            one = cls(np.zeros(1), np.eye(1), [lo[k]], [hi[k]], [b],
+                      [scale[k]])
             y = Y[:, k:k + 1]
             r = one.levels[0][one.encode(y)[:, 0]]
             return float(((y[:, 0] - r) ** 2).mean())
@@ -726,7 +485,7 @@ class RotatedChannel:
             g = [(tab[k, bits[k]] - tab[k, bits[k] + 1]) if bits[k] < bmax
                  else -1.0 for k in range(D)]
             bits[int(np.argmax(g))] += 1
-        return cls(mu0, V, -np.full(D, B), np.full(D, B), bits, scale)
+        return cls(mu0, V, lo, hi, bits, scale)
 
     @classmethod
     def load(cls, path) -> "RotatedChannel":
@@ -735,25 +494,7 @@ class RotatedChannel:
                    z["levels"])
 
 
-def coded_space(x, pre_scale=None, pre_log=None) -> np.ndarray:
-    """(N, D) values -> the space an `RVQPCAMeanChannel` with this
-    transform fits and codes in: log on the `pre_log` dimensions, then
-    times `pre_scale`. Log dimensions must be positive."""
-    y = np.array(x, dtype=np.float32)
-    if pre_scale is None and pre_log is None:
-        return y
-    if pre_log is not None:
-        lg = np.asarray(pre_log, dtype=bool)
-        if (y[:, lg] <= 0).any():
-            raise ValueError("log-coded dimensions must be positive")
-        y[:, lg] = np.log(y[:, lg])
-    if pre_scale is not None:
-        y = y * np.asarray(pre_scale, dtype=np.float32)
-    return y.astype(np.float32)
-
-
 CHANNELS = {MeanChannel.kind: MeanChannel,
-            RVQPCAMeanChannel.kind: RVQPCAMeanChannel,
             LogOffsetChannel.kind: LogOffsetChannel,
             RotatedChannel.kind: RotatedChannel}
 
@@ -763,8 +504,6 @@ def channel_kind(path) -> str:
     tables it holds."""
     with np.load(path, allow_pickle=False) as z:
         names = set(z.files)
-    if {"books", "V"} <= names:
-        return RVQPCAMeanChannel.kind
     if {"V", "levels", "lo", "hi"} <= names:
         return RotatedChannel.kind
     if {"levels", "offset", "lo", "hi"} <= names:

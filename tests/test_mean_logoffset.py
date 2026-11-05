@@ -91,7 +91,7 @@ def test_save_load_and_ids(tmp_path):
     for a, b in zip(ch.id_state(), c2.id_state()):
         assert np.asarray(a).tobytes() == np.asarray(b).tobytes()
     with pytest.raises(ValueError):
-        load_channel(p, "rvq-pca")
+        load_channel(p, "rotated")
     # a table that does not describe the parameters is refused
     bad = dict(np.load(p))
     bad["levels"] = bad["levels"] * np.float32(1.001)

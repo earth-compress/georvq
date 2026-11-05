@@ -65,7 +65,7 @@ checkpoint exactly.
 | `georvq/eval/` | Held-out extraction, probes, benchmark registry, codec A/B helpers |
 | `georvq/inference/` | Source-agnostic deployment code: `api.py` Codec/Packet, `stats_codec.py`, `mean_codec.py` the `stats_cond` channel on the wire, `release.py` bitstream/decoder ids, `records.py` the release container (record layout, Zarr writer, zarr-python reader, record cache), `store_codec.py` a release's codec over the container (`ReleaseSpec`, `StoreCodec`, `encode_product`), `store_dataset.py` the rasterio-like reader, `bundle.py` and `bundle_resolve.py` release bundles and finding them, `store_index.py` per-store facts for a tile index, `bitpack.py` fixed-width records, `onnx_stats.py` ONNX for transmitted-mean models |
 | `georvq/ae/` | The AlphaEarth release codec: `v2.py` (the release's `ReleaseSpec`, the GeoTIFF tile reader, `encode_tile`, CLI), `v2_bundle.py`, `v2_resolve.py` (finding the bundle a store names), `index.py`. See `docs/AE_RELEASE.md` |
-| `georvq/tessera/` | The Tessera release codec, holding Tessera-specific policy: `v2.py` (the release's `ReleaseSpec`, the geotessera tile reader, `encode_tile`, bundles, the tile index, CLI), `io.py` (`prep` of geotessera arrays). See `docs/TESSERA_RELEASE.md` |
+| `georvq/tessera/` | The Tessera release codec, holding Tessera-specific policy: `v1_1.py` (the release's `ReleaseSpec`, `encode_tile`, bundles, CLI), `tiles.py` (the Tessera v1.1 tile reader over the dClimate Zarr store), `index.py` (the tile index), `io.py` (`prep` of geotessera arrays). See `docs/TESSERA_RELEASE.md` |
 | `georvq/s2/` | The Sentinel-2 L1C release codec: `v1.py` (the release's `ReleaseSpec` on three output grids, the SAFE product reader, `encode_safe`, `reconstruct_safe`, bundles, CLI), `safe.py` (band images, the metadata zip, JPEG 2000 writing, `manifest.safe` checksums), `deblock.py` (the optional client-side seam deblocker, `read_deblocked`), `index.py` (the tile index) |
 | `scripts/` | Thin drivers over the above (train, store builders, eval, release builds); `scripts/viz/` panel/GIF styling and builders |
 | `analysis/` | Source-characterisation and codec-diagnostic probes (`analysis/README.md`) |
@@ -79,7 +79,7 @@ checkpoint exactly.
    same bits, so `model/vq.py`, the quantise paths in
    `codec.py`/`conditioning.py`, and `model/vq_quant.py` are guarded by
    golden tests. `tests/test_ae_v2_bundle.py` and
-   `tests/test_tessera_v2_bundle.py` require the released bundles to
+   `tests/test_tessera_v1_1_bundle.py` require the released bundles to
    reproduce their recorded codes and decoded bits exactly, and skip
    themselves where the bundle is absent. Any change there must keep those tests exact, not
    approximately equal. The recorded hashes hold on torch 2.10 or later
@@ -106,8 +106,8 @@ checkpoint exactly.
    readable even when the code behind them is generalised.
    `tests/test_ae_v2_bundle.py` reads back a golden Zarr tile
    (`tests/golden/ae_v2_tile.georvq.zarr`), and
-   `tests/test_tessera_v2_bundle.py` reads back a golden Tessera store
-   (`tests/golden/tessera_v2_tile.georvq.zarr`). Any other shipped container should be treated the same
+   `tests/test_tessera_v1_1_bundle.py` reads back a golden Tessera store
+   (`tests/golden/tessera_v1_1_tile.georvq.zarr`). Any other shipped container should be treated the same
    way.
 5. VQ state stays fp32 under bf16 autocast. Assignment scores may run in
    bf16 (`vq.bf16_scores`), but residuals, EMA buffers and codebooks must
@@ -146,8 +146,8 @@ python -m georvq.ae.v2 decode tile.georvq.zarr out.npy --quality 8-8-2
 python -m georvq.ae.v2 export-onnx <onnx-dir> --bundle <bundle>   # torch-free decode
 
 # Tessera release codec (georvq/tessera — see docs/TESSERA_RELEASE.md)
-python -m georvq.tessera.v2 bundle <ckpt> <mean_channel.npz> <bundle-dir> --onnx
-python -m georvq.tessera.v2 encode out_dir/ --year 2024 --tile 17.25,46.75 --bundle <bundle>
+python -m georvq.tessera.v1_1 bundle <ckpt> <mean_channel.npz> <bundle-dir> --onnx
+python -m georvq.tessera.v1_1 encode out_dir/ --year 2024 --tile 26.15,44.45 --bundle <bundle>
 ```
 
 `configs/smoke.yaml` runs the pipeline end to end on a synthetic store
@@ -204,7 +204,10 @@ runs.
 - `tessera_vq8_k256_statscond.yaml` was the Tessera beta release's codec
   (since replaced), which is the above with the transmitted patch mean
   added.
-- `tessera_v2.yaml` is the Tessera v2 release codec.
+- `tessera_v2.yaml` is the recipe of the Tessera v2 codec, trained on the
+  Tessera v1 embeddings (since replaced).
+- `tessera_v11.yaml` is that recipe on the Tessera v1.1 store, the
+  Tessera v1.1 release codec.
 - `satclip_select.yaml` trains the selector only, on a frozen codec. The
   variant with 4× codebooks trained from scratch, described in its
   header comment, is an unvalidated research direction. It never trained

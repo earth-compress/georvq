@@ -1,0 +1,1935 @@
+{
+  "attributes": {
+    "georvq": {
+      "codec": {
+        "format": "georvq-tessera/v1.1",
+        "bitstream_id": "74feb29cecbc2ba7",
+        "decoder_id": "09bba7c1316e71ea",
+        "tiers": [
+          "1:256:256:20",
+          "4:256:2048:13",
+          "16:256:4096:12"
+        ],
+        "window": 64,
+        "bands": 128,
+        "min_depths": [
+          4,
+          0,
+          0
+        ],
+        "mean_channel": {
+          "kind": "rotated",
+          "bits": 1280
+        },
+        "release": {
+          "name": "golden",
+          "bitstream_id": "74feb29cecbc2ba7",
+          "decoder_id": "09bba7c1316e71ea",
+          "uri": "hf://earth-compress/georvq-tessera-v1.1",
+          "revision": null
+        }
+      },
+      "product": {
+        "kind": "tessera-tile",
+        "id": "2019/grid_108.35_31.75",
+        "source": "https://data.source.coop/tessera/tessera/zarr/v1.1-dclimate/utm49/embeddings[2,:,582136:582236,8271:8391]",
+        "crs_wkt": "PROJCS[\"WGS 84 / UTM zone 49N\",GEOGCS[\"WGS 84\",DATUM[\"WGS_1984\",SPHEROID[\"WGS 84\",6378137,298.257223563,AUTHORITY[\"EPSG\",\"7030\"]],AUTHORITY[\"EPSG\",\"6326\"]],PRIMEM[\"Greenwich\",0,AUTHORITY[\"EPSG\",\"8901\"]],UNIT[\"degree\",0.0174532925199433,AUTHORITY[\"EPSG\",\"9122\"]],AUTHORITY[\"EPSG\",\"4326\"]],PROJECTION[\"Transverse_Mercator\"],PARAMETER[\"latitude_of_origin\",0],PARAMETER[\"central_meridian\",111],PARAMETER[\"scale_factor\",0.9996],PARAMETER[\"false_easting\",500000],PARAMETER[\"false_northing\",0],UNIT[\"metre\",1,AUTHORITY[\"EPSG\",\"9001\"]],AXIS[\"Easting\",EAST],AXIS[\"Northing\",NORTH],AUTHORITY[\"EPSG\",\"32649\"]]",
+        "epsg": 32649,
+        "transform": [
+          10.0,
+          0.0,
+          246550.0,
+          0.0,
+          -10.0,
+          3517520.0
+        ],
+        "width": 120,
+        "height": 100,
+        "count": 128,
+        "dtype": "int8",
+        "nodata": null,
+        "scale": "float32 per pixel, x = q * scale",
+        "year": 2019,
+        "lon": 108.35,
+        "lat": 31.75,
+        "utm_zone": 49,
+        "zone_window": {
+          "row": 582136,
+          "col": 8271,
+          "height": 100,
+          "width": 120
+        },
+        "embeddings": {
+          "name": "TESSERA",
+          "version": "1.1",
+          "run": "dclimate",
+          "model": "https://geotessera.org/model/1.1",
+          "store": "https://data.source.coop/tessera/tessera/zarr/v1.1-dclimate"
+        },
+        "orientation": "north-up"
+      },
+      "rungs": [
+        {
+          "tuple": [
+            4,
+            0,
+            0
+          ],
+          "bits_window": 1312,
+          "bits_px": 0.3203125
+        },
+        {
+          "tuple": [
+            5,
+            0,
+            0
+          ],
+          "bits_window": 1320,
+          "bits_px": 0.322265625
+        },
+        {
+          "tuple": [
+            6,
+            0,
+            0
+          ],
+          "bits_window": 1328,
+          "bits_px": 0.32421875
+        },
+        {
+          "tuple": [
+            7,
+            0,
+            0
+          ],
+          "bits_window": 1336,
+          "bits_px": 0.326171875
+        },
+        {
+          "tuple": [
+            8,
+            0,
+            0
+          ],
+          "bits_window": 1344,
+          "bits_px": 0.328125
+        },
+        {
+          "tuple": [
+            9,
+            0,
+            0
+          ],
+          "bits_window": 1352,
+          "bits_px": 0.330078125
+        },
+        {
+          "tuple": [
+            10,
+            0,
+            0
+          ],
+          "bits_window": 1360,
+          "bits_px": 0.33203125
+        },
+        {
+          "tuple": [
+            11,
+            0,
+            0
+          ],
+          "bits_window": 1368,
+          "bits_px": 0.333984375
+        },
+        {
+          "tuple": [
+            12,
+            0,
+            0
+          ],
+          "bits_window": 1376,
+          "bits_px": 0.3359375
+        },
+        {
+          "tuple": [
+            13,
+            0,
+            0
+          ],
+          "bits_window": 1384,
+          "bits_px": 0.337890625
+        },
+        {
+          "tuple": [
+            14,
+            0,
+            0
+          ],
+          "bits_window": 1392,
+          "bits_px": 0.33984375
+        },
+        {
+          "tuple": [
+            15,
+            0,
+            0
+          ],
+          "bits_window": 1400,
+          "bits_px": 0.341796875
+        },
+        {
+          "tuple": [
+            16,
+            0,
+            0
+          ],
+          "bits_window": 1408,
+          "bits_px": 0.34375
+        },
+        {
+          "tuple": [
+            17,
+            0,
+            0
+          ],
+          "bits_window": 1416,
+          "bits_px": 0.345703125
+        },
+        {
+          "tuple": [
+            18,
+            0,
+            0
+          ],
+          "bits_window": 1424,
+          "bits_px": 0.34765625
+        },
+        {
+          "tuple": [
+            19,
+            0,
+            0
+          ],
+          "bits_window": 1432,
+          "bits_px": 0.349609375
+        },
+        {
+          "tuple": [
+            20,
+            0,
+            0
+          ],
+          "bits_window": 1440,
+          "bits_px": 0.3515625
+        },
+        {
+          "tuple": [
+            20,
+            1,
+            0
+          ],
+          "bits_window": 1616,
+          "bits_px": 0.39453125
+        },
+        {
+          "tuple": [
+            20,
+            2,
+            0
+          ],
+          "bits_window": 1792,
+          "bits_px": 0.4375
+        },
+        {
+          "tuple": [
+            20,
+            3,
+            0
+          ],
+          "bits_window": 1968,
+          "bits_px": 0.48046875
+        },
+        {
+          "tuple": [
+            20,
+            4,
+            0
+          ],
+          "bits_window": 2144,
+          "bits_px": 0.5234375
+        },
+        {
+          "tuple": [
+            20,
+            5,
+            0
+          ],
+          "bits_window": 2320,
+          "bits_px": 0.56640625
+        },
+        {
+          "tuple": [
+            20,
+            6,
+            0
+          ],
+          "bits_window": 2496,
+          "bits_px": 0.609375
+        },
+        {
+          "tuple": [
+            20,
+            7,
+            0
+          ],
+          "bits_window": 2672,
+          "bits_px": 0.65234375
+        },
+        {
+          "tuple": [
+            20,
+            8,
+            0
+          ],
+          "bits_window": 2848,
+          "bits_px": 0.6953125
+        },
+        {
+          "tuple": [
+            20,
+            9,
+            0
+          ],
+          "bits_window": 3024,
+          "bits_px": 0.73828125
+        },
+        {
+          "tuple": [
+            20,
+            10,
+            0
+          ],
+          "bits_window": 3200,
+          "bits_px": 0.78125
+        },
+        {
+          "tuple": [
+            20,
+            11,
+            0
+          ],
+          "bits_window": 3376,
+          "bits_px": 0.82421875
+        },
+        {
+          "tuple": [
+            20,
+            12,
+            0
+          ],
+          "bits_window": 3552,
+          "bits_px": 0.8671875
+        },
+        {
+          "tuple": [
+            20,
+            13,
+            0
+          ],
+          "bits_window": 3728,
+          "bits_px": 0.91015625
+        },
+        {
+          "tuple": [
+            20,
+            13,
+            1
+          ],
+          "bits_window": 6800,
+          "bits_px": 1.66015625
+        },
+        {
+          "tuple": [
+            20,
+            13,
+            2
+          ],
+          "bits_window": 9872,
+          "bits_px": 2.41015625
+        },
+        {
+          "tuple": [
+            20,
+            13,
+            3
+          ],
+          "bits_window": 12944,
+          "bits_px": 3.16015625
+        },
+        {
+          "tuple": [
+            20,
+            13,
+            4
+          ],
+          "bits_window": 16016,
+          "bits_px": 3.91015625
+        },
+        {
+          "tuple": [
+            20,
+            13,
+            5
+          ],
+          "bits_window": 19088,
+          "bits_px": 4.66015625
+        },
+        {
+          "tuple": [
+            20,
+            13,
+            6
+          ],
+          "bits_window": 22160,
+          "bits_px": 5.41015625
+        },
+        {
+          "tuple": [
+            20,
+            13,
+            7
+          ],
+          "bits_window": 25232,
+          "bits_px": 6.16015625
+        },
+        {
+          "tuple": [
+            20,
+            13,
+            8
+          ],
+          "bits_window": 28304,
+          "bits_px": 6.91015625
+        },
+        {
+          "tuple": [
+            20,
+            13,
+            9
+          ],
+          "bits_window": 31376,
+          "bits_px": 7.66015625
+        },
+        {
+          "tuple": [
+            20,
+            13,
+            10
+          ],
+          "bits_window": 34448,
+          "bits_px": 8.41015625
+        },
+        {
+          "tuple": [
+            20,
+            13,
+            11
+          ],
+          "bits_window": 37520,
+          "bits_px": 9.16015625
+        },
+        {
+          "tuple": [
+            20,
+            13,
+            12
+          ],
+          "bits_window": 40592,
+          "bits_px": 9.91015625
+        }
+      ],
+      "quality": {
+        "column": "quality",
+        "name": "rel_l2",
+        "stats": [
+          "mean",
+          "p99"
+        ],
+        "error": "||decoded - source|| / ||source|| per valid pixel (relative L2 of the 128-band vector), decoded float field against the prepared source",
+        "encoding": "code = ceil(32 * (log10(e) + 6)) clipped to 0..255, so that the value a code stands for is never below e; 0 means e <= 1e-6",
+        "scale": 32.0,
+        "offset": 6.0,
+        "order": "per stat, one byte per rung in header rungs order",
+        "decode_precision": "fp32"
+      },
+      "output": {
+        "dtype": "float32",
+        "nodata": 0.0,
+        "count": 128,
+        "band_names": null
+      },
+      "licence": {
+        "spdx": "CC-BY-SA-4.0",
+        "url": "https://creativecommons.org/licenses/by-sa/4.0/",
+        "attribution": "TESSERA embeddings v1.1, Energy and Environment Group, Department of Computer Science and Technology, University of Cambridge, via geotessera (https://github.com/ucam-eo/geotessera); v1.1 global run produced and hosted by dClimate (https://github.com/dClimate/tessera-embeddings)",
+        "changes": "lossy georvq encoding of the int8 embeddings and their per-pixel scales; the decoded values are approximations"
+      },
+      "format": "georvq-zarr",
+      "version": "0.5",
+      "status": "prototype",
+      "layout": {
+        "window_px": 64,
+        "window_order": "row-major",
+        "groups": [
+          {
+            "kind": "base",
+            "chunk_px": 128,
+            "chunk_windows": 2,
+            "columns": [
+              "base",
+              "mask"
+            ],
+            "chunk_grid": [
+              1,
+              1
+            ],
+            "empty_chunks": []
+          },
+          {
+            "kind": "mid",
+            "chunk_px": 128,
+            "chunk_windows": 2,
+            "columns": [
+              "mid_1",
+              "mid_2",
+              "mid_3",
+              "mid_4",
+              "mid_5",
+              "mid_6",
+              "mid_7",
+              "mid_8",
+              "mid_9",
+              "mid_10",
+              "mid_11",
+              "mid_12",
+              "mid_13"
+            ],
+            "chunk_grid": [
+              1,
+              1
+            ],
+            "empty_chunks": []
+          },
+          {
+            "kind": "fine",
+            "chunk_px": 64,
+            "chunk_windows": 1,
+            "columns": [
+              "fine_1",
+              "fine_2",
+              "fine_3",
+              "fine_4",
+              "fine_5",
+              "fine_6",
+              "fine_7",
+              "fine_8",
+              "fine_9",
+              "fine_10",
+              "fine_11",
+              "fine_12"
+            ],
+            "chunk_grid": [
+              2,
+              2
+            ],
+            "empty_chunks": []
+          },
+          {
+            "kind": "quality",
+            "chunk_px": 128,
+            "chunk_windows": 2,
+            "columns": [
+              "quality"
+            ],
+            "chunk_grid": [
+              1,
+              1
+            ],
+            "empty_chunks": []
+          }
+        ],
+        "mask": {
+          "column": "mask",
+          "kind": "base",
+          "chunks": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        "columns": [
+          {
+            "name": "base",
+            "record_bytes": 180,
+            "fields": [
+              {
+                "name": "rot_0",
+                "count": 2,
+                "bits": 13
+              },
+              {
+                "name": "rot_2",
+                "count": 14,
+                "bits": 12
+              },
+              {
+                "name": "rot_16",
+                "count": 33,
+                "bits": 11
+              },
+              {
+                "name": "rot_49",
+                "count": 34,
+                "bits": 10
+              },
+              {
+                "name": "rot_83",
+                "count": 25,
+                "bits": 9
+              },
+              {
+                "name": "rot_108",
+                "count": 18,
+                "bits": 8
+              },
+              {
+                "name": "rot_126",
+                "count": 2,
+                "bits": 7
+              },
+              {
+                "name": "coarse",
+                "count": 20,
+                "bits": 8
+              }
+            ]
+          },
+          {
+            "name": "mid_1",
+            "record_bytes": 22,
+            "fields": [
+              {
+                "name": "mid",
+                "count": 16,
+                "bits": 11
+              }
+            ]
+          },
+          {
+            "name": "mid_2",
+            "record_bytes": 22,
+            "fields": [
+              {
+                "name": "mid",
+                "count": 16,
+                "bits": 11
+              }
+            ]
+          },
+          {
+            "name": "mid_3",
+            "record_bytes": 22,
+            "fields": [
+              {
+                "name": "mid",
+                "count": 16,
+                "bits": 11
+              }
+            ]
+          },
+          {
+            "name": "mid_4",
+            "record_bytes": 22,
+            "fields": [
+              {
+                "name": "mid",
+                "count": 16,
+                "bits": 11
+              }
+            ]
+          },
+          {
+            "name": "mid_5",
+            "record_bytes": 22,
+            "fields": [
+              {
+                "name": "mid",
+                "count": 16,
+                "bits": 11
+              }
+            ]
+          },
+          {
+            "name": "mid_6",
+            "record_bytes": 22,
+            "fields": [
+              {
+                "name": "mid",
+                "count": 16,
+                "bits": 11
+              }
+            ]
+          },
+          {
+            "name": "mid_7",
+            "record_bytes": 22,
+            "fields": [
+              {
+                "name": "mid",
+                "count": 16,
+                "bits": 11
+              }
+            ]
+          },
+          {
+            "name": "mid_8",
+            "record_bytes": 22,
+            "fields": [
+              {
+                "name": "mid",
+                "count": 16,
+                "bits": 11
+              }
+            ]
+          },
+          {
+            "name": "mid_9",
+            "record_bytes": 22,
+            "fields": [
+              {
+                "name": "mid",
+                "count": 16,
+                "bits": 11
+              }
+            ]
+          },
+          {
+            "name": "mid_10",
+            "record_bytes": 22,
+            "fields": [
+              {
+                "name": "mid",
+                "count": 16,
+                "bits": 11
+              }
+            ]
+          },
+          {
+            "name": "mid_11",
+            "record_bytes": 22,
+            "fields": [
+              {
+                "name": "mid",
+                "count": 16,
+                "bits": 11
+              }
+            ]
+          },
+          {
+            "name": "mid_12",
+            "record_bytes": 22,
+            "fields": [
+              {
+                "name": "mid",
+                "count": 16,
+                "bits": 11
+              }
+            ]
+          },
+          {
+            "name": "mid_13",
+            "record_bytes": 22,
+            "fields": [
+              {
+                "name": "mid",
+                "count": 16,
+                "bits": 11
+              }
+            ]
+          },
+          {
+            "name": "fine_1",
+            "record_bytes": 384,
+            "fields": [
+              {
+                "name": "fine",
+                "count": 256,
+                "bits": 12
+              }
+            ]
+          },
+          {
+            "name": "fine_2",
+            "record_bytes": 384,
+            "fields": [
+              {
+                "name": "fine",
+                "count": 256,
+                "bits": 12
+              }
+            ]
+          },
+          {
+            "name": "fine_3",
+            "record_bytes": 384,
+            "fields": [
+              {
+                "name": "fine",
+                "count": 256,
+                "bits": 12
+              }
+            ]
+          },
+          {
+            "name": "fine_4",
+            "record_bytes": 384,
+            "fields": [
+              {
+                "name": "fine",
+                "count": 256,
+                "bits": 12
+              }
+            ]
+          },
+          {
+            "name": "fine_5",
+            "record_bytes": 384,
+            "fields": [
+              {
+                "name": "fine",
+                "count": 256,
+                "bits": 12
+              }
+            ]
+          },
+          {
+            "name": "fine_6",
+            "record_bytes": 384,
+            "fields": [
+              {
+                "name": "fine",
+                "count": 256,
+                "bits": 12
+              }
+            ]
+          },
+          {
+            "name": "fine_7",
+            "record_bytes": 384,
+            "fields": [
+              {
+                "name": "fine",
+                "count": 256,
+                "bits": 12
+              }
+            ]
+          },
+          {
+            "name": "fine_8",
+            "record_bytes": 384,
+            "fields": [
+              {
+                "name": "fine",
+                "count": 256,
+                "bits": 12
+              }
+            ]
+          },
+          {
+            "name": "fine_9",
+            "record_bytes": 384,
+            "fields": [
+              {
+                "name": "fine",
+                "count": 256,
+                "bits": 12
+              }
+            ]
+          },
+          {
+            "name": "fine_10",
+            "record_bytes": 384,
+            "fields": [
+              {
+                "name": "fine",
+                "count": 256,
+                "bits": 12
+              }
+            ]
+          },
+          {
+            "name": "fine_11",
+            "record_bytes": 384,
+            "fields": [
+              {
+                "name": "fine",
+                "count": 256,
+                "bits": 12
+              }
+            ]
+          },
+          {
+            "name": "fine_12",
+            "record_bytes": 384,
+            "fields": [
+              {
+                "name": "fine",
+                "count": 256,
+                "bits": 12
+              }
+            ]
+          },
+          {
+            "name": "quality",
+            "record_bytes": 84,
+            "fields": [
+              {
+                "name": "mean",
+                "count": 42,
+                "bits": 8
+              },
+              {
+                "name": "p99",
+                "count": 42,
+                "bits": 8
+              }
+            ]
+          }
+        ],
+        "tiers": [
+          {
+            "name": "coarse",
+            "levels": 20,
+            "columns": [
+              "base"
+            ]
+          },
+          {
+            "name": "mid",
+            "levels": 13,
+            "columns": [
+              "mid_1",
+              "mid_2",
+              "mid_3",
+              "mid_4",
+              "mid_5",
+              "mid_6",
+              "mid_7",
+              "mid_8",
+              "mid_9",
+              "mid_10",
+              "mid_11",
+              "mid_12",
+              "mid_13"
+            ]
+          },
+          {
+            "name": "fine",
+            "levels": 12,
+            "columns": [
+              "fine_1",
+              "fine_2",
+              "fine_3",
+              "fine_4",
+              "fine_5",
+              "fine_6",
+              "fine_7",
+              "fine_8",
+              "fine_9",
+              "fine_10",
+              "fine_11",
+              "fine_12"
+            ]
+          }
+        ],
+        "window_grid": [
+          2,
+          2
+        ],
+        "product_px": [
+          100,
+          120
+        ]
+      }
+    },
+    "georvq_aux": null,
+    "zarr_conventions": [
+      {
+        "schema_url": "https://raw.githubusercontent.com/zarr-conventions/proj/refs/tags/v0.1/schema.json",
+        "spec_url": "https://github.com/zarr-conventions/proj/blob/v0.1/README.md",
+        "uuid": "f17cb550-5864-4468-aeb7-f3180cfb622f",
+        "name": "proj",
+        "description": "Coordinate reference system information for geospatial data"
+      },
+      {
+        "schema_url": "https://raw.githubusercontent.com/zarr-conventions/spatial/refs/tags/v0.1/schema.json",
+        "spec_url": "https://github.com/zarr-conventions/spatial/blob/v0.1/README.md",
+        "uuid": "689b58e2-cf7b-45e0-9fff-9cfc0883d6b4",
+        "name": "spatial",
+        "description": "Spatial coordinate information"
+      }
+    ],
+    "proj:code": "EPSG:32649",
+    "proj:wkt2": "PROJCRS[\"WGS 84 / UTM zone 49N\",BASEGEOGCRS[\"WGS 84\",DATUM[\"World Geodetic System 1984\",ELLIPSOID[\"WGS 84\",6378137,298.257223563,LENGTHUNIT[\"metre\",1]]],PRIMEM[\"Greenwich\",0,ANGLEUNIT[\"degree\",0.0174532925199433]],ID[\"EPSG\",4326]],CONVERSION[\"UTM zone 49N\",METHOD[\"Transverse Mercator\",ID[\"EPSG\",9807]],PARAMETER[\"Latitude of natural origin\",0,ANGLEUNIT[\"degree\",0.0174532925199433],ID[\"EPSG\",8801]],PARAMETER[\"Longitude of natural origin\",111,ANGLEUNIT[\"degree\",0.0174532925199433],ID[\"EPSG\",8802]],PARAMETER[\"Scale factor at natural origin\",0.9996,SCALEUNIT[\"unity\",1],ID[\"EPSG\",8805]],PARAMETER[\"False easting\",500000,LENGTHUNIT[\"metre\",1],ID[\"EPSG\",8806]],PARAMETER[\"False northing\",0,LENGTHUNIT[\"metre\",1],ID[\"EPSG\",8807]]],CS[Cartesian,2],AXIS[\"easting\",east,ORDER[1],LENGTHUNIT[\"metre\",1]],AXIS[\"northing\",north,ORDER[2],LENGTHUNIT[\"metre\",1]],ID[\"EPSG\",32649]]",
+    "spatial:dimensions": [
+      "y",
+      "x"
+    ],
+    "spatial:shape": [
+      100,
+      120
+    ],
+    "spatial:transform": [
+      10.0,
+      0.0,
+      246550.0,
+      0.0,
+      -10.0,
+      3517520.0
+    ],
+    "spatial:bbox": [
+      246550.0,
+      3516520.0,
+      247750.0,
+      3517520.0
+    ],
+    "spatial:registration": "pixel"
+  },
+  "zarr_format": 3,
+  "consolidated_metadata": {
+    "kind": "inline",
+    "must_understand": false,
+    "metadata": {
+      "base": {
+        "shape": [
+          2,
+          2,
+          180
+        ],
+        "data_type": "uint8",
+        "chunk_grid": {
+          "name": "regular",
+          "configuration": {
+            "chunk_shape": [
+              2,
+              2,
+              180
+            ]
+          }
+        },
+        "chunk_key_encoding": {
+          "name": "default",
+          "configuration": {
+            "separator": "/"
+          }
+        },
+        "fill_value": 0,
+        "codecs": [
+          {
+            "name": "bytes"
+          },
+          {
+            "name": "zstd",
+            "configuration": {
+              "level": 19,
+              "checksum": false
+            }
+          }
+        ],
+        "attributes": {
+          "zarr_conventions": [
+            {
+              "schema_url": "https://raw.githubusercontent.com/zarr-conventions/proj/refs/tags/v0.1/schema.json",
+              "spec_url": "https://github.com/zarr-conventions/proj/blob/v0.1/README.md",
+              "uuid": "f17cb550-5864-4468-aeb7-f3180cfb622f",
+              "name": "proj",
+              "description": "Coordinate reference system information for geospatial data"
+            },
+            {
+              "schema_url": "https://raw.githubusercontent.com/zarr-conventions/spatial/refs/tags/v0.1/schema.json",
+              "spec_url": "https://github.com/zarr-conventions/spatial/blob/v0.1/README.md",
+              "uuid": "689b58e2-cf7b-45e0-9fff-9cfc0883d6b4",
+              "name": "spatial",
+              "description": "Spatial coordinate information"
+            }
+          ],
+          "proj:code": "EPSG:32649",
+          "spatial:dimensions": [
+            "wy",
+            "wx"
+          ],
+          "spatial:shape": [
+            2,
+            2
+          ],
+          "spatial:transform": [
+            640.0,
+            0.0,
+            246550.0,
+            0.0,
+            -640.0,
+            3517520.0
+          ],
+          "spatial:bbox": [
+            246550.0,
+            3516240.0,
+            247830.0,
+            3517520.0
+          ],
+          "spatial:registration": "pixel"
+        },
+        "dimension_names": [
+          "wy",
+          "wx",
+          "base_byte"
+        ],
+        "zarr_format": 3,
+        "node_type": "array",
+        "storage_transformers": []
+      },
+      "fine": {
+        "shape": [
+          2,
+          2,
+          12,
+          384
+        ],
+        "data_type": "uint8",
+        "chunk_grid": {
+          "name": "regular",
+          "configuration": {
+            "chunk_shape": [
+              2,
+              2,
+              12,
+              384
+            ]
+          }
+        },
+        "chunk_key_encoding": {
+          "name": "default",
+          "configuration": {
+            "separator": "/"
+          }
+        },
+        "fill_value": 0,
+        "codecs": [
+          {
+            "name": "sharding_indexed",
+            "configuration": {
+              "chunk_shape": [
+                1,
+                1,
+                1,
+                384
+              ],
+              "codecs": [
+                {
+                  "name": "bytes"
+                },
+                {
+                  "name": "zstd",
+                  "configuration": {
+                    "level": 19,
+                    "checksum": false
+                  }
+                }
+              ],
+              "index_codecs": [
+                {
+                  "name": "bytes",
+                  "configuration": {
+                    "endian": "little"
+                  }
+                },
+                {
+                  "name": "crc32c"
+                }
+              ],
+              "index_location": "end"
+            }
+          }
+        ],
+        "attributes": {
+          "zarr_conventions": [
+            {
+              "schema_url": "https://raw.githubusercontent.com/zarr-conventions/proj/refs/tags/v0.1/schema.json",
+              "spec_url": "https://github.com/zarr-conventions/proj/blob/v0.1/README.md",
+              "uuid": "f17cb550-5864-4468-aeb7-f3180cfb622f",
+              "name": "proj",
+              "description": "Coordinate reference system information for geospatial data"
+            },
+            {
+              "schema_url": "https://raw.githubusercontent.com/zarr-conventions/spatial/refs/tags/v0.1/schema.json",
+              "spec_url": "https://github.com/zarr-conventions/spatial/blob/v0.1/README.md",
+              "uuid": "689b58e2-cf7b-45e0-9fff-9cfc0883d6b4",
+              "name": "spatial",
+              "description": "Spatial coordinate information"
+            }
+          ],
+          "proj:code": "EPSG:32649",
+          "spatial:dimensions": [
+            "wy",
+            "wx"
+          ],
+          "spatial:shape": [
+            2,
+            2
+          ],
+          "spatial:transform": [
+            640.0,
+            0.0,
+            246550.0,
+            0.0,
+            -640.0,
+            3517520.0
+          ],
+          "spatial:bbox": [
+            246550.0,
+            3516240.0,
+            247830.0,
+            3517520.0
+          ],
+          "spatial:registration": "pixel"
+        },
+        "dimension_names": [
+          "wy",
+          "wx",
+          "fine_level",
+          "fine_byte"
+        ],
+        "zarr_format": 3,
+        "node_type": "array",
+        "storage_transformers": []
+      },
+      "mask": {
+        "shape": [
+          100,
+          120
+        ],
+        "data_type": "bool",
+        "chunk_grid": {
+          "name": "regular",
+          "configuration": {
+            "chunk_shape": [
+              128,
+              128
+            ]
+          }
+        },
+        "chunk_key_encoding": {
+          "name": "default",
+          "configuration": {
+            "separator": "/"
+          }
+        },
+        "fill_value": true,
+        "codecs": [
+          {
+            "name": "bytes"
+          },
+          {
+            "name": "zstd",
+            "configuration": {
+              "level": 19,
+              "checksum": false
+            }
+          }
+        ],
+        "attributes": {
+          "zarr_conventions": [
+            {
+              "schema_url": "https://raw.githubusercontent.com/zarr-conventions/proj/refs/tags/v0.1/schema.json",
+              "spec_url": "https://github.com/zarr-conventions/proj/blob/v0.1/README.md",
+              "uuid": "f17cb550-5864-4468-aeb7-f3180cfb622f",
+              "name": "proj",
+              "description": "Coordinate reference system information for geospatial data"
+            },
+            {
+              "schema_url": "https://raw.githubusercontent.com/zarr-conventions/spatial/refs/tags/v0.1/schema.json",
+              "spec_url": "https://github.com/zarr-conventions/spatial/blob/v0.1/README.md",
+              "uuid": "689b58e2-cf7b-45e0-9fff-9cfc0883d6b4",
+              "name": "spatial",
+              "description": "Spatial coordinate information"
+            }
+          ],
+          "proj:code": "EPSG:32649",
+          "spatial:dimensions": [
+            "y",
+            "x"
+          ],
+          "spatial:shape": [
+            100,
+            120
+          ],
+          "spatial:transform": [
+            10.0,
+            0.0,
+            246550.0,
+            0.0,
+            -10.0,
+            3517520.0
+          ],
+          "spatial:bbox": [
+            246550.0,
+            3516520.0,
+            247750.0,
+            3517520.0
+          ],
+          "spatial:registration": "pixel"
+        },
+        "dimension_names": [
+          "y",
+          "x"
+        ],
+        "zarr_format": 3,
+        "node_type": "array",
+        "storage_transformers": []
+      },
+      "mid": {
+        "shape": [
+          2,
+          2,
+          13,
+          22
+        ],
+        "data_type": "uint8",
+        "chunk_grid": {
+          "name": "regular",
+          "configuration": {
+            "chunk_shape": [
+              2,
+              2,
+              13,
+              22
+            ]
+          }
+        },
+        "chunk_key_encoding": {
+          "name": "default",
+          "configuration": {
+            "separator": "/"
+          }
+        },
+        "fill_value": 0,
+        "codecs": [
+          {
+            "name": "sharding_indexed",
+            "configuration": {
+              "chunk_shape": [
+                2,
+                2,
+                1,
+                22
+              ],
+              "codecs": [
+                {
+                  "name": "bytes"
+                },
+                {
+                  "name": "zstd",
+                  "configuration": {
+                    "level": 19,
+                    "checksum": false
+                  }
+                }
+              ],
+              "index_codecs": [
+                {
+                  "name": "bytes",
+                  "configuration": {
+                    "endian": "little"
+                  }
+                },
+                {
+                  "name": "crc32c"
+                }
+              ],
+              "index_location": "end"
+            }
+          }
+        ],
+        "attributes": {
+          "zarr_conventions": [
+            {
+              "schema_url": "https://raw.githubusercontent.com/zarr-conventions/proj/refs/tags/v0.1/schema.json",
+              "spec_url": "https://github.com/zarr-conventions/proj/blob/v0.1/README.md",
+              "uuid": "f17cb550-5864-4468-aeb7-f3180cfb622f",
+              "name": "proj",
+              "description": "Coordinate reference system information for geospatial data"
+            },
+            {
+              "schema_url": "https://raw.githubusercontent.com/zarr-conventions/spatial/refs/tags/v0.1/schema.json",
+              "spec_url": "https://github.com/zarr-conventions/spatial/blob/v0.1/README.md",
+              "uuid": "689b58e2-cf7b-45e0-9fff-9cfc0883d6b4",
+              "name": "spatial",
+              "description": "Spatial coordinate information"
+            }
+          ],
+          "proj:code": "EPSG:32649",
+          "spatial:dimensions": [
+            "wy",
+            "wx"
+          ],
+          "spatial:shape": [
+            2,
+            2
+          ],
+          "spatial:transform": [
+            640.0,
+            0.0,
+            246550.0,
+            0.0,
+            -640.0,
+            3517520.0
+          ],
+          "spatial:bbox": [
+            246550.0,
+            3516240.0,
+            247830.0,
+            3517520.0
+          ],
+          "spatial:registration": "pixel"
+        },
+        "dimension_names": [
+          "wy",
+          "wx",
+          "mid_level",
+          "mid_byte"
+        ],
+        "zarr_format": 3,
+        "node_type": "array",
+        "storage_transformers": []
+      },
+      "quality": {
+        "attributes": {
+          "decoders": [
+            "09bba7c1316e71ea"
+          ]
+        },
+        "zarr_format": 3,
+        "consolidated_metadata": {
+          "kind": "inline",
+          "must_understand": false,
+          "metadata": {}
+        },
+        "node_type": "group"
+      },
+      "quality/09bba7c1316e71ea": {
+        "shape": [
+          2,
+          2,
+          84
+        ],
+        "data_type": "uint8",
+        "chunk_grid": {
+          "name": "regular",
+          "configuration": {
+            "chunk_shape": [
+              2,
+              2,
+              84
+            ]
+          }
+        },
+        "chunk_key_encoding": {
+          "name": "default",
+          "configuration": {
+            "separator": "/"
+          }
+        },
+        "fill_value": 0,
+        "codecs": [
+          {
+            "name": "bytes"
+          },
+          {
+            "name": "zstd",
+            "configuration": {
+              "level": 19,
+              "checksum": false
+            }
+          }
+        ],
+        "attributes": {
+          "zarr_conventions": [
+            {
+              "schema_url": "https://raw.githubusercontent.com/zarr-conventions/proj/refs/tags/v0.1/schema.json",
+              "spec_url": "https://github.com/zarr-conventions/proj/blob/v0.1/README.md",
+              "uuid": "f17cb550-5864-4468-aeb7-f3180cfb622f",
+              "name": "proj",
+              "description": "Coordinate reference system information for geospatial data"
+            },
+            {
+              "schema_url": "https://raw.githubusercontent.com/zarr-conventions/spatial/refs/tags/v0.1/schema.json",
+              "spec_url": "https://github.com/zarr-conventions/spatial/blob/v0.1/README.md",
+              "uuid": "689b58e2-cf7b-45e0-9fff-9cfc0883d6b4",
+              "name": "spatial",
+              "description": "Spatial coordinate information"
+            }
+          ],
+          "proj:code": "EPSG:32649",
+          "spatial:dimensions": [
+            "wy",
+            "wx"
+          ],
+          "spatial:shape": [
+            2,
+            2
+          ],
+          "spatial:transform": [
+            640.0,
+            0.0,
+            246550.0,
+            0.0,
+            -640.0,
+            3517520.0
+          ],
+          "spatial:bbox": [
+            246550.0,
+            3516240.0,
+            247830.0,
+            3517520.0
+          ],
+          "spatial:registration": "pixel",
+          "georvq_quality": {
+            "decoder_id": "09bba7c1316e71ea",
+            "bitstream_id": "74feb29cecbc2ba7",
+            "release": {
+              "name": "golden",
+              "bitstream_id": "74feb29cecbc2ba7",
+              "decoder_id": "09bba7c1316e71ea",
+              "uri": "hf://earth-compress/georvq-tessera-v1.1",
+              "revision": null
+            },
+            "rungs": [
+              {
+                "tuple": [
+                  4,
+                  0,
+                  0
+                ],
+                "bits_window": 1312,
+                "bits_px": 0.3203125
+              },
+              {
+                "tuple": [
+                  5,
+                  0,
+                  0
+                ],
+                "bits_window": 1320,
+                "bits_px": 0.322265625
+              },
+              {
+                "tuple": [
+                  6,
+                  0,
+                  0
+                ],
+                "bits_window": 1328,
+                "bits_px": 0.32421875
+              },
+              {
+                "tuple": [
+                  7,
+                  0,
+                  0
+                ],
+                "bits_window": 1336,
+                "bits_px": 0.326171875
+              },
+              {
+                "tuple": [
+                  8,
+                  0,
+                  0
+                ],
+                "bits_window": 1344,
+                "bits_px": 0.328125
+              },
+              {
+                "tuple": [
+                  9,
+                  0,
+                  0
+                ],
+                "bits_window": 1352,
+                "bits_px": 0.330078125
+              },
+              {
+                "tuple": [
+                  10,
+                  0,
+                  0
+                ],
+                "bits_window": 1360,
+                "bits_px": 0.33203125
+              },
+              {
+                "tuple": [
+                  11,
+                  0,
+                  0
+                ],
+                "bits_window": 1368,
+                "bits_px": 0.333984375
+              },
+              {
+                "tuple": [
+                  12,
+                  0,
+                  0
+                ],
+                "bits_window": 1376,
+                "bits_px": 0.3359375
+              },
+              {
+                "tuple": [
+                  13,
+                  0,
+                  0
+                ],
+                "bits_window": 1384,
+                "bits_px": 0.337890625
+              },
+              {
+                "tuple": [
+                  14,
+                  0,
+                  0
+                ],
+                "bits_window": 1392,
+                "bits_px": 0.33984375
+              },
+              {
+                "tuple": [
+                  15,
+                  0,
+                  0
+                ],
+                "bits_window": 1400,
+                "bits_px": 0.341796875
+              },
+              {
+                "tuple": [
+                  16,
+                  0,
+                  0
+                ],
+                "bits_window": 1408,
+                "bits_px": 0.34375
+              },
+              {
+                "tuple": [
+                  17,
+                  0,
+                  0
+                ],
+                "bits_window": 1416,
+                "bits_px": 0.345703125
+              },
+              {
+                "tuple": [
+                  18,
+                  0,
+                  0
+                ],
+                "bits_window": 1424,
+                "bits_px": 0.34765625
+              },
+              {
+                "tuple": [
+                  19,
+                  0,
+                  0
+                ],
+                "bits_window": 1432,
+                "bits_px": 0.349609375
+              },
+              {
+                "tuple": [
+                  20,
+                  0,
+                  0
+                ],
+                "bits_window": 1440,
+                "bits_px": 0.3515625
+              },
+              {
+                "tuple": [
+                  20,
+                  1,
+                  0
+                ],
+                "bits_window": 1616,
+                "bits_px": 0.39453125
+              },
+              {
+                "tuple": [
+                  20,
+                  2,
+                  0
+                ],
+                "bits_window": 1792,
+                "bits_px": 0.4375
+              },
+              {
+                "tuple": [
+                  20,
+                  3,
+                  0
+                ],
+                "bits_window": 1968,
+                "bits_px": 0.48046875
+              },
+              {
+                "tuple": [
+                  20,
+                  4,
+                  0
+                ],
+                "bits_window": 2144,
+                "bits_px": 0.5234375
+              },
+              {
+                "tuple": [
+                  20,
+                  5,
+                  0
+                ],
+                "bits_window": 2320,
+                "bits_px": 0.56640625
+              },
+              {
+                "tuple": [
+                  20,
+                  6,
+                  0
+                ],
+                "bits_window": 2496,
+                "bits_px": 0.609375
+              },
+              {
+                "tuple": [
+                  20,
+                  7,
+                  0
+                ],
+                "bits_window": 2672,
+                "bits_px": 0.65234375
+              },
+              {
+                "tuple": [
+                  20,
+                  8,
+                  0
+                ],
+                "bits_window": 2848,
+                "bits_px": 0.6953125
+              },
+              {
+                "tuple": [
+                  20,
+                  9,
+                  0
+                ],
+                "bits_window": 3024,
+                "bits_px": 0.73828125
+              },
+              {
+                "tuple": [
+                  20,
+                  10,
+                  0
+                ],
+                "bits_window": 3200,
+                "bits_px": 0.78125
+              },
+              {
+                "tuple": [
+                  20,
+                  11,
+                  0
+                ],
+                "bits_window": 3376,
+                "bits_px": 0.82421875
+              },
+              {
+                "tuple": [
+                  20,
+                  12,
+                  0
+                ],
+                "bits_window": 3552,
+                "bits_px": 0.8671875
+              },
+              {
+                "tuple": [
+                  20,
+                  13,
+                  0
+                ],
+                "bits_window": 3728,
+                "bits_px": 0.91015625
+              },
+              {
+                "tuple": [
+                  20,
+                  13,
+                  1
+                ],
+                "bits_window": 6800,
+                "bits_px": 1.66015625
+              },
+              {
+                "tuple": [
+                  20,
+                  13,
+                  2
+                ],
+                "bits_window": 9872,
+                "bits_px": 2.41015625
+              },
+              {
+                "tuple": [
+                  20,
+                  13,
+                  3
+                ],
+                "bits_window": 12944,
+                "bits_px": 3.16015625
+              },
+              {
+                "tuple": [
+                  20,
+                  13,
+                  4
+                ],
+                "bits_window": 16016,
+                "bits_px": 3.91015625
+              },
+              {
+                "tuple": [
+                  20,
+                  13,
+                  5
+                ],
+                "bits_window": 19088,
+                "bits_px": 4.66015625
+              },
+              {
+                "tuple": [
+                  20,
+                  13,
+                  6
+                ],
+                "bits_window": 22160,
+                "bits_px": 5.41015625
+              },
+              {
+                "tuple": [
+                  20,
+                  13,
+                  7
+                ],
+                "bits_window": 25232,
+                "bits_px": 6.16015625
+              },
+              {
+                "tuple": [
+                  20,
+                  13,
+                  8
+                ],
+                "bits_window": 28304,
+                "bits_px": 6.91015625
+              },
+              {
+                "tuple": [
+                  20,
+                  13,
+                  9
+                ],
+                "bits_window": 31376,
+                "bits_px": 7.66015625
+              },
+              {
+                "tuple": [
+                  20,
+                  13,
+                  10
+                ],
+                "bits_window": 34448,
+                "bits_px": 8.41015625
+              },
+              {
+                "tuple": [
+                  20,
+                  13,
+                  11
+                ],
+                "bits_window": 37520,
+                "bits_px": 9.16015625
+              },
+              {
+                "tuple": [
+                  20,
+                  13,
+                  12
+                ],
+                "bits_window": 40592,
+                "bits_px": 9.91015625
+              }
+            ],
+            "fields": [
+              {
+                "name": "mean",
+                "count": 42,
+                "bits": 8
+              },
+              {
+                "name": "p99",
+                "count": 42,
+                "bits": 8
+              }
+            ],
+            "quality": {
+              "name": "rel_l2",
+              "stats": [
+                "mean",
+                "p99"
+              ],
+              "error": "||decoded - source|| / ||source|| per valid pixel (relative L2 of the 128-band vector), decoded float field against the prepared source",
+              "encoding": "code = ceil(32 * (log10(e) + 6)) clipped to 0..255, so that the value a code stands for is never below e; 0 means e <= 1e-6",
+              "scale": 32.0,
+              "offset": 6.0,
+              "order": "per stat, one byte per rung in header rungs order",
+              "decode_precision": "fp32"
+            }
+          }
+        },
+        "dimension_names": [
+          "wy",
+          "wx",
+          "quality_byte"
+        ],
+        "zarr_format": 3,
+        "node_type": "array",
+        "storage_transformers": []
+      }
+    }
+  },
+  "node_type": "group"
+}

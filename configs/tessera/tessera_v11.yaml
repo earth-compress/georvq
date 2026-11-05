@@ -1,0 +1,9 @@
+# Tessera v1.1: the Tessera v2 recipe (tessera_v2.yaml) trained on the
+# Tessera v1.1 chip store, the embeddings of the global run produced by
+# dClimate, which are a different embedding space from v1's. The released
+# georvq-tessera-v1.1 codec is this run (tessera_v11) at step 133,000.
+inherit: tessera_v2.yaml
+data:
+  store_dir: /data/tessera-samples-v11/chips_512
+log:
+  run_tag: tessera_v11

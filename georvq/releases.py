@@ -22,7 +22,7 @@ import os
 
 RELEASES = {
     "georvq-ae/v2": "georvq.ae.v2",
-    "georvq-tessera/v2": "georvq.tessera.v2",
+    "georvq-tessera/v1.1": "georvq.tessera.v1_1",
     "georvq-s2/v1": "georvq.s2.v1",
 }
 

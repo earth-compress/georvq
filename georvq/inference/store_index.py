@@ -6,7 +6,8 @@ columns (`CORE`) are the same for every release and are computed here
 from each store's metadata and stored sizes; the release layer then
 appends the row of the source collection's own index for the product
 the store codes (georvq.ae.index matches source.coop's
-`aef_index.parquet`, georvq.tessera.v2 geotessera's manifest). The
+`aef_index.parquet`; georvq.s2.index and georvq.tessera.index take
+their columns from the store headers). The
 core columns are:
 
 - `path`: the store, as a URL or a path relative to the index;
