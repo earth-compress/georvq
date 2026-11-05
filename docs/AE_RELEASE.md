@@ -189,7 +189,7 @@ tiles" is closer to what a data user will see. It is the int8
 reconstruction against the int8 source over the valid pixels of 16
 held-out 8192 px tiles, pixel-weighted. The tiles span 2018-2025,
 latitudes -75 to 75 and valid fractions from 0.51 to 1.00, and at full
-depth they range from 0.9963 to 0.9998.
+depth they range from 0.9964 to 0.9998.
 
 | rung | bits/window | b/px | val cos | real tiles |
 |---|---|---|---|---|
