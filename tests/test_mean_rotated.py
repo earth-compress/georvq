@@ -99,3 +99,31 @@ def test_fit_pca_allocates_the_budget_and_never_clips():
     assert not ch.clipped(far).any() and not ch.clipped(x[5000:]).any()
     e = np.linalg.norm(ch.round_trip(x[5000:]) - x[5000:], axis=1)
     assert np.median(e) < 0.02
+
+
+def test_fit_pca_box_bounds_every_value_in_the_box():
+    """With `box`, each component's range is the exact image of the box
+    [-b, b]^D under the stored rotation: corners of the box reach it and
+    nothing inside clips."""
+    rng = np.random.default_rng(6)
+    d, b = 6, 0.5
+    x = np.clip(0.05 + 0.04 * rng.normal(size=(5000, d))
+                @ rng.normal(size=(d, d)), -b, b)
+    ch = RotatedChannel.fit_pca(x[:4000], x[4000:], total_bits=8 * d, box=b)
+    assert ch.cost_bits() == 8 * d
+    for k in range(d):
+        for sign, end in ((1, ch.hi), (-1, ch.lo)):
+            corner = sign * np.sign(ch.V[:, k]).astype(np.float64) * b
+            assert ch.rotate(corner[None])[0, k] == pytest.approx(end[k],
+                                                                 abs=1e-9)
+            assert not ch.clipped(corner[None]).any()
+            assert ch.clipped(1.01 * corner[None])[0, k]
+    inside = rng.uniform(-b, b, size=(5000, d))
+    assert not ch.clipped(inside).any() and not ch.clipped(x).any()
+    e = np.linalg.norm(ch.round_trip(x) - x, axis=1)
+    assert np.median(e) < 0.01
+    # a per-value bound may differ between values
+    bb = np.linspace(0.3, 0.8, d)
+    ch2 = RotatedChannel.fit_pca(x[:4000], x[4000:], 8 * d, box=bb)
+    corner = np.sign(ch2.V[:, 0]).astype(np.float64) * bb
+    assert ch2.rotate(corner[None])[0, 0] == pytest.approx(ch2.hi[0], abs=1e-9)

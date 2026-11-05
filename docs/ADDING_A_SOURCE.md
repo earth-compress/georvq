@@ -189,8 +189,8 @@ quickest way to see which decisions are policy rather than architecture:
 
 | | AlphaEarth (`georvq/ae/`) | Tessera (`georvq/tessera/`) |
 |---|---|---|
-| container | one Zarr store per source tile | one Zarr store per geotessera tile |
-| stats channel | the window mean, 440 bits/window (RVQ + PCA), charged | the window mean, 896 bits/window (RVQ + PCA), charged |
+| container | one Zarr store per source tile | one Zarr store per Tessera v1.1 tile |
+| stats channel | the window mean, 672 bits/window (rotated, fixed range), charged | the window mean, 1280 bits/window (rotated, fixed range), charged |
 | refinement | none | none (the beta release had a fine-tier one, 1-bit rotated Lloyd, opt-in, +150% rate) |
 | quality control | encode-time measured error ladder (`1 - cos`) | encode-time measured error ladder (relative L2) |
 

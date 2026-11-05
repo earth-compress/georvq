@@ -183,7 +183,7 @@ def test_loads_a_meta_with_the_requested_opset(exported, tmp_path):
 
 PUBLISHED_ONNX = os.environ.get(
     "GEORVQ_AE_V2_ONNX",
-    "/home/ali/projects/georvq/scratch/ae-v2/bundle_v2_hf/onnx")
+    "/data/georvq-releases/ae-v2-channel/bundle/onnx")
 
 
 def test_published_ae_v2_export_still_loads():
@@ -192,8 +192,8 @@ def test_published_ae_v2_export_still_loads():
                     "(set GEORVQ_AE_V2_ONNX)")
     from georvq.ae.v2 import AEV2OnnxCodec
     c = AEV2OnnxCodec(PUBLISHED_ONNX, threads=4)
-    assert c.ort.meta["opset"] == 17
-    assert c.ort.meta["graph_opsets"] == {"encoder": 17, "decoder": 18}
+    assert c.ort.meta["opset"] == 18
+    assert c.ort.meta["graph_opsets"] == {"encoder": 18, "decoder": 18}
     n = 2
     valid = np.ones((n, c.window, c.window), bool)
     base = np.zeros((n, c.n_mean + c.specs[0].depth * c.specs[0].cells),

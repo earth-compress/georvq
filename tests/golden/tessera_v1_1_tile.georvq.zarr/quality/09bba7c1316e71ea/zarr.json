@@ -1,0 +1,503 @@
+{
+  "shape": [
+    2,
+    2,
+    84
+  ],
+  "data_type": "uint8",
+  "chunk_grid": {
+    "name": "regular",
+    "configuration": {
+      "chunk_shape": [
+        2,
+        2,
+        84
+      ]
+    }
+  },
+  "chunk_key_encoding": {
+    "name": "default",
+    "configuration": {
+      "separator": "/"
+    }
+  },
+  "fill_value": 0,
+  "codecs": [
+    {
+      "name": "bytes"
+    },
+    {
+      "name": "zstd",
+      "configuration": {
+        "level": 19,
+        "checksum": false
+      }
+    }
+  ],
+  "attributes": {
+    "zarr_conventions": [
+      {
+        "schema_url": "https://raw.githubusercontent.com/zarr-conventions/proj/refs/tags/v0.1/schema.json",
+        "spec_url": "https://github.com/zarr-conventions/proj/blob/v0.1/README.md",
+        "uuid": "f17cb550-5864-4468-aeb7-f3180cfb622f",
+        "name": "proj",
+        "description": "Coordinate reference system information for geospatial data"
+      },
+      {
+        "schema_url": "https://raw.githubusercontent.com/zarr-conventions/spatial/refs/tags/v0.1/schema.json",
+        "spec_url": "https://github.com/zarr-conventions/spatial/blob/v0.1/README.md",
+        "uuid": "689b58e2-cf7b-45e0-9fff-9cfc0883d6b4",
+        "name": "spatial",
+        "description": "Spatial coordinate information"
+      }
+    ],
+    "proj:code": "EPSG:32649",
+    "spatial:dimensions": [
+      "wy",
+      "wx"
+    ],
+    "spatial:shape": [
+      2,
+      2
+    ],
+    "spatial:transform": [
+      640.0,
+      0.0,
+      246550.0,
+      0.0,
+      -640.0,
+      3517520.0
+    ],
+    "spatial:bbox": [
+      246550.0,
+      3516240.0,
+      247830.0,
+      3517520.0
+    ],
+    "spatial:registration": "pixel",
+    "georvq_quality": {
+      "decoder_id": "09bba7c1316e71ea",
+      "bitstream_id": "74feb29cecbc2ba7",
+      "release": {
+        "name": "golden",
+        "bitstream_id": "74feb29cecbc2ba7",
+        "decoder_id": "09bba7c1316e71ea",
+        "uri": "hf://earth-compress/georvq-tessera-v1.1",
+        "revision": null
+      },
+      "rungs": [
+        {
+          "tuple": [
+            4,
+            0,
+            0
+          ],
+          "bits_window": 1312,
+          "bits_px": 0.3203125
+        },
+        {
+          "tuple": [
+            5,
+            0,
+            0
+          ],
+          "bits_window": 1320,
+          "bits_px": 0.322265625
+        },
+        {
+          "tuple": [
+            6,
+            0,
+            0
+          ],
+          "bits_window": 1328,
+          "bits_px": 0.32421875
+        },
+        {
+          "tuple": [
+            7,
+            0,
+            0
+          ],
+          "bits_window": 1336,
+          "bits_px": 0.326171875
+        },
+        {
+          "tuple": [
+            8,
+            0,
+            0
+          ],
+          "bits_window": 1344,
+          "bits_px": 0.328125
+        },
+        {
+          "tuple": [
+            9,
+            0,
+            0
+          ],
+          "bits_window": 1352,
+          "bits_px": 0.330078125
+        },
+        {
+          "tuple": [
+            10,
+            0,
+            0
+          ],
+          "bits_window": 1360,
+          "bits_px": 0.33203125
+        },
+        {
+          "tuple": [
+            11,
+            0,
+            0
+          ],
+          "bits_window": 1368,
+          "bits_px": 0.333984375
+        },
+        {
+          "tuple": [
+            12,
+            0,
+            0
+          ],
+          "bits_window": 1376,
+          "bits_px": 0.3359375
+        },
+        {
+          "tuple": [
+            13,
+            0,
+            0
+          ],
+          "bits_window": 1384,
+          "bits_px": 0.337890625
+        },
+        {
+          "tuple": [
+            14,
+            0,
+            0
+          ],
+          "bits_window": 1392,
+          "bits_px": 0.33984375
+        },
+        {
+          "tuple": [
+            15,
+            0,
+            0
+          ],
+          "bits_window": 1400,
+          "bits_px": 0.341796875
+        },
+        {
+          "tuple": [
+            16,
+            0,
+            0
+          ],
+          "bits_window": 1408,
+          "bits_px": 0.34375
+        },
+        {
+          "tuple": [
+            17,
+            0,
+            0
+          ],
+          "bits_window": 1416,
+          "bits_px": 0.345703125
+        },
+        {
+          "tuple": [
+            18,
+            0,
+            0
+          ],
+          "bits_window": 1424,
+          "bits_px": 0.34765625
+        },
+        {
+          "tuple": [
+            19,
+            0,
+            0
+          ],
+          "bits_window": 1432,
+          "bits_px": 0.349609375
+        },
+        {
+          "tuple": [
+            20,
+            0,
+            0
+          ],
+          "bits_window": 1440,
+          "bits_px": 0.3515625
+        },
+        {
+          "tuple": [
+            20,
+            1,
+            0
+          ],
+          "bits_window": 1616,
+          "bits_px": 0.39453125
+        },
+        {
+          "tuple": [
+            20,
+            2,
+            0
+          ],
+          "bits_window": 1792,
+          "bits_px": 0.4375
+        },
+        {
+          "tuple": [
+            20,
+            3,
+            0
+          ],
+          "bits_window": 1968,
+          "bits_px": 0.48046875
+        },
+        {
+          "tuple": [
+            20,
+            4,
+            0
+          ],
+          "bits_window": 2144,
+          "bits_px": 0.5234375
+        },
+        {
+          "tuple": [
+            20,
+            5,
+            0
+          ],
+          "bits_window": 2320,
+          "bits_px": 0.56640625
+        },
+        {
+          "tuple": [
+            20,
+            6,
+            0
+          ],
+          "bits_window": 2496,
+          "bits_px": 0.609375
+        },
+        {
+          "tuple": [
+            20,
+            7,
+            0
+          ],
+          "bits_window": 2672,
+          "bits_px": 0.65234375
+        },
+        {
+          "tuple": [
+            20,
+            8,
+            0
+          ],
+          "bits_window": 2848,
+          "bits_px": 0.6953125
+        },
+        {
+          "tuple": [
+            20,
+            9,
+            0
+          ],
+          "bits_window": 3024,
+          "bits_px": 0.73828125
+        },
+        {
+          "tuple": [
+            20,
+            10,
+            0
+          ],
+          "bits_window": 3200,
+          "bits_px": 0.78125
+        },
+        {
+          "tuple": [
+            20,
+            11,
+            0
+          ],
+          "bits_window": 3376,
+          "bits_px": 0.82421875
+        },
+        {
+          "tuple": [
+            20,
+            12,
+            0
+          ],
+          "bits_window": 3552,
+          "bits_px": 0.8671875
+        },
+        {
+          "tuple": [
+            20,
+            13,
+            0
+          ],
+          "bits_window": 3728,
+          "bits_px": 0.91015625
+        },
+        {
+          "tuple": [
+            20,
+            13,
+            1
+          ],
+          "bits_window": 6800,
+          "bits_px": 1.66015625
+        },
+        {
+          "tuple": [
+            20,
+            13,
+            2
+          ],
+          "bits_window": 9872,
+          "bits_px": 2.41015625
+        },
+        {
+          "tuple": [
+            20,
+            13,
+            3
+          ],
+          "bits_window": 12944,
+          "bits_px": 3.16015625
+        },
+        {
+          "tuple": [
+            20,
+            13,
+            4
+          ],
+          "bits_window": 16016,
+          "bits_px": 3.91015625
+        },
+        {
+          "tuple": [
+            20,
+            13,
+            5
+          ],
+          "bits_window": 19088,
+          "bits_px": 4.66015625
+        },
+        {
+          "tuple": [
+            20,
+            13,
+            6
+          ],
+          "bits_window": 22160,
+          "bits_px": 5.41015625
+        },
+        {
+          "tuple": [
+            20,
+            13,
+            7
+          ],
+          "bits_window": 25232,
+          "bits_px": 6.16015625
+        },
+        {
+          "tuple": [
+            20,
+            13,
+            8
+          ],
+          "bits_window": 28304,
+          "bits_px": 6.91015625
+        },
+        {
+          "tuple": [
+            20,
+            13,
+            9
+          ],
+          "bits_window": 31376,
+          "bits_px": 7.66015625
+        },
+        {
+          "tuple": [
+            20,
+            13,
+            10
+          ],
+          "bits_window": 34448,
+          "bits_px": 8.41015625
+        },
+        {
+          "tuple": [
+            20,
+            13,
+            11
+          ],
+          "bits_window": 37520,
+          "bits_px": 9.16015625
+        },
+        {
+          "tuple": [
+            20,
+            13,
+            12
+          ],
+          "bits_window": 40592,
+          "bits_px": 9.91015625
+        }
+      ],
+      "fields": [
+        {
+          "name": "mean",
+          "count": 42,
+          "bits": 8
+        },
+        {
+          "name": "p99",
+          "count": 42,
+          "bits": 8
+        }
+      ],
+      "quality": {
+        "name": "rel_l2",
+        "stats": [
+          "mean",
+          "p99"
+        ],
+        "error": "||decoded - source|| / ||source|| per valid pixel (relative L2 of the 128-band vector), decoded float field against the prepared source",
+        "encoding": "code = ceil(32 * (log10(e) + 6)) clipped to 0..255, so that the value a code stands for is never below e; 0 means e <= 1e-6",
+        "scale": 32.0,
+        "offset": 6.0,
+        "order": "per stat, one byte per rung in header rungs order",
+        "decode_precision": "fp32"
+      }
+    }
+  },
+  "dimension_names": [
+    "wy",
+    "wx",
+    "quality_byte"
+  ],
+  "zarr_format": 3,
+  "node_type": "array",
+  "storage_transformers": []
+}

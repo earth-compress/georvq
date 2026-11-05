@@ -198,13 +198,13 @@ def test_grid_views_share_the_codec(codec, tmp_path):
 
 
 def test_single_grid_stores_refuse_a_grid(tmp_path):
-    from tests.test_tessera_v2_format import _write_store
-    from georvq.tessera import v2
+    from tests.test_tessera_v1_1_format import _write_store
+    from georvq.tessera import v1_1
     out = _write_store(str(tmp_path))
     from georvq.inference.store_dataset import StoreDataset
     with pytest.raises(ValueError, match="one output grid"):
-        StoreDataset(out, v2.SPEC, grid="10m")
-    ds = StoreDataset(out, v2.SPEC)
+        StoreDataset(out, v1_1.SPEC, grid="10m")
+    ds = StoreDataset(out, v1_1.SPEC)
     assert ds.grids == () and ds.grid_name is None
     with pytest.raises(ValueError, match="one output grid"):
         ds.read_grids()

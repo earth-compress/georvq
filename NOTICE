@@ -9,7 +9,7 @@ This work was funded by the Advanced Research and Invention Agency (ARIA).
 
 The source code in this repository is licensed under the Apache License,
 Version 2.0 (see LICENSE). The model weights published on Hugging Face
-(earth-compress/georvq-ae-v2, earth-compress/georvq-tessera-v2 and
+(earth-compress/georvq-ae-v2, earth-compress/georvq-tessera-v1.1 and
 earth-compress/georvq-s2-v1) are also licensed under Apache 2.0. The
 georvq stores made with them keep the licence of the data they encode,
 as each store's header (`licence`) states.
@@ -50,17 +50,19 @@ TESSERA embeddings (University of Cambridge)
   Licence: CC-BY-SA 4.0 (LICENSES/CC-BY-SA-4.0.txt)
   Attribution: TESSERA embeddings, Energy and Environment Group,
   Department of Computer Science and Technology, University of
-  Cambridge, via geotessera (https://github.com/ucam-eo/geotessera).
+  Cambridge, via geotessera (https://github.com/ucam-eo/geotessera);
+  the v1.1 global run produced and hosted by dClimate
+  (https://github.com/dClimate/tessera-embeddings).
   Files:
-    tests/golden/tessera_v2_tile_inputs.npz
-        a 100 x 120 px crop of the 2024 embeddings near 35.48 N,
-        135.64 E (int8 codes and the per-pixel scale plane), from a
+    tests/golden/tessera_v1_1_tile_inputs.npz
+        a 100 x 120 px crop of the 2019 v1.1 embeddings near 31.75 N,
+        108.35 E (int8 codes and the per-pixel scale plane), from a
         validation chip.
-    tests/golden/tessera_v2_golden.npz
-        codes and decode hashes of that crop under the georvq Tessera v2
-        codec.
-    tests/golden/tessera_v2_tile.georvq.zarr
-        that crop encoded with the georvq Tessera v2 codec (lossy).
+    tests/golden/tessera_v1_1_golden.npz
+        codes and decode hashes of that crop under the georvq Tessera
+        v1.1 codec.
+    tests/golden/tessera_v1_1_tile.georvq.zarr
+        that crop encoded with the georvq Tessera v1.1 codec (lossy).
     notebooks/demo_tessera.ipynb (cell outputs)
         figures and values computed from TESSERA tiles and their georvq
         encodings.
@@ -134,7 +136,7 @@ ERA5 (ECMWF, Copernicus Climate Change Service)
 Files with no third-party data
 
   tests/golden/ae_v2_store_snapshot.json,
-  tests/golden/tessera_v2_store_snapshot.json and
+  tests/golden/tessera_v1_1_store_snapshot.json and
   tests/golden/s2_v1_store_snapshot.json are snapshots of stores written
   from synthetic pixels by the format tests, and are covered by the
   Apache License like the source code.

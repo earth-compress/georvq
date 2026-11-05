@@ -72,50 +72,6 @@ def load_mean_codec(path):
     return m
 
 
-class TorchRVQPCA:
-    """`RVQPCAMeanChannel.round_trip` in torch on the GPU, for training
-    inputs only. The arithmetic is the channel's, in float32; a near-tie
-    in the RVQ search may pick another (equally valid) code than numpy
-    would, which is why the evaluation tools use the channel itself."""
-
-    def __init__(self, ch, device):
-        t = lambda a: torch.as_tensor(np.asarray(a), device=device)  # noqa
-        self.books = t(ch.books).float()
-        self.bn = (self.books ** 2).sum(-1)
-        self.mu0, self.V, self.s = t(ch.mu0), t(ch.V), t(ch.s)
-        self.bits = [int(b) for b in ch.bits]
-        self.clip = t(ch.clip)
-        self.pre_scale = None if ch.pre_scale is None else t(ch.pre_scale)
-        self.pre_log = None if ch.pre_log is None else t(ch.pre_log).bool()
-
-    @torch.no_grad()
-    def round_trip(self, x):
-        r = x.float().clone()
-        if self.pre_log is not None:
-            r[:, self.pre_log] = r[:, self.pre_log].log()
-        if self.pre_scale is not None:
-            r = r * self.pre_scale
-        out = torch.zeros_like(r)
-        for C, cn in zip(self.books, self.bn):
-            d = (r * r).sum(1, keepdim=True) - 2 * r @ C.T + cn[None]
-            q = C[d.argmin(1)]
-            r, out = r - q, out + q
-        c = (r - self.mu0) @ self.V
-        ch = torch.zeros_like(c)
-        for k, b in enumerate(self.bits):
-            if b:
-                n = 1 << b
-                lo, w = -self.clip[k] * self.s[k], 2 * self.clip[k] * self.s[k]
-                q = ((c[:, k] - lo) / w * n).floor().clamp(0, n - 1)
-                ch[:, k] = lo + (q + 0.5) * w / n
-        y = out + self.mu0 + ch @ self.V.T
-        if self.pre_scale is not None:
-            y = y / self.pre_scale
-        if self.pre_log is not None:
-            y[:, self.pre_log] = y[:, self.pre_log].exp()
-        return y
-
-
 class Recon:
     """Frozen codec + stats channel: raw uint16 crops -> decoded crops."""
 
@@ -137,11 +93,8 @@ class Recon:
         x, valid = self.src.prep(win, raw["10m"].device)
         st = self.src.last_stats()
         vec = self.norm.stats_vector(st).float()
-        if isinstance(self.channel, TorchRVQPCA):
-            dec = self.channel.round_trip(vec)
-        else:
-            dec = torch.from_numpy(self.channel.round_trip(
-                vec.cpu().numpy())).to(x.device)
+        dec = torch.from_numpy(self.channel.round_trip(
+            vec.cpu().numpy())).to(x.device)
         sd, i, nb = {}, 0, vec.shape[1] // 2
         for g in GROUPS:
             k = GROUPS[g][0]
@@ -284,9 +237,7 @@ def main():
     depth = model.specs[-1].depth
     S = RECIPE["frame"] + 2 * RECIPE["halo"]
     assert S % window == 0 and RECIPE["halo"] % window == 0
-    recon = Recon(model, TorchRVQPCA(channel, device)
-                  if getattr(channel, "kind", "") == "rvq-pca" else channel,
-                  window)
+    recon = Recon(model, channel, window)
     print(f"codec {args.ckpt}: window {window}, depths {recon.depths}; "
           f"channel {args.channel} ({channel.cost_bits()} bits); crops {S} px",
           flush=True)

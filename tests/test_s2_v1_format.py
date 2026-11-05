@@ -1,6 +1,6 @@
 """The S2 v1 store format, held fixed while the release code changes.
 
-As tests/test_tessera_v2_format.py does for Tessera v2:
+As tests/test_tessera_v1_1_format.py does for Tessera v1.1:
 
 - A store written by `georvq.s2.v1.encode_safe` from a small SAFE
   product (tests/s2_safe_fixture.py) with a tiny S2-shaped codec is

@@ -7,7 +7,7 @@ and nobody outside this repo should have to reproduce it.
 
 What `geotessera` actually hands you is what `prep` takes: an int8
 embedding array and a float scale plane, dequantized as `x = q * scale`.
-The Tessera v2 release (`georvq.tessera.v2`) prepares tiles through it.
+The Tessera v1.1 release (`georvq.tessera.v1_1`) prepares tiles through it.
 """
 from __future__ import annotations
 

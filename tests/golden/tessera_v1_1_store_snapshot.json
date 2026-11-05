@@ -1,0 +1,1689 @@
+{
+ "chunks": {
+  "base": {
+   "0.0.0": "fe40b6436b732ab5fa89f12d0bff7057a512f825b10a931969d3ceeca8c1095e",
+   "0.1.0": "e1cdbf5bd27be577b4e21a51e1a5d170ef0980250dbd9484514280993dd7bee1",
+   "1.0.0": "70ecd1119457634c9902e70d8344189f6c8adfeb83f7aabb71c01a1cac56d9d5",
+   "1.1.0": "c83513d94c7e588293710e6a059c27146a804a9298e83f96a18d4910d49ceedf"
+  },
+  "fine": {
+   "0.0.0.0": "20155b39af5e996cb66a18ec3984663df1d758e26cbe5c5db25f19ef02c86759",
+   "0.0.1.0": "84b843ecf9b3aa7ba65de74a8451e2b861c006b46994b46d89b2c8cfd7737199",
+   "0.1.0.0": "eb69173db4aa7b0480027036049261cbe03823afece709d10b735cebec711b8d",
+   "0.1.1.0": "b40589ff7d17f02ff749f8c7e75ddd9e297bb2c78665ef1035cc1b565d52e0f6",
+   "0.2.0.0": "66687aadf862bd776c8fc18b8e9f8e20089714856ee233b3902a591d0d5f2925",
+   "0.2.1.0": "66687aadf862bd776c8fc18b8e9f8e20089714856ee233b3902a591d0d5f2925",
+   "1.0.0.0": "47a77215dfba758c70c08392236a8a5c9a48e179d7d2dfd277d67080399f2aa7",
+   "1.0.1.0": "ce06300bd0424c2db658ec9a4cdeeb529f217e85e7eb5099358711750dfa9024",
+   "1.1.0.0": "e35d74768f58eca07fc293ae88e614ad8a35e351a99021de06653e15138af9f4",
+   "1.1.1.0": "a565e37fb75099565d9c22255de59794f9f8f028b7af66aced681610a5e86ced",
+   "1.2.0.0": "6bae274d4a1fc52720522336fb00ed29c91f66ea9a5f0de47861558a92801fdc",
+   "1.2.1.0": "27b95ff29b70794c8c87cff6f0f832ef29a72af39c34fcfb03f928a0655e7693",
+   "2.0.0.0": "0f22785585313db4f550919f3fbc52417d71906d90dd03721aef183613649409",
+   "2.0.1.0": "01adc2389518844b1d8744bd6ae3c2ef8cec7bb9715718da16bc3f1c65fa86fd",
+   "2.1.0.0": "d33de1114b9591b0d648880c2fc33c0f2842eb7f26bd6e2b23a96e31a5b4e463",
+   "2.1.1.0": "a8c35e969ad11d0b79360f48bb2929a27359e928564f20b0ae3129ec6922d044",
+   "2.2.0.0": "0c4e2bcc08e58f3202ae959fecc762dc249e452e03fa939298660f62f455fabc",
+   "2.2.1.0": "e5ac99ace22a8046323ecc40bce4f2063beb6b939f1d5995c5c6bd24d4e04e99"
+  },
+  "mask": {
+   "0.0": "ceb1e027fbdde905f4db3fc1cb784dc093087601bf7b1d4c7c6a4de8222b6304",
+   "0.1": "c492acb3f08bc8d6d4d75ddd843b9d225984d228f1572f13a46570bed40dabd8",
+   "1.0": "970d58ed69ebf9ad45ba9580cb9c34063eea1ec2361ce6f99e030e6c60957657",
+   "1.1": "8b28299ec97baff0855a6beabf9bd86cc8cf6cd954689956bb904a8fc8d0d2c4"
+  },
+  "mid": {
+   "0.0.0.0": "9696282b78406f903550c7f6289cc70a8076df8c38f4ac1b80bf725aec39c8e9",
+   "0.0.1.0": "3e715d5bc10eb91b940f7a19c6c3cfeb0e68a14a22d225f42f5362c23eb74a87",
+   "0.1.0.0": "984d1a52f442d946201462c540dc232c25dd88504296e69d16c0a4d1c9add063",
+   "0.1.1.0": "93d20ca0b77a2561b81564430cc78fa095178194f576a35cca6ba7a3bce7f505",
+   "1.0.0.0": "8f97be3634e21657e5cae14b42f6519368d133d9984d2b5c94fe47c1a473400e",
+   "1.0.1.0": "04f56c79d34ab7f1bec2f14476f37144eb44ad944ad20a0b1a36386c7d61340a",
+   "1.1.0.0": "e7a46ba61e4608e348e1429ce0fab49be6a5b4958779e930a5f7fe4c2d04616c",
+   "1.1.1.0": "95598b43d586baeb1f99bf7c3bced68799fbcc2af4a4ce5d9bbd33554e027a99"
+  },
+  "quality/fedcba9876543210": {
+   "0.0.0": "4e45fe1b628470de1409b70afc5520a1de92f541aca656dce70072b0bded8a0c",
+   "0.1.0": "6ef1628a1920734dcac8a1769d9f74bdeb885a943e9ad4c70c76d7cd5f5b44d8",
+   "1.0.0": "e63372b6cdf87b5cff7fb20bf1e64c0f4a58c386b70bffe78d918f125a3d1352",
+   "1.1.0": "b9ae9fa414979c979ebc7b86df35e958d2affdfa8fd8b1eed1dbb78802e6bf9d"
+  }
+ },
+ "keys": [
+  "base/c/0/0/0",
+  "base/c/0/1/0",
+  "base/c/1/0/0",
+  "base/c/1/1/0",
+  "base/zarr.json",
+  "fine/c/0/0/0/0",
+  "fine/zarr.json",
+  "mask/c/0/0",
+  "mask/c/0/1",
+  "mask/zarr.json",
+  "mid/c/0/0/0/0",
+  "mid/zarr.json",
+  "quality/fedcba9876543210/c/0/0/0",
+  "quality/fedcba9876543210/c/0/1/0",
+  "quality/fedcba9876543210/c/1/0/0",
+  "quality/fedcba9876543210/c/1/1/0",
+  "quality/fedcba9876543210/zarr.json",
+  "quality/zarr.json",
+  "zarr.json"
+ ],
+ "nodes": {
+  ".": {
+   "attributes": {
+    "georvq": {
+     "codec": {
+      "bands": 128,
+      "bitstream_id": "0123456789abcdef",
+      "decoder_id": "fedcba9876543210",
+      "format": "georvq-tessera/v1.1",
+      "mean_channel": {
+       "bits": 960,
+       "kind": "rotated"
+      },
+      "min_depths": [
+       2,
+       0,
+       0
+      ],
+      "release": {
+       "bitstream_id": "0123456789abcdef",
+       "decoder_id": "fedcba9876543210",
+       "name": "tessera-v1.1",
+       "revision": "r1",
+       "uri": "hf://earth-compress/georvq-tessera-v1.1"
+      },
+      "tiers": [
+       "1:16:32:3",
+       "2:8:32:2",
+       "4:8:16:2"
+      ],
+      "window": 16
+     },
+     "format": "georvq-zarr",
+     "layout": {
+      "columns": [
+       {
+        "fields": [
+         {
+          "bits": 4,
+          "count": 1,
+          "name": "rot_0"
+         },
+         {
+          "bits": 5,
+          "count": 1,
+          "name": "rot_1"
+         },
+         {
+          "bits": 6,
+          "count": 1,
+          "name": "rot_2"
+         },
+         {
+          "bits": 7,
+          "count": 1,
+          "name": "rot_3"
+         },
+         {
+          "bits": 8,
+          "count": 1,
+          "name": "rot_4"
+         },
+         {
+          "bits": 9,
+          "count": 1,
+          "name": "rot_5"
+         },
+         {
+          "bits": 10,
+          "count": 1,
+          "name": "rot_6"
+         },
+         {
+          "bits": 11,
+          "count": 1,
+          "name": "rot_7"
+         },
+         {
+          "bits": 4,
+          "count": 1,
+          "name": "rot_8"
+         },
+         {
+          "bits": 5,
+          "count": 1,
+          "name": "rot_9"
+         },
+         {
+          "bits": 6,
+          "count": 1,
+          "name": "rot_10"
+         },
+         {
+          "bits": 7,
+          "count": 1,
+          "name": "rot_11"
+         },
+         {
+          "bits": 8,
+          "count": 1,
+          "name": "rot_12"
+         },
+         {
+          "bits": 9,
+          "count": 1,
+          "name": "rot_13"
+         },
+         {
+          "bits": 10,
+          "count": 1,
+          "name": "rot_14"
+         },
+         {
+          "bits": 11,
+          "count": 1,
+          "name": "rot_15"
+         },
+         {
+          "bits": 4,
+          "count": 1,
+          "name": "rot_16"
+         },
+         {
+          "bits": 5,
+          "count": 1,
+          "name": "rot_17"
+         },
+         {
+          "bits": 6,
+          "count": 1,
+          "name": "rot_18"
+         },
+         {
+          "bits": 7,
+          "count": 1,
+          "name": "rot_19"
+         },
+         {
+          "bits": 8,
+          "count": 1,
+          "name": "rot_20"
+         },
+         {
+          "bits": 9,
+          "count": 1,
+          "name": "rot_21"
+         },
+         {
+          "bits": 10,
+          "count": 1,
+          "name": "rot_22"
+         },
+         {
+          "bits": 11,
+          "count": 1,
+          "name": "rot_23"
+         },
+         {
+          "bits": 4,
+          "count": 1,
+          "name": "rot_24"
+         },
+         {
+          "bits": 5,
+          "count": 1,
+          "name": "rot_25"
+         },
+         {
+          "bits": 6,
+          "count": 1,
+          "name": "rot_26"
+         },
+         {
+          "bits": 7,
+          "count": 1,
+          "name": "rot_27"
+         },
+         {
+          "bits": 8,
+          "count": 1,
+          "name": "rot_28"
+         },
+         {
+          "bits": 9,
+          "count": 1,
+          "name": "rot_29"
+         },
+         {
+          "bits": 10,
+          "count": 1,
+          "name": "rot_30"
+         },
+         {
+          "bits": 11,
+          "count": 1,
+          "name": "rot_31"
+         },
+         {
+          "bits": 4,
+          "count": 1,
+          "name": "rot_32"
+         },
+         {
+          "bits": 5,
+          "count": 1,
+          "name": "rot_33"
+         },
+         {
+          "bits": 6,
+          "count": 1,
+          "name": "rot_34"
+         },
+         {
+          "bits": 7,
+          "count": 1,
+          "name": "rot_35"
+         },
+         {
+          "bits": 8,
+          "count": 1,
+          "name": "rot_36"
+         },
+         {
+          "bits": 9,
+          "count": 1,
+          "name": "rot_37"
+         },
+         {
+          "bits": 10,
+          "count": 1,
+          "name": "rot_38"
+         },
+         {
+          "bits": 11,
+          "count": 1,
+          "name": "rot_39"
+         },
+         {
+          "bits": 4,
+          "count": 1,
+          "name": "rot_40"
+         },
+         {
+          "bits": 5,
+          "count": 1,
+          "name": "rot_41"
+         },
+         {
+          "bits": 6,
+          "count": 1,
+          "name": "rot_42"
+         },
+         {
+          "bits": 7,
+          "count": 1,
+          "name": "rot_43"
+         },
+         {
+          "bits": 8,
+          "count": 1,
+          "name": "rot_44"
+         },
+         {
+          "bits": 9,
+          "count": 1,
+          "name": "rot_45"
+         },
+         {
+          "bits": 10,
+          "count": 1,
+          "name": "rot_46"
+         },
+         {
+          "bits": 11,
+          "count": 1,
+          "name": "rot_47"
+         },
+         {
+          "bits": 4,
+          "count": 1,
+          "name": "rot_48"
+         },
+         {
+          "bits": 5,
+          "count": 1,
+          "name": "rot_49"
+         },
+         {
+          "bits": 6,
+          "count": 1,
+          "name": "rot_50"
+         },
+         {
+          "bits": 7,
+          "count": 1,
+          "name": "rot_51"
+         },
+         {
+          "bits": 8,
+          "count": 1,
+          "name": "rot_52"
+         },
+         {
+          "bits": 9,
+          "count": 1,
+          "name": "rot_53"
+         },
+         {
+          "bits": 10,
+          "count": 1,
+          "name": "rot_54"
+         },
+         {
+          "bits": 11,
+          "count": 1,
+          "name": "rot_55"
+         },
+         {
+          "bits": 4,
+          "count": 1,
+          "name": "rot_56"
+         },
+         {
+          "bits": 5,
+          "count": 1,
+          "name": "rot_57"
+         },
+         {
+          "bits": 6,
+          "count": 1,
+          "name": "rot_58"
+         },
+         {
+          "bits": 7,
+          "count": 1,
+          "name": "rot_59"
+         },
+         {
+          "bits": 8,
+          "count": 1,
+          "name": "rot_60"
+         },
+         {
+          "bits": 9,
+          "count": 1,
+          "name": "rot_61"
+         },
+         {
+          "bits": 10,
+          "count": 1,
+          "name": "rot_62"
+         },
+         {
+          "bits": 11,
+          "count": 1,
+          "name": "rot_63"
+         },
+         {
+          "bits": 4,
+          "count": 1,
+          "name": "rot_64"
+         },
+         {
+          "bits": 5,
+          "count": 1,
+          "name": "rot_65"
+         },
+         {
+          "bits": 6,
+          "count": 1,
+          "name": "rot_66"
+         },
+         {
+          "bits": 7,
+          "count": 1,
+          "name": "rot_67"
+         },
+         {
+          "bits": 8,
+          "count": 1,
+          "name": "rot_68"
+         },
+         {
+          "bits": 9,
+          "count": 1,
+          "name": "rot_69"
+         },
+         {
+          "bits": 10,
+          "count": 1,
+          "name": "rot_70"
+         },
+         {
+          "bits": 11,
+          "count": 1,
+          "name": "rot_71"
+         },
+         {
+          "bits": 4,
+          "count": 1,
+          "name": "rot_72"
+         },
+         {
+          "bits": 5,
+          "count": 1,
+          "name": "rot_73"
+         },
+         {
+          "bits": 6,
+          "count": 1,
+          "name": "rot_74"
+         },
+         {
+          "bits": 7,
+          "count": 1,
+          "name": "rot_75"
+         },
+         {
+          "bits": 8,
+          "count": 1,
+          "name": "rot_76"
+         },
+         {
+          "bits": 9,
+          "count": 1,
+          "name": "rot_77"
+         },
+         {
+          "bits": 10,
+          "count": 1,
+          "name": "rot_78"
+         },
+         {
+          "bits": 11,
+          "count": 1,
+          "name": "rot_79"
+         },
+         {
+          "bits": 4,
+          "count": 1,
+          "name": "rot_80"
+         },
+         {
+          "bits": 5,
+          "count": 1,
+          "name": "rot_81"
+         },
+         {
+          "bits": 6,
+          "count": 1,
+          "name": "rot_82"
+         },
+         {
+          "bits": 7,
+          "count": 1,
+          "name": "rot_83"
+         },
+         {
+          "bits": 8,
+          "count": 1,
+          "name": "rot_84"
+         },
+         {
+          "bits": 9,
+          "count": 1,
+          "name": "rot_85"
+         },
+         {
+          "bits": 10,
+          "count": 1,
+          "name": "rot_86"
+         },
+         {
+          "bits": 11,
+          "count": 1,
+          "name": "rot_87"
+         },
+         {
+          "bits": 4,
+          "count": 1,
+          "name": "rot_88"
+         },
+         {
+          "bits": 5,
+          "count": 1,
+          "name": "rot_89"
+         },
+         {
+          "bits": 6,
+          "count": 1,
+          "name": "rot_90"
+         },
+         {
+          "bits": 7,
+          "count": 1,
+          "name": "rot_91"
+         },
+         {
+          "bits": 8,
+          "count": 1,
+          "name": "rot_92"
+         },
+         {
+          "bits": 9,
+          "count": 1,
+          "name": "rot_93"
+         },
+         {
+          "bits": 10,
+          "count": 1,
+          "name": "rot_94"
+         },
+         {
+          "bits": 11,
+          "count": 1,
+          "name": "rot_95"
+         },
+         {
+          "bits": 4,
+          "count": 1,
+          "name": "rot_96"
+         },
+         {
+          "bits": 5,
+          "count": 1,
+          "name": "rot_97"
+         },
+         {
+          "bits": 6,
+          "count": 1,
+          "name": "rot_98"
+         },
+         {
+          "bits": 7,
+          "count": 1,
+          "name": "rot_99"
+         },
+         {
+          "bits": 8,
+          "count": 1,
+          "name": "rot_100"
+         },
+         {
+          "bits": 9,
+          "count": 1,
+          "name": "rot_101"
+         },
+         {
+          "bits": 10,
+          "count": 1,
+          "name": "rot_102"
+         },
+         {
+          "bits": 11,
+          "count": 1,
+          "name": "rot_103"
+         },
+         {
+          "bits": 4,
+          "count": 1,
+          "name": "rot_104"
+         },
+         {
+          "bits": 5,
+          "count": 1,
+          "name": "rot_105"
+         },
+         {
+          "bits": 6,
+          "count": 1,
+          "name": "rot_106"
+         },
+         {
+          "bits": 7,
+          "count": 1,
+          "name": "rot_107"
+         },
+         {
+          "bits": 8,
+          "count": 1,
+          "name": "rot_108"
+         },
+         {
+          "bits": 9,
+          "count": 1,
+          "name": "rot_109"
+         },
+         {
+          "bits": 10,
+          "count": 1,
+          "name": "rot_110"
+         },
+         {
+          "bits": 11,
+          "count": 1,
+          "name": "rot_111"
+         },
+         {
+          "bits": 4,
+          "count": 1,
+          "name": "rot_112"
+         },
+         {
+          "bits": 5,
+          "count": 1,
+          "name": "rot_113"
+         },
+         {
+          "bits": 6,
+          "count": 1,
+          "name": "rot_114"
+         },
+         {
+          "bits": 7,
+          "count": 1,
+          "name": "rot_115"
+         },
+         {
+          "bits": 8,
+          "count": 1,
+          "name": "rot_116"
+         },
+         {
+          "bits": 9,
+          "count": 1,
+          "name": "rot_117"
+         },
+         {
+          "bits": 10,
+          "count": 1,
+          "name": "rot_118"
+         },
+         {
+          "bits": 11,
+          "count": 1,
+          "name": "rot_119"
+         },
+         {
+          "bits": 4,
+          "count": 1,
+          "name": "rot_120"
+         },
+         {
+          "bits": 5,
+          "count": 1,
+          "name": "rot_121"
+         },
+         {
+          "bits": 6,
+          "count": 1,
+          "name": "rot_122"
+         },
+         {
+          "bits": 7,
+          "count": 1,
+          "name": "rot_123"
+         },
+         {
+          "bits": 8,
+          "count": 1,
+          "name": "rot_124"
+         },
+         {
+          "bits": 9,
+          "count": 1,
+          "name": "rot_125"
+         },
+         {
+          "bits": 10,
+          "count": 1,
+          "name": "rot_126"
+         },
+         {
+          "bits": 11,
+          "count": 1,
+          "name": "rot_127"
+         },
+         {
+          "bits": 5,
+          "count": 3,
+          "name": "coarse"
+         }
+        ],
+        "name": "base",
+        "record_bytes": 122
+       },
+       {
+        "fields": [
+         {
+          "bits": 5,
+          "count": 4,
+          "name": "mid"
+         }
+        ],
+        "name": "mid_1",
+        "record_bytes": 3
+       },
+       {
+        "fields": [
+         {
+          "bits": 5,
+          "count": 4,
+          "name": "mid"
+         }
+        ],
+        "name": "mid_2",
+        "record_bytes": 3
+       },
+       {
+        "fields": [
+         {
+          "bits": 4,
+          "count": 16,
+          "name": "fine"
+         }
+        ],
+        "name": "fine_1",
+        "record_bytes": 8
+       },
+       {
+        "fields": [
+         {
+          "bits": 4,
+          "count": 16,
+          "name": "fine"
+         }
+        ],
+        "name": "fine_2",
+        "record_bytes": 8
+       },
+       {
+        "fields": [
+         {
+          "bits": 8,
+          "count": 6,
+          "name": "mean"
+         },
+         {
+          "bits": 8,
+          "count": 6,
+          "name": "p99"
+         }
+        ],
+        "name": "quality",
+        "record_bytes": 12
+       }
+      ],
+      "groups": [
+       {
+        "chunk_grid": [
+         2,
+         2
+        ],
+        "chunk_px": 64,
+        "chunk_windows": 4,
+        "columns": [
+         "base",
+         "mask"
+        ],
+        "empty_chunks": [],
+        "kind": "base"
+       },
+       {
+        "chunk_grid": [
+         2,
+         2
+        ],
+        "chunk_px": 48,
+        "chunk_windows": 3,
+        "columns": [
+         "mid_1",
+         "mid_2"
+        ],
+        "empty_chunks": [],
+        "kind": "mid"
+       },
+       {
+        "chunk_grid": [
+         3,
+         3
+        ],
+        "chunk_px": 32,
+        "chunk_windows": 2,
+        "columns": [
+         "fine_1",
+         "fine_2"
+        ],
+        "empty_chunks": [
+         [
+          0,
+          2
+         ]
+        ],
+        "kind": "fine"
+       },
+       {
+        "chunk_grid": [
+         2,
+         2
+        ],
+        "chunk_px": 64,
+        "chunk_windows": 4,
+        "columns": [
+         "quality"
+        ],
+        "empty_chunks": [],
+        "kind": "quality"
+       }
+      ],
+      "mask": {
+       "chunks": [
+        [
+         0,
+         0
+        ],
+        [
+         0,
+         1
+        ]
+       ],
+       "column": "mask",
+       "kind": "base"
+      },
+      "product_px": [
+       75,
+       90
+      ],
+      "tiers": [
+       {
+        "columns": [
+         "base"
+        ],
+        "levels": 3,
+        "name": "coarse"
+       },
+       {
+        "columns": [
+         "mid_1",
+         "mid_2"
+        ],
+        "levels": 2,
+        "name": "mid"
+       },
+       {
+        "columns": [
+         "fine_1",
+         "fine_2"
+        ],
+        "levels": 2,
+        "name": "fine"
+       }
+      ],
+      "window_grid": [
+       5,
+       6
+      ],
+      "window_order": "row-major",
+      "window_px": 16
+     },
+     "licence": {
+      "attribution": "TESSERA embeddings v1.1, Energy and Environment Group, Department of Computer Science and Technology, University of Cambridge, via geotessera (https://github.com/ucam-eo/geotessera); v1.1 global run produced and hosted by dClimate (https://github.com/dClimate/tessera-embeddings)",
+      "changes": "lossy georvq encoding of the int8 embeddings and their per-pixel scales; the decoded values are approximations",
+      "spdx": "CC-BY-SA-4.0",
+      "url": "https://creativecommons.org/licenses/by-sa/4.0/"
+     },
+     "output": {
+      "band_names": null,
+      "count": 128,
+      "dtype": "float32",
+      "nodata": 0.0
+     },
+     "product": {
+      "count": 128,
+      "dtype": "int8",
+      "embeddings": {
+       "model": "https://geotessera.org/model/1.1",
+       "name": "TESSERA",
+       "run": "dclimate",
+       "store": "https://data.source.coop/tessera/tessera/zarr/v1.1-dclimate",
+       "version": "1.1"
+      },
+      "epsg": 32633,
+      "height": 75,
+      "id": "2024/grid_17.25_46.75",
+      "kind": "tessera-tile",
+      "lat": 46.75,
+      "lon": 17.25,
+      "nodata": null,
+      "orientation": "north-up",
+      "scale": "float32 per pixel, x = q * scale",
+      "source": "snap/utm33/embeddings[0,:,0:75,0:90]",
+      "transform": [
+       10.0,
+       0.0,
+       500000.0,
+       0.0,
+       -10.0,
+       5180000.0
+      ],
+      "utm_zone": 33,
+      "width": 90,
+      "year": 2024,
+      "zone_window": {
+       "col": 0,
+       "height": 75,
+       "row": 0,
+       "width": 90
+      }
+     },
+     "quality": {
+      "column": "quality",
+      "decode_precision": "fp32",
+      "encoding": "code = ceil(32 * (log10(e) + 6)) clipped to 0..255, so that the value a code stands for is never below e; 0 means e <= 1e-6",
+      "error": "||decoded - source|| / ||source|| per valid pixel (relative L2 of the 128-band vector), decoded float field against the prepared source",
+      "name": "rel_l2",
+      "offset": 6.0,
+      "order": "per stat, one byte per rung in header rungs order",
+      "scale": 32.0,
+      "stats": [
+       "mean",
+       "p99"
+      ]
+     },
+     "rungs": [
+      {
+       "bits_px": 3.7890625,
+       "bits_window": 970,
+       "tuple": [
+        2,
+        0,
+        0
+       ]
+      },
+      {
+       "bits_px": 3.80859375,
+       "bits_window": 975,
+       "tuple": [
+        3,
+        0,
+        0
+       ]
+      },
+      {
+       "bits_px": 3.88671875,
+       "bits_window": 995,
+       "tuple": [
+        3,
+        1,
+        0
+       ]
+      },
+      {
+       "bits_px": 3.96484375,
+       "bits_window": 1015,
+       "tuple": [
+        3,
+        2,
+        0
+       ]
+      },
+      {
+       "bits_px": 4.21484375,
+       "bits_window": 1079,
+       "tuple": [
+        3,
+        2,
+        1
+       ]
+      },
+      {
+       "bits_px": 4.46484375,
+       "bits_window": 1143,
+       "tuple": [
+        3,
+        2,
+        2
+       ]
+      }
+     ],
+     "status": "prototype",
+     "version": "0.5"
+    },
+    "proj:code": "EPSG:32633",
+    "spatial:bbox": [
+     500000.0,
+     5179250.0,
+     500900.0,
+     5180000.0
+    ],
+    "spatial:dimensions": [
+     "y",
+     "x"
+    ],
+    "spatial:registration": "pixel",
+    "spatial:shape": [
+     75,
+     90
+    ],
+    "spatial:transform": [
+     10.0,
+     0.0,
+     500000.0,
+     0.0,
+     -10.0,
+     5180000.0
+    ],
+    "zarr_conventions": [
+     {
+      "description": "Coordinate reference system information for geospatial data",
+      "name": "proj",
+      "schema_url": "https://raw.githubusercontent.com/zarr-conventions/proj/refs/tags/v0.1/schema.json",
+      "spec_url": "https://github.com/zarr-conventions/proj/blob/v0.1/README.md",
+      "uuid": "f17cb550-5864-4468-aeb7-f3180cfb622f"
+     },
+     {
+      "description": "Spatial coordinate information",
+      "name": "spatial",
+      "schema_url": "https://raw.githubusercontent.com/zarr-conventions/spatial/refs/tags/v0.1/schema.json",
+      "spec_url": "https://github.com/zarr-conventions/spatial/blob/v0.1/README.md",
+      "uuid": "689b58e2-cf7b-45e0-9fff-9cfc0883d6b4"
+     }
+    ]
+   },
+   "node_type": "group",
+   "zarr_format": 3
+  },
+  "base": {
+   "attributes": {
+    "proj:code": "EPSG:32633",
+    "spatial:bbox": [
+     500000.0,
+     5179200.0,
+     500960.0,
+     5180000.0
+    ],
+    "spatial:dimensions": [
+     "wy",
+     "wx"
+    ],
+    "spatial:registration": "pixel",
+    "spatial:shape": [
+     5,
+     6
+    ],
+    "spatial:transform": [
+     160.0,
+     0.0,
+     500000.0,
+     0.0,
+     -160.0,
+     5180000.0
+    ],
+    "zarr_conventions": [
+     {
+      "description": "Coordinate reference system information for geospatial data",
+      "name": "proj",
+      "schema_url": "https://raw.githubusercontent.com/zarr-conventions/proj/refs/tags/v0.1/schema.json",
+      "spec_url": "https://github.com/zarr-conventions/proj/blob/v0.1/README.md",
+      "uuid": "f17cb550-5864-4468-aeb7-f3180cfb622f"
+     },
+     {
+      "description": "Spatial coordinate information",
+      "name": "spatial",
+      "schema_url": "https://raw.githubusercontent.com/zarr-conventions/spatial/refs/tags/v0.1/schema.json",
+      "spec_url": "https://github.com/zarr-conventions/spatial/blob/v0.1/README.md",
+      "uuid": "689b58e2-cf7b-45e0-9fff-9cfc0883d6b4"
+     }
+    ]
+   },
+   "chunk_grid": {
+    "configuration": {
+     "chunk_shape": [
+      4,
+      4,
+      122
+     ]
+    },
+    "name": "regular"
+   },
+   "chunk_key_encoding": {
+    "configuration": {
+     "separator": "/"
+    },
+    "name": "default"
+   },
+   "codecs": [
+    {
+     "name": "bytes"
+    },
+    {
+     "configuration": {
+      "checksum": false,
+      "level": 19
+     },
+     "name": "zstd"
+    }
+   ],
+   "data_type": "uint8",
+   "dimension_names": [
+    "wy",
+    "wx",
+    "base_byte"
+   ],
+   "fill_value": 0,
+   "node_type": "array",
+   "shape": [
+    5,
+    6,
+    122
+   ],
+   "storage_transformers": [],
+   "zarr_format": 3
+  },
+  "fine": {
+   "attributes": {
+    "proj:code": "EPSG:32633",
+    "spatial:bbox": [
+     500000.0,
+     5179200.0,
+     500960.0,
+     5180000.0
+    ],
+    "spatial:dimensions": [
+     "wy",
+     "wx"
+    ],
+    "spatial:registration": "pixel",
+    "spatial:shape": [
+     5,
+     6
+    ],
+    "spatial:transform": [
+     160.0,
+     0.0,
+     500000.0,
+     0.0,
+     -160.0,
+     5180000.0
+    ],
+    "zarr_conventions": [
+     {
+      "description": "Coordinate reference system information for geospatial data",
+      "name": "proj",
+      "schema_url": "https://raw.githubusercontent.com/zarr-conventions/proj/refs/tags/v0.1/schema.json",
+      "spec_url": "https://github.com/zarr-conventions/proj/blob/v0.1/README.md",
+      "uuid": "f17cb550-5864-4468-aeb7-f3180cfb622f"
+     },
+     {
+      "description": "Spatial coordinate information",
+      "name": "spatial",
+      "schema_url": "https://raw.githubusercontent.com/zarr-conventions/spatial/refs/tags/v0.1/schema.json",
+      "spec_url": "https://github.com/zarr-conventions/spatial/blob/v0.1/README.md",
+      "uuid": "689b58e2-cf7b-45e0-9fff-9cfc0883d6b4"
+     }
+    ]
+   },
+   "chunk_grid": {
+    "configuration": {
+     "chunk_shape": [
+      6,
+      6,
+      2,
+      8
+     ]
+    },
+    "name": "regular"
+   },
+   "chunk_key_encoding": {
+    "configuration": {
+     "separator": "/"
+    },
+    "name": "default"
+   },
+   "codecs": [
+    {
+     "configuration": {
+      "chunk_shape": [
+       2,
+       2,
+       1,
+       8
+      ],
+      "codecs": [
+       {
+        "name": "bytes"
+       },
+       {
+        "configuration": {
+         "checksum": false,
+         "level": 19
+        },
+        "name": "zstd"
+       }
+      ],
+      "index_codecs": [
+       {
+        "configuration": {
+         "endian": "little"
+        },
+        "name": "bytes"
+       },
+       {
+        "name": "crc32c"
+       }
+      ],
+      "index_location": "end"
+     },
+     "name": "sharding_indexed"
+    }
+   ],
+   "data_type": "uint8",
+   "dimension_names": [
+    "wy",
+    "wx",
+    "fine_level",
+    "fine_byte"
+   ],
+   "fill_value": 0,
+   "node_type": "array",
+   "shape": [
+    5,
+    6,
+    2,
+    8
+   ],
+   "storage_transformers": [],
+   "zarr_format": 3
+  },
+  "mask": {
+   "attributes": {
+    "proj:code": "EPSG:32633",
+    "spatial:bbox": [
+     500000.0,
+     5179250.0,
+     500900.0,
+     5180000.0
+    ],
+    "spatial:dimensions": [
+     "y",
+     "x"
+    ],
+    "spatial:registration": "pixel",
+    "spatial:shape": [
+     75,
+     90
+    ],
+    "spatial:transform": [
+     10.0,
+     0.0,
+     500000.0,
+     0.0,
+     -10.0,
+     5180000.0
+    ],
+    "zarr_conventions": [
+     {
+      "description": "Coordinate reference system information for geospatial data",
+      "name": "proj",
+      "schema_url": "https://raw.githubusercontent.com/zarr-conventions/proj/refs/tags/v0.1/schema.json",
+      "spec_url": "https://github.com/zarr-conventions/proj/blob/v0.1/README.md",
+      "uuid": "f17cb550-5864-4468-aeb7-f3180cfb622f"
+     },
+     {
+      "description": "Spatial coordinate information",
+      "name": "spatial",
+      "schema_url": "https://raw.githubusercontent.com/zarr-conventions/spatial/refs/tags/v0.1/schema.json",
+      "spec_url": "https://github.com/zarr-conventions/spatial/blob/v0.1/README.md",
+      "uuid": "689b58e2-cf7b-45e0-9fff-9cfc0883d6b4"
+     }
+    ]
+   },
+   "chunk_grid": {
+    "configuration": {
+     "chunk_shape": [
+      64,
+      64
+     ]
+    },
+    "name": "regular"
+   },
+   "chunk_key_encoding": {
+    "configuration": {
+     "separator": "/"
+    },
+    "name": "default"
+   },
+   "codecs": [
+    {
+     "name": "bytes"
+    },
+    {
+     "configuration": {
+      "checksum": false,
+      "level": 19
+     },
+     "name": "zstd"
+    }
+   ],
+   "data_type": "bool",
+   "dimension_names": [
+    "y",
+    "x"
+   ],
+   "fill_value": true,
+   "node_type": "array",
+   "shape": [
+    75,
+    90
+   ],
+   "storage_transformers": [],
+   "zarr_format": 3
+  },
+  "mid": {
+   "attributes": {
+    "proj:code": "EPSG:32633",
+    "spatial:bbox": [
+     500000.0,
+     5179200.0,
+     500960.0,
+     5180000.0
+    ],
+    "spatial:dimensions": [
+     "wy",
+     "wx"
+    ],
+    "spatial:registration": "pixel",
+    "spatial:shape": [
+     5,
+     6
+    ],
+    "spatial:transform": [
+     160.0,
+     0.0,
+     500000.0,
+     0.0,
+     -160.0,
+     5180000.0
+    ],
+    "zarr_conventions": [
+     {
+      "description": "Coordinate reference system information for geospatial data",
+      "name": "proj",
+      "schema_url": "https://raw.githubusercontent.com/zarr-conventions/proj/refs/tags/v0.1/schema.json",
+      "spec_url": "https://github.com/zarr-conventions/proj/blob/v0.1/README.md",
+      "uuid": "f17cb550-5864-4468-aeb7-f3180cfb622f"
+     },
+     {
+      "description": "Spatial coordinate information",
+      "name": "spatial",
+      "schema_url": "https://raw.githubusercontent.com/zarr-conventions/spatial/refs/tags/v0.1/schema.json",
+      "spec_url": "https://github.com/zarr-conventions/spatial/blob/v0.1/README.md",
+      "uuid": "689b58e2-cf7b-45e0-9fff-9cfc0883d6b4"
+     }
+    ]
+   },
+   "chunk_grid": {
+    "configuration": {
+     "chunk_shape": [
+      6,
+      6,
+      2,
+      3
+     ]
+    },
+    "name": "regular"
+   },
+   "chunk_key_encoding": {
+    "configuration": {
+     "separator": "/"
+    },
+    "name": "default"
+   },
+   "codecs": [
+    {
+     "configuration": {
+      "chunk_shape": [
+       3,
+       3,
+       1,
+       3
+      ],
+      "codecs": [
+       {
+        "name": "bytes"
+       },
+       {
+        "configuration": {
+         "checksum": false,
+         "level": 19
+        },
+        "name": "zstd"
+       }
+      ],
+      "index_codecs": [
+       {
+        "configuration": {
+         "endian": "little"
+        },
+        "name": "bytes"
+       },
+       {
+        "name": "crc32c"
+       }
+      ],
+      "index_location": "end"
+     },
+     "name": "sharding_indexed"
+    }
+   ],
+   "data_type": "uint8",
+   "dimension_names": [
+    "wy",
+    "wx",
+    "mid_level",
+    "mid_byte"
+   ],
+   "fill_value": 0,
+   "node_type": "array",
+   "shape": [
+    5,
+    6,
+    2,
+    3
+   ],
+   "storage_transformers": [],
+   "zarr_format": 3
+  },
+  "quality": {
+   "attributes": {
+    "decoders": [
+     "fedcba9876543210"
+    ]
+   },
+   "node_type": "group",
+   "zarr_format": 3
+  },
+  "quality/fedcba9876543210": {
+   "attributes": {
+    "georvq_quality": {
+     "bitstream_id": "0123456789abcdef",
+     "decoder_id": "fedcba9876543210",
+     "fields": [
+      {
+       "bits": 8,
+       "count": 6,
+       "name": "mean"
+      },
+      {
+       "bits": 8,
+       "count": 6,
+       "name": "p99"
+      }
+     ],
+     "quality": {
+      "decode_precision": "fp32",
+      "encoding": "code = ceil(32 * (log10(e) + 6)) clipped to 0..255, so that the value a code stands for is never below e; 0 means e <= 1e-6",
+      "error": "||decoded - source|| / ||source|| per valid pixel (relative L2 of the 128-band vector), decoded float field against the prepared source",
+      "name": "rel_l2",
+      "offset": 6.0,
+      "order": "per stat, one byte per rung in header rungs order",
+      "scale": 32.0,
+      "stats": [
+       "mean",
+       "p99"
+      ]
+     },
+     "release": {
+      "bitstream_id": "0123456789abcdef",
+      "decoder_id": "fedcba9876543210",
+      "name": "tessera-v1.1",
+      "revision": "r1",
+      "uri": "hf://earth-compress/georvq-tessera-v1.1"
+     },
+     "rungs": [
+      {
+       "bits_px": 3.7890625,
+       "bits_window": 970,
+       "tuple": [
+        2,
+        0,
+        0
+       ]
+      },
+      {
+       "bits_px": 3.80859375,
+       "bits_window": 975,
+       "tuple": [
+        3,
+        0,
+        0
+       ]
+      },
+      {
+       "bits_px": 3.88671875,
+       "bits_window": 995,
+       "tuple": [
+        3,
+        1,
+        0
+       ]
+      },
+      {
+       "bits_px": 3.96484375,
+       "bits_window": 1015,
+       "tuple": [
+        3,
+        2,
+        0
+       ]
+      },
+      {
+       "bits_px": 4.21484375,
+       "bits_window": 1079,
+       "tuple": [
+        3,
+        2,
+        1
+       ]
+      },
+      {
+       "bits_px": 4.46484375,
+       "bits_window": 1143,
+       "tuple": [
+        3,
+        2,
+        2
+       ]
+      }
+     ]
+    },
+    "proj:code": "EPSG:32633",
+    "spatial:bbox": [
+     500000.0,
+     5179200.0,
+     500960.0,
+     5180000.0
+    ],
+    "spatial:dimensions": [
+     "wy",
+     "wx"
+    ],
+    "spatial:registration": "pixel",
+    "spatial:shape": [
+     5,
+     6
+    ],
+    "spatial:transform": [
+     160.0,
+     0.0,
+     500000.0,
+     0.0,
+     -160.0,
+     5180000.0
+    ],
+    "zarr_conventions": [
+     {
+      "description": "Coordinate reference system information for geospatial data",
+      "name": "proj",
+      "schema_url": "https://raw.githubusercontent.com/zarr-conventions/proj/refs/tags/v0.1/schema.json",
+      "spec_url": "https://github.com/zarr-conventions/proj/blob/v0.1/README.md",
+      "uuid": "f17cb550-5864-4468-aeb7-f3180cfb622f"
+     },
+     {
+      "description": "Spatial coordinate information",
+      "name": "spatial",
+      "schema_url": "https://raw.githubusercontent.com/zarr-conventions/spatial/refs/tags/v0.1/schema.json",
+      "spec_url": "https://github.com/zarr-conventions/spatial/blob/v0.1/README.md",
+      "uuid": "689b58e2-cf7b-45e0-9fff-9cfc0883d6b4"
+     }
+    ]
+   },
+   "chunk_grid": {
+    "configuration": {
+     "chunk_shape": [
+      4,
+      4,
+      12
+     ]
+    },
+    "name": "regular"
+   },
+   "chunk_key_encoding": {
+    "configuration": {
+     "separator": "/"
+    },
+    "name": "default"
+   },
+   "codecs": [
+    {
+     "name": "bytes"
+    },
+    {
+     "configuration": {
+      "checksum": false,
+      "level": 19
+     },
+     "name": "zstd"
+    }
+   ],
+   "data_type": "uint8",
+   "dimension_names": [
+    "wy",
+    "wx",
+    "quality_byte"
+   ],
+   "fill_value": 0,
+   "node_type": "array",
+   "shape": [
+    5,
+    6,
+    12
+   ],
+   "storage_transformers": [],
+   "zarr_format": 3
+  }
+ }
+}

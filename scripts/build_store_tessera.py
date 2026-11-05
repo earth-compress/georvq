@@ -63,6 +63,7 @@ from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 import numpy as np
 
 from georvq.data.build import ShardWriter
+from georvq.tessera.tiles import clean_nodata, tile_window, utm_zone  # noqa: F401
 
 PX = 512
 
@@ -183,10 +184,6 @@ V11_REGISTRY = "s3://tessera-embeddings/v1.1/dclimate.registry/parts"
 V11_ICECHUNK = "s3://tessera-embeddings/v1.1/dclimate.icechunk"
 
 
-def utm_zone(lon: float) -> int:
-    """UTM zone (1-60) of a longitude; a 0.1-degree tile belongs to the zone
-    containing its centre."""
-    return max(1, min(60, int(math.floor((lon + 180) / 6)) + 1))
 
 
 def registry_tile_years(df) -> dict:
@@ -240,28 +237,8 @@ def registry_tile_years(df) -> dict:
     return out
 
 
-def tile_window(lon, lat, west, top, px, to_utm):
-    """(r0, c0, h, w) pixel envelope of the 0.1-degree tile centred at
-    (lon, lat) on a zone grid with origin (west, top) and pixel size px;
-    to_utm maps lon/lat arrays to the grid's CRS."""
-    d = np.array([-0.05, 0.0, 0.05])
-    lo, la = np.meshgrid(lon + d, lat + d)
-    e, n = to_utm(lo.ravel(), la.ravel())
-    r0 = int(math.floor((top - np.max(n)) / px))
-    r1 = int(math.ceil((top - np.min(n)) / px))
-    c0 = int(math.floor((np.min(e) - west) / px))
-    c1 = int(math.ceil((np.max(e) - west) / px))
-    return r0, c0, r1 - r0, c1 - c0
 
 
-def clean_nodata(q, s):
-    """Map v1.1 nodata (NaN or infinite scale) onto the v1 convention:
-    all-zero vector and zero scale. q (128, H, W) int8, s (H, W) float32;
-    both are modified in place and returned."""
-    bad = ~np.isfinite(s)
-    s[bad] = 0.0
-    q[:, bad] = 0
-    return q, s
 
 
 class Backoff:
