@@ -18,7 +18,8 @@ golden/tessera_v1_1_golden.npz holds the records the bundle's encoder
 produced for the crop on CPU, and sha256 hashes of the float32 field
 decoded from them and of the float32 output pixels at four rungs.
 golden/tessera_v1_1_tile.georvq.zarr is the crop written as a Tessera
-v1.1 store with small chunks, read back through georvq.open.
+v1.1 store with small chunks (a region of its zone's grid, the product
+a shard store codes), read back through georvq.open.
 
 Everything is compared exactly. The hashes were recorded on CPU in fp32
 (cirrus, x86-64); a CPU with other vector kernels could produce
@@ -108,10 +109,13 @@ def _inputs():
 
 
 def _tile(q, s, meta):
-    return v1_1.TesseraTile.from_arrays(
-        meta["year"], meta["tile_lon"], meta["tile_lat"], q, s, meta["epsg"],
-        meta["transform"], meta["source"], meta["zone_window"][:2],
-        meta["zone"])
+    """The crop as a region of its zone's grid, the product a Tessera v1.1
+    store codes (a shard, normally)."""
+    R, C = meta["zone_window"][:2]
+    tr = meta["transform"]
+    return v1_1.TesseraShard.from_arrays(
+        meta["year"], meta["zone"], q, s, meta["epsg"], tr[2] - C * tr[0],
+        tr[5] - R * tr[4], tr[0], R, C, meta["source"])
 
 
 def _rel_l2(out, q, s, valid):
@@ -142,7 +146,7 @@ def _bundle_codec():
 
 
 def _encode(codec, q, s):
-    """BlockRecords of the crop, as encode_tile computes them."""
+    """BlockRecords of the crop, as encode_shard computes them."""
     return codec.encode_block((np.ascontiguousarray(q), s), stats=False)
 
 
@@ -286,8 +290,8 @@ def test_golden_tile_reads_back(released):
 
 def write_tile(codec, out, q, s, meta, stats=True):
     """Encode the crop to the store `out` as the golden tile is written."""
-    v1_1.encode_tile(_tile(q, s, meta), out, codec, stats=stats,
-                     chunk_px=TILE_CHUNK_PX, release="golden")
+    v1_1.encode_shard(_tile(q, s, meta), out, codec, stats=stats,
+                      chunk_px=TILE_CHUNK_PX, release="golden")
 
 
 def inputs():
@@ -318,7 +322,7 @@ def inputs():
     meta = {"chip_id": int(r.chip_id), "year": year, "tile_lon": lon,
             "tile_lat": lat, "rows": [y0, y1], "cols": [x0, x1],
             "epsg": zg["epsg"], "zone": z,
-            "transform": list(v1_1.TesseraTile.zone_transform(zg, R, C)),
+            "transform": list(tiles.TesseraTile.zone_transform(zg, R, C)),
             "zone_window": [R, C, y1 - y0, x1 - x0],
             "source": tiles.source_url(tiles.V11_STORE, z, ti, R, C,
                                        y1 - y0, x1 - x0),

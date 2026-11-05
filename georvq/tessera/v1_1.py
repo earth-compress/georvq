@@ -1,22 +1,25 @@
-"""Tessera v1.1 release layer: geotessera v1.1 tiles as georvq Zarr stores.
+"""Tessera v1.1 release layer: shards of the Tessera v1.1 zone arrays as
+georvq Zarr stores.
 
-A Tessera v1.1 store holds one tile of the Tessera v1.1 embeddings (the
-global run produced and hosted by dClimate; georvq.tessera.tiles): a
-0.1 degree cell of one year, 128-band int8 codes with a float32 scale
-per pixel, x = q * scale, on the 10 m grid of its UTM zone. It is coded
+A Tessera v1.1 store holds one shard of the Tessera v1.1 embeddings (the
+global run produced and hosted by dClimate; georvq.tessera.tiles): the
+4096 x 4096 px region of one UTM zone's grid that one shard of the
+source's arrays covers, in one year, 128-band int8 codes with a float32
+scale per pixel, x = q * scale, at 10 m. The stores mirror the source's
+layout and are aligned with its shards exactly. It is coded
 by the `tessera_v11` model (step 133,000), a stats_cond model whose
 per-window mean travels through a `RotatedChannel` of 1280 bits: the
 principal axes of training window means, each component companded with
 asinh over the hard bound that every value of a valid pixel obeys,
 |x_d| <= 127 * SCALE_MAX / XNORM, so that no mean is clipped. The store
 layout is that of every release (georvq.inference.records,
-docs/GEORVQ_ZARR.md), with these chunk sizes, chosen because a tile is
-about 1100 x 800 px and each request to a CDN costs more than the bytes
-of a small chunk:
+docs/GEORVQ_ZARR.md), with these chunk sizes, chosen because the
+usual read is of one geotessera tile, about 1100 x 800 px, and each
+request to a CDN costs more than the bytes of a small chunk:
 
-- `base` and `mid`, 2048 px chunks (the whole tile), and `mask` chunked
-  as base;
-- `fine`, 1024 px chunks (two or four per tile);
+- `base` and `mid`, 2048 px chunks (four per shard, one to four per
+  tile), and `mask` chunked as base;
+- `fine`, 1024 px chunks (16 per shard, two to nine per tile);
 - `quality/<decoder_id>`, optional, chunked as base: per window and per
   rung, the mean and p99 of the per-pixel relative L2 error
   ||decoded - source|| / ||source|| of the 128-band vector, measured at
@@ -39,11 +42,13 @@ the embeddings (Tessera v1, whose embedding space differs) is never
 decoded with this codec: `georvq.open` refuses a bundle of another
 format, and `load_bundle` one whose `embeddings` differ.
 
-Tiles are not multiples of the 64 px window. The last row and column of
-windows are padded with invalid pixels and coded, never cropped, and the
-store's mask restores the tile's extent and its nodata. One store is
-written per tile, `{year}/grid_{lon}_{lat}.georvq.zarr`, and
-`georvq.tessera.index.build_index` makes the release's tile index.
+A shard is 64 x 64 windows, so the window grid of every store is
+aligned with the shards and with every other store of its zone. One
+store is written per shard with a valid pixel,
+`{year}/utm{zone}/{row}_{col}.georvq.zarr` (`georvq.tessera.tiles
+.shard_id`), and `georvq.tessera.index.build_index` makes the release's
+index, which lists the geotessera tiles each store touches, so that
+`georvq.tessera.read_tile` reads a tile from the stores alone.
 
 The stores are derived from the TESSERA embeddings, which are licensed
 CC-BY-SA 4.0, so each store's header carries that licence and its
@@ -60,13 +65,13 @@ import numpy as np
 
 from georvq.inference.store_codec import (OnnxStoreCodec, ReleaseSpec,
                                           StoreCodec, encode_product)
-from georvq.tessera.tiles import (EMBEDDINGS, V11_STORE, TesseraTile,
-                                  tile_name)
+from georvq.tessera.tiles import (EMBEDDINGS, V11_STORE,  # noqa: F401
+                                  TesseraShard, TesseraTile, shard_id)
 
 XNORM = 32.0          # georvq.sources.tessera.TesseraSource.XNORM
 SCALE_MAX = 1.0       # georvq.sources.tessera.TesseraSource.SCALE_MAX
 BANDS = 128
-KIND = "tessera-tile"
+KIND = "tessera-shard"
 FORMAT = "georvq-tessera/v1.1"
 BUNDLE_FORMAT = "georvq-tessera/v1.1-bundle"
 RELEASE_NAME = "tessera-v1.1"
@@ -189,18 +194,22 @@ def _bundle_readme(meta) -> str:
     from georvq.inference.bundle import bundle_readme
     return bundle_readme(
         meta, "georvq Tessera v1.1 bundle",
-        "Decoder and encoder for Tessera v1.1 embedding tiles (the global "
-        "run produced by\ndClimate) stored as georvq Zarr stores "
+        "Decoder and encoder for the Tessera v1.1 embeddings (the global "
+        "run produced by\ndClimate) stored as georvq Zarr stores, one per "
+        "shard of the source's zone arrays "
         f"(`{meta['codec_format']}`, see docs/GEORVQ_ZARR.md).",
         """
 import georvq
-with georvq.open("2024/grid_26.15_44.45.georvq.zarr") as ds:
-    a = ds.read(quality="20-13-0")       # (128, H, W) float32
+with georvq.open("2024/utm35/107_06.georvq.zarr") as ds:
+    a = ds.read(window=((0, 1024), (0, 1024)), quality="20-13-0")
+import georvq.tessera
+t = georvq.tessera.read_tile("tessera_georvq_index.parquet", 26.15, 44.45,
+                             2024, quality="20-13-0")   # (128, H, W) float32
 
 from georvq.tessera import v1_1
 codec = v1_1.load_bundle("bundle_dir", device="cuda")
-tile = v1_1.TesseraTile.read(2024, 26.15, 44.45)
-v1_1.encode_tile(tile, "grid_26.15_44.45.georvq.zarr", codec)
+shard = v1_1.TesseraShard.read(2024, 35, 107, 6)
+v1_1.encode_shard(shard, "107_06.georvq.zarr", codec)
 """)
 
 
@@ -267,20 +276,21 @@ def to_geotessera(x, valid=None):
 # stores and bundles
 # --------------------------------------------------------------------------
 
-def store_path(out_dir, year, lon, lat) -> str:
-    return os.path.join(out_dir, str(int(year)), tile_name(lon, lat)
-                        + ".georvq.zarr")
+def store_path(out_dir, year, zone, row, col) -> str:
+    return os.path.join(out_dir, shard_id(year, zone, row, col) + ".georvq.zarr")
 
 
-def encode_tile(tile: TesseraTile, out_path, codec: StoreCodec,
-                stats=True, chunk_px=None, batch=256, release=RELEASE_NAME,
-                uri=RELEASE_URI, revision=None, assets=None, log=None) -> dict:
-    """Encode one tile to the store `out_path`. Returns timings."""
-    if tile.product_meta.get("embeddings") != EMBEDDINGS:
-        raise ValueError(f"{tile.product_id}: embeddings "
-                         f"{tile.product_meta.get('embeddings')}, the codec "
+def encode_shard(shard: TesseraShard, out_path, codec: StoreCodec,
+                 stats=True, chunk_px=None, batch=256, release=RELEASE_NAME,
+                 uri=RELEASE_URI, revision=None, assets=None,
+                 log=None) -> dict:
+    """Encode one shard (or any region of a zone's grid) to the store
+    `out_path`. Returns timings."""
+    if shard.product_meta.get("embeddings") != EMBEDDINGS:
+        raise ValueError(f"{shard.product_id}: embeddings "
+                         f"{shard.product_meta.get('embeddings')}, the codec "
                          f"codes {EMBEDDINGS}")
-    return encode_product(tile, out_path, codec, stats=stats,
+    return encode_product(shard, out_path, codec, stats=stats,
                           chunk_px=chunk_px, batch=batch, release=release,
                           uri=uri, revision=revision, assets=assets, log=log)
 
@@ -321,17 +331,39 @@ def _tile_arg(s):
     return lon, lat
 
 
+def _shard_arg(s):
+    zone, row, col = (int(v) for v in s.split(","))
+    return zone, row, col
+
+
+def shards_of_tile(year, lon, lat, store=V11_STORE) -> list:
+    """(zone, row, col) of every shard the tile centred at (lon, lat)
+    touches."""
+    from pyproj import Transformer
+    from georvq.tessera.tiles import (open_store, shards_of_window,
+                                      tile_window, utm_zone, zone_grid)
+    z = utm_zone(lon)
+    zg = zone_grid(open_store(store), z)
+    fwd = Transformer.from_crs("EPSG:4326", f"EPSG:{zg['epsg']}",
+                               always_xy=True)
+    win = tile_window(lon, lat, zg["west"], zg["top"], zg["px"], fwd.transform)
+    return [(z, r, c) for r, c in shards_of_window(*win)]
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(
         prog="python -m georvq.tessera.v1_1",
-        description="Tessera v1.1 codec: one tile <-> one georvq Zarr "
-                    "store.")
+        description="Tessera v1.1 codec: one shard of a zone's arrays <-> "
+                    "one georvq Zarr store.")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    e = sub.add_parser("encode", help="Tessera v1.1 tiles -> stores")
+    e = sub.add_parser("encode", help="Tessera v1.1 shards -> stores")
     e.add_argument("out_dir")
     e.add_argument("--year", type=int, required=True)
-    e.add_argument("--tile", type=_tile_arg, action="append", required=True,
-                   help="lon,lat of a tile centre, e.g. 26.15,44.45; repeat")
+    e.add_argument("--shard", type=_shard_arg, action="append", default=[],
+                   help="zone,row,col of a shard, e.g. 35,107,6; repeat")
+    e.add_argument("--tile", type=_tile_arg, action="append", default=[],
+                   help="lon,lat of a tile centre: every shard it touches; "
+                        "repeat")
     e.add_argument("--bundle", required=True)
     e.add_argument("--store", default=V11_STORE,
                    help="the v1.1 Zarr store (URL or local path)")
@@ -365,14 +397,22 @@ def main(argv=None):
     with quiet_build():
         codec = load_bundle(args.bundle, device=args.device or
                             default_device("torch"))
+    want = list(args.shard)
     for lon, lat in args.tile:
-        tile = TesseraTile.read(args.year, lon, lat, store=args.store)
-        out = store_path(args.out_dir, args.year, lon, lat)
+        want += shards_of_tile(args.year, lon, lat, store=args.store)
+    if not want:
+        ap.error("encode needs --shard or --tile")
+    for zone, row, col in dict.fromkeys(want):
+        shard = TesseraShard.read(args.year, zone, row, col, store=args.store)
+        out = store_path(args.out_dir, args.year, zone, row, col)
+        if shard.valid_fraction() == 0:
+            print(json.dumps({"skipped": out, "reason": "no valid pixel"}))
+            continue
         os.makedirs(os.path.dirname(out), exist_ok=True)
-        t = encode_tile(tile, out, codec, stats=not args.no_quality,
-                        batch=args.batch,
-                        log=lambda m: print(m, file=sys.stderr))
-        print(json.dumps(dict(t, out=out, source=tile.source)))
+        t = encode_shard(shard, out, codec, stats=not args.no_quality,
+                         batch=args.batch,
+                         log=lambda m: print(m, file=sys.stderr))
+        print(json.dumps(dict(t, out=out, source=shard.source)))
     return 0
 
 

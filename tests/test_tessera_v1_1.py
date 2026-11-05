@@ -1,9 +1,11 @@
 """Tessera v1.1 release layer: the prep and validity hooks agree with
-georvq.tessera.io, the int8 representation round trips, tiles are read
-from a v1.1 Zarr store with the window and georeferencing of the chip
-store builder, a tile padded to whole windows reads back through
-georvq.open with no arguments against a tiny Tessera-shaped model, and
-stores and bundles name the embeddings they code."""
+georvq.tessera.io, the int8 representation round trips, tiles and shards
+are read from a v1.1 Zarr store with the windows of the chip-store
+builder and the source's shard grid, a region padded to whole windows
+reads back through georvq.open with no arguments against a tiny
+Tessera-shaped model, stores and bundles name the embeddings they code,
+and read_tile assembles a tile that straddles stores from the index
+alone, equal to a store covering them all."""
 import json
 import os
 import shutil
@@ -27,11 +29,22 @@ from georvq.tessera import tiles, v1_1  # noqa: E402
 from georvq.tessera.io import prep  # noqa: E402
 
 H, WD, WIN = 70, 45, 16
-YEAR, LON, LAT = 2024, 17.25, 46.75
-ORIGIN = (500000.0, 5180000.0)       # top-left of the tiny tile, EPSG:32633
+YEAR, LON, LAT, ZONE = 2024, 17.25, 46.75, 33
+WEST, TOP, PX = 163840.0, 9338880.0, 10.0      # zone 33's grid origin
 
 
-def _tile_arrays(seed=0):
+def _tile_window():
+    from pyproj import Transformer
+    fwd = Transformer.from_crs("EPSG:4326", "EPSG:32633", always_xy=True)
+    return tiles.tile_window(LON, LAT, WEST, TOP, PX, fwd.transform)
+
+
+TW = _tile_window()
+# the tiny region lies inside the tile's window
+R0, C0 = TW[0] + 400, TW[1] + 300
+
+
+def _tile_arrays(seed=0, H=H, WD=WD):
     """(128, H, W) int8 codes and an (H, W) scale plane, with nodata as
     all-zero vectors and as NaN, infinite and zero scales."""
     rng = np.random.default_rng(seed)
@@ -45,17 +58,20 @@ def _tile_arrays(seed=0):
     s = (m * 0.05 / 127 + 0.01).astype(np.float32)
     q[:, :6, :10] = 0
     s[50:52, 20:40] = np.nan
-    s[60, 3] = np.inf
+    s[60:61, 3:4] = np.inf          # slices, so that small arrays skip it
     s[30:35, 30:34] = 0.0
     return q, s
 
 
-def _tiny_tile():
-    q, s = _tile_arrays()
-    t = (10.0, 0.0, ORIGIN[0], 0.0, -10.0, ORIGIN[1])
-    return v1_1.TesseraTile.from_arrays(YEAR, LON, LAT, q, s, 32633, t,
-                                        "test/utm33/embeddings[0,:,0:70,0:45]",
-                                        (0, 0))
+def _region(q, s, r0=R0, c0=C0):
+    h, w = s.shape
+    return v1_1.TesseraShard.from_arrays(
+        YEAR, ZONE, q, s, 32633, WEST, TOP, PX, r0, c0,
+        f"test/utm33/embeddings[0,:,{r0}:{r0 + h},{c0}:{c0 + w}]")
+
+
+def _tiny_region():
+    return _region(*_tile_arrays())
 
 
 def test_validity_and_prep_agree_with_io():
@@ -130,6 +146,53 @@ def test_tile_is_read_with_the_builders_window(tmp_path):
         v1_1.TesseraTile.read(YEAR, LON, LAT, store=other)
 
 
+def test_shard_is_read_on_the_source_shard_grid(tmp_path):
+    """Shards are the source arrays' own 4096 px shards, named by year,
+    zone, row and column, and refused where the source is not sharded so."""
+    S = tiles.SHARD_PX
+    root = zarr.open_group(str(tmp_path / "v11"), mode="w")
+    root.attrs.update({"geoemb:model": tiles.V11_MODEL})
+    g = root.create_group("utm33")
+    g.attrs.update({"spatial:transform": [10, 0, WEST, 0, -10, TOP],
+                    "proj:code": "EPSG:32633"})
+    g.create_array("time", data=np.array([2023, YEAR], np.int32))
+    emb = g.create_array("embeddings", shape=(2, 128, 2 * S, 2 * S),
+                         dtype="int8", shards=(1, 128, S, S),
+                         chunks=(1, 128, 32, 32), fill_value=0)
+    sc = g.create_array("scales", shape=(2, 2 * S, 2 * S), dtype="float32",
+                        shards=(1, S, S), chunks=(1, 32, 32),
+                        fill_value=float("nan"))
+    q, s = _tile_arrays(H=8, WD=8)
+    emb[1, :, S + 2:S + 10, S + 4:S + 12] = q
+    sc[1, S + 2:S + 10, S + 4:S + 12] = s
+    sh = v1_1.TesseraShard.read(YEAR, ZONE, 1, 1, store=str(tmp_path / "v11"))
+    assert (sh.height, sh.width) == (S, S) and sh.crs.to_epsg() == 32633
+    assert sh.transform == (10.0, 0.0, WEST + 10 * S, 0.0, -10.0, TOP - 10 * S)
+    assert sh.product_id == "2024/utm33/001_01"
+    assert sh.source == (f"{tmp_path / 'v11'}/utm33/embeddings"
+                         f"[1,:,{S}:{2 * S},{S}:{2 * S}]")
+    p = sh.product_meta
+    assert p["shard"] == {"row": 1, "col": 1, "px": S}
+    assert p["zone_window"] == {"row": S, "col": S, "height": S, "width": S}
+    assert p["zone_origin"] == {"west": WEST, "top": TOP, "px": PX}
+    tiles.clean_nodata(q, s)
+    qq, ss = sh.read_strip(0, 12)
+    assert np.array_equal(qq[:, 2:10, 4:12], q) and np.array_equal(ss[2:10, 4:12], s)
+    assert (ss[:2] == 0).all() and (qq[:, :2] == 0).all()
+    # from the scales alone (the synthetic all-zero vectors here have a
+    # scale, which real data does not)
+    assert sh.valid_fraction() == pytest.approx(((s > 0) & (s < 1)).sum() / S ** 2)
+    with pytest.raises(ValueError, match="outside"):
+        v1_1.TesseraShard.read(YEAR, ZONE, 2, 0, store=str(tmp_path / "v11"))
+    assert tiles.shard_id(2025, 30, 80, 7) == "2025/utm30/080_07"
+    assert tiles.shards_of_window(4090, 8190, 20, 10) == [(0, 1), (0, 2),
+                                                          (1, 1), (1, 2)]
+    # an array chunked but not sharded at 4096 px is not this layout
+    path, *_ = _v11_store(tmp_path / "unsharded")
+    with pytest.raises(ValueError, match="shards"):
+        v1_1.TesseraShard.read(YEAR, ZONE, 0, 0, store=path)
+
+
 @pytest.fixture(scope="module")
 def tiny(tmp_path_factory):
     tmp = tmp_path_factory.mktemp("tesv11")
@@ -147,7 +210,7 @@ def tiny(tmp_path_factory):
     for rvq in model.rvqs:
         rvq.project_books()
     model.eval()
-    tile = _tiny_tile()
+    tile = _tiny_region()
     W = WIN
     qc, sc = tile.q[:, :64, :32], tile.s[:64, :32]
     x, v = prep(qc.reshape(128, 4, W, 2, W).transpose(1, 3, 0, 2, 4)
@@ -162,10 +225,10 @@ def tiny(tmp_path_factory):
            + 0.01 * rng.normal(size=(2000, 128)))
     channel = RotatedChannel.fit_pca(fit, fit, 128 * 6, box=v1_1.BOX)
     codec = v1_1.TesseraV11Codec(model, channel)
-    out = v1_1.store_path(tmp / "stores", YEAR, LON, LAT)
+    out = str(tmp / "stores" / "2024" / "utm33" / "region.georvq.zarr")
     os.makedirs(os.path.dirname(out))
-    v1_1.encode_tile(tile, out, codec, chunk_px={"base": 64, "mid": 64,
-                                                 "fine": 32})
+    v1_1.encode_shard(tile, out, codec, chunk_px={"base": 64, "mid": 64,
+                                                  "fine": 32})
     ckpt = tmp / "tiny.pt"
     from georvq.repro import save_checkpoint
     save_checkpoint(ckpt, model, cfg, 3)
@@ -201,11 +264,16 @@ def test_store_header_names_the_embeddings(tiny):
         h = rd.header
     assert h["codec"]["format"] == v1_1.FORMAT == "georvq-tessera/v1.1"
     assert h["codec"]["mean_channel"] == {"kind": "rotated", "bits": 768}
-    assert h["product"]["kind"] == v1_1.KIND and h["product"]["year"] == YEAR
-    assert h["product"]["id"] == f"{YEAR}/grid_17.25_46.75"
-    assert h["product"]["embeddings"]["version"] == "1.1"
-    assert h["product"]["embeddings"]["run"] == "dclimate"
-    assert h["product"]["source"] == tiny["tile"].source
+    p = h["product"]
+    assert p["kind"] == v1_1.KIND == "tessera-shard" and p["year"] == YEAR
+    assert p["id"] == f"{YEAR}/utm33/r{R0}_c{C0}"
+    assert p["utm_zone"] == ZONE and p["shard"] is None
+    assert p["zone_window"] == {"row": R0, "col": C0, "height": H, "width": WD}
+    assert p["zone_origin"] == {"west": WEST, "top": TOP, "px": PX}
+    assert p["transform"] == [PX, 0.0, WEST + C0 * PX, 0.0, -PX, TOP - R0 * PX]
+    assert p["embeddings"]["version"] == "1.1"
+    assert p["embeddings"]["run"] == "dclimate"
+    assert p["source"] == tiny["tile"].source
     assert h["output"] == {"dtype": "float32", "nodata": 0.0, "count": 128,
                            "band_names": None}
     assert h["licence"]["spdx"] == "CC-BY-SA-4.0"
@@ -218,11 +286,11 @@ def test_store_header_names_the_embeddings(tiny):
 
 
 def test_encode_refuses_other_embeddings(tiny, tmp_path):
-    t = _tiny_tile()
+    t = _tiny_region()
     t.product_meta["embeddings"] = dict(t.product_meta["embeddings"],
                                         version="1.0")
     with pytest.raises(ValueError, match="embeddings"):
-        v1_1.encode_tile(t, str(tmp_path / "x.georvq.zarr"), tiny["codec"])
+        v1_1.encode_shard(t, str(tmp_path / "x.georvq.zarr"), tiny["codec"])
 
 
 def test_channel_kind_is_checked(tiny):
@@ -287,22 +355,75 @@ def test_index_of_stores(tiny):
     pytest.importorskip("pyarrow")
     from georvq.inference.store_index import CORE
     from georvq.tessera.index import build_index
-    root = os.path.dirname(os.path.dirname(tiny["store"]))
+    root = tiny["tmp"] / "stores"
     t = build_index(root)
     assert t.schema.names[:len(CORE)] == CORE.names
     (r,) = t.to_pylist()
     assert r["crs"] == "EPSG:32633" and r["release"] == "tessera-v1.1"
-    assert r["product_id"] == "2024/grid_17.25_46.75"
-    assert (r["year"], r["tile_lon"], r["tile_lat"], r["utm_zone"]) == \
-        (YEAR, LON, LAT, 33)
+    assert r["product_id"] == f"{YEAR}/utm33/r{R0}_c{C0}"
+    assert (r["year"], r["utm_zone"], r["zone_row"], r["zone_col"]) == \
+        (YEAR, ZONE, R0, C0)
+    assert (r["shard_row"], r["shard_col"]) == (None, None)
+    assert (r["zone_west"], r["zone_top"], r["zone_px"]) == (WEST, TOP, PX)
     assert r["embeddings_version"] == "1.1"
     t0 = tiny["tile"]
     assert r["valid_fraction"] == pytest.approx(
         v1_1.raw_valid(t0.q, t0.s).mean())
     assert r["rungs"][0]["rung"] == "2-0-0"
     assert r["source_url"] == t0.source
-    for prefix, want in (("", "2024/grid_17.25_46.75.georvq.zarr"),
-                         ("https://h/x/", "https://h/x/2024/grid_17.25_46.75"
+    # the region lies inside one tile, whose window is the builder's
+    assert [x["name"] for x in r["tiles"]] == ["grid_17.25_46.75"]
+    x = r["tiles"][0]
+    assert (x["row"], x["col"], x["height"], x["width"]) == TW
+    for prefix, want in (("", "2024/utm33/region.georvq.zarr"),
+                         ("https://h/x/", "https://h/x/2024/utm33/region"
                                           ".georvq.zarr")):
         t = build_index(root, url_prefix=prefix)
         assert t.column("path").to_pylist() == [want]
+
+
+def test_read_tile_assembles_a_tile_across_stores(tiny, tmp_path, monkeypatch):
+    """A 96 px region cut into four 48 px stores, which the tile's window
+    straddles, read through the index alone equals one store of the
+    whole region: the stores' window grids are aligned, and windows are
+    decoded independently (up to float rounding, which can depend on how
+    windows are batched)."""
+    from georvq.tessera.index import build_index, find_tile, read_tile
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    q, s = _tile_arrays(seed=3, H=96, WD=96)
+    codec = tiny["codec"]
+    kw = {"chunk_px": {"base": 32, "mid": 32, "fine": 16}}
+    whole = str(tmp_path / "whole.georvq.zarr")
+    v1_1.encode_shard(_region(q, s), whole, codec, **kw)
+    root = tmp_path / "split"
+    for i in (0, 1):
+        for j in (0, 1):
+            sl = np.s_[48 * i:48 * (i + 1)], np.s_[48 * j:48 * (j + 1)]
+            reg = _region(q[:, sl[0], sl[1]], s[sl], R0 + 48 * i, C0 + 48 * j)
+            out = root / "2024" / "utm33" / f"{i}_{j}.georvq.zarr"
+            out.parent.mkdir(parents=True, exist_ok=True)
+            v1_1.encode_shard(reg, str(out), codec, **kw)
+    ip = str(root / "index.parquet")
+    build_index(root, ip, url_prefix="")
+    info = find_tile(ip, LON, LAT, YEAR)
+    assert info["window"] == TW and len(info["stores"]) == 4
+    assert info["epsg"] == 32633
+    assert info["transform"] == (PX, 0.0, WEST + TW[1] * PX, 0.0, -PX,
+                                 TOP - TW[0] * PX)
+    y, x = R0 - TW[0], C0 - TW[1]
+    with georvq.open(whole, codec=codec) as ds:
+        for r in ("2-0-0", "3-2-0", "3-2-2", "p99<=0.5"):
+            got = read_tile(ip, LON, LAT, YEAR, quality=r, codec=codec)
+            assert got.shape == (128, TW[2], TW[3]) and got.dtype == np.float32
+            # equal but for float rounding, which can depend on how
+            # windows are batched
+            np.testing.assert_allclose(got[:, y:y + 96, x:x + 96],
+                                       ds.read(quality=r), rtol=0, atol=1e-4)
+            rest = got.copy()
+            rest[:, y:y + 96, x:x + 96] = 0
+            assert not rest.any()
+    by_name = read_tile(ip, "2024/grid_17.25_46.75", quality="3-2-2", codec=codec)
+    assert np.array_equal(by_name, read_tile(ip, LON, LAT, YEAR,
+                                             quality="3-2-2", codec=codec))
+    with pytest.raises(KeyError, match="grid_17.35_46.75"):
+        find_tile(ip, 17.35, 46.75, YEAR)
