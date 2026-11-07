@@ -422,6 +422,14 @@ def test_read_tile_assembles_a_tile_across_stores(tiny, tmp_path, monkeypatch):
             rest = got.copy()
             rest[:, y:y + 96, x:x + 96] = 0
             assert not rest.any()
+    # a window of the tile, in its own pixels, across the stores' edges
+    win = ((y + 30, y + 70), (x + 20, x + 60))
+    part = read_tile(ip, LON, LAT, YEAR, quality="3-2-2", window=win, codec=codec)
+    full = read_tile(ip, LON, LAT, YEAR, quality="3-2-2", codec=codec)
+    np.testing.assert_allclose(part, full[:, y + 30:y + 70, x + 20:x + 60],
+                               rtol=0, atol=1e-4)
+    with pytest.raises(ValueError, match="outside"):
+        read_tile(ip, LON, LAT, YEAR, window=((0, TW[2] + 1), (0, 4)), codec=codec)
     by_name = read_tile(ip, "2024/grid_17.25_46.75", quality="3-2-2", codec=codec)
     assert np.array_equal(by_name, read_tile(ip, LON, LAT, YEAR,
                                              quality="3-2-2", codec=codec))

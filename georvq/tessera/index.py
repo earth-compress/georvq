@@ -189,21 +189,27 @@ def find_tile(index, lon, lat=None, year=None, storage_options=None) -> dict:
             "stores": stores}
 
 
-def read_tile(index, lon, lat=None, year=None, quality=None, codec=None,
-              storage_options=None, **open_kw):
+def read_tile(index, lon, lat=None, year=None, quality=None, window=None,
+              codec=None, storage_options=None, **open_kw):
     """The tile centred at (lon, lat) in `year`, read from the stores of
     the index at `quality` (a rung or a bound, as for `georvq.open`'s
     `read`) and assembled: float32 (128, height, width) in the release's
     output units, zero vectors at nodata and where no store covers the
     tile. `lon` may be a tile name ("grid_26.15_44.45", or
-    "2024/grid_26.15_44.45"). `codec` and `open_kw` go to `georvq.open`;
-    the codec the first store loads is reused for the others. The tile's
-    georeferencing is `find_tile`'s."""
+    "2024/grid_26.15_44.45"). `window`, ((row0, row1), (col0, col1)) in
+    the tile's pixels, reads only that part of it. `codec` and `open_kw`
+    go to `georvq.open`; the codec the first store loads is reused for
+    the others. The tile's georeferencing is `find_tile`'s."""
     import numpy as np
 
     import georvq
     info = find_tile(index, lon, lat, year, storage_options)
     r0, c0, h, w = info["window"]
+    if window is not None:
+        (a, b), (c, d) = window
+        if not (0 <= a < b <= h and 0 <= c < d <= w):
+            raise ValueError(f"window {window} is outside the {h} x {w} tile")
+        r0, c0, h, w = r0 + a, c0 + c, b - a, d - c
     out = None
     for st in info["stores"]:
         y0, y1 = max(r0, st["row"]), min(r0 + h, st["row"] + st["height"])

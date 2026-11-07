@@ -65,7 +65,7 @@ checkpoint exactly.
 | `georvq/eval/` | Held-out extraction, probes, benchmark registry, codec A/B helpers |
 | `georvq/inference/` | Source-agnostic deployment code: `api.py` Codec/Packet, `stats_codec.py`, `mean_codec.py` the `stats_cond` channel on the wire, `release.py` bitstream/decoder ids, `records.py` the release container (record layout, Zarr writer, zarr-python reader, record cache), `store_codec.py` a release's codec over the container (`ReleaseSpec`, `StoreCodec`, `encode_product`), `store_dataset.py` the rasterio-like reader, `bundle.py` and `bundle_resolve.py` release bundles and finding them, `store_index.py` per-store facts for a tile index, `bitpack.py` fixed-width records, `onnx_stats.py` ONNX for transmitted-mean models |
 | `georvq/ae/` | The AlphaEarth release codec: `v2.py` (the release's `ReleaseSpec`, the GeoTIFF tile reader, `encode_tile`, CLI), `v2_bundle.py`, `v2_resolve.py` (finding the bundle a store names), `index.py`. See `docs/AE_RELEASE.md` |
-| `georvq/tessera/` | The Tessera release codec, holding Tessera-specific policy: `v1_1.py` (the release's `ReleaseSpec`, `encode_tile`, bundles, CLI), `tiles.py` (the Tessera v1.1 tile reader over the dClimate Zarr store), `index.py` (the tile index), `io.py` (`prep` of geotessera arrays). See `docs/TESSERA_RELEASE.md` |
+| `georvq/tessera/` | The Tessera release codec, holding Tessera-specific policy: `v1_1.py` (the release's `ReleaseSpec`, `encode_shard`, bundles, CLI), `tiles.py` (the Tessera v1.1 shard and tile readers over the dClimate Zarr store), `index.py` (the index of shard stores, and `read_tile`), `io.py` (`prep` of geotessera arrays). See `docs/TESSERA_RELEASE.md` |
 | `georvq/s2/` | The Sentinel-2 L1C release codec: `v1.py` (the release's `ReleaseSpec` on three output grids, the SAFE product reader, `encode_safe`, `reconstruct_safe`, bundles, CLI), `safe.py` (band images, the metadata zip, JPEG 2000 writing, `manifest.safe` checksums), `deblock.py` (the optional client-side seam deblocker, `read_deblocked`), `index.py` (the tile index) |
 | `scripts/` | Thin drivers over the above (train, store builders, eval, release builds); `scripts/viz/` panel/GIF styling and builders |
 | `analysis/` | Source-characterisation and codec-diagnostic probes (`analysis/README.md`) |
@@ -176,9 +176,9 @@ are in `docs/AE_RELEASE.md` and `docs/TESSERA_RELEASE.md`.
 
 A data end user, decoding compressed data, needs `georvq.open` and
 the `{stem}.georvq.zarr` stores for AlphaEarth, with
-`docs/AE_RELEASE.md` as the complete contract, or `georvq.open` and the
-`{year}/grid_{lon}_{lat}.georvq.zarr` stores with
-`docs/TESSERA_RELEASE.md` for Tessera. None of the training code is
+`docs/AE_RELEASE.md` as the complete contract, or `georvq.open`,
+`georvq.tessera.read_tile` and the `{year}/utm{zone}/{row}_{col}.georvq.zarr`
+stores with `docs/TESSERA_RELEASE.md` for Tessera. None of the training code is
 needed for this.
 
 ## Preset provenance
