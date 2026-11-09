@@ -6,14 +6,19 @@ This document describes the released georvq codec for the TESSERA v1.1
 annual embeddings, the global run produced and hosted by dClimate,
 which geotessera 0.11 reads by default from Source Cooperative. The
 model that this codec uses is [released on Hugging Face](https://huggingface.co/earth-compress/georvq-tessera-v1.1).
-We use this codec to encode each 0.1 degree tile of one year into a
-Zarr store that holds the compressed records used by the decoder. These
-stores can be read from wherever they are hosted at any of 42 bitrates,
-with windowed range reads over HTTP, from 0.32 to 9.9 bits per pixel,
-with the relative L2 error of the 128-band vector going from 0.32 to
-0.13 averaged over the sample tiles. The code that this release uses is
-in `georvq/tessera/v1_1.py`, with the tile reader in
-`georvq/tessera/tiles.py` and the index in `georvq/tessera/index.py`, on
+We use this codec to encode each 4096 x 4096 px shard of the source's
+zone arrays, in one year, into a Zarr store that holds the compressed
+records used by the decoder, so that the coded stores have the source's
+layout, as the AlphaEarth release's stores have their source tiles'.
+These stores can be read from wherever they are hosted at any of 42
+bitrates, with windowed range reads over HTTP, from 0.32 to 9.9 bits
+per pixel, with the relative L2 error of the 128-band vector going from
+0.29 to 0.12 averaged over the sample's stores. A 0.1
+degree geotessera tile lies in one to four stores, and
+`georvq.tessera.read_tile` reads it from them through the release's
+index. The code that this release uses is in `georvq/tessera/v1_1.py`,
+with the shard and tile readers in `georvq/tessera/tiles.py` and the
+index and `read_tile` in `georvq/tessera/index.py`, on
 the shared store codec and reader in `georvq/inference/store_codec.py`
 and `georvq/inference/store_dataset.py`, and the store format is
 defined in `georvq/inference/records.py`.
@@ -24,14 +29,14 @@ different embedding space, so a model trained on one does not code the
 other. The codec format (`georvq-tessera/v1.1`), the bundle format,
 each store header's `product.embeddings` and the bundle's
 `embeddings` all name the version, so `georvq.open` refuses a bundle
-for other embeddings, and `encode_tile` refuses a tile of them.
+for other embeddings, and `encode_shard` refuses a shard of them.
 
 ## Who is this for
 
 | you are | recommended points of entry |
 |---|---|
-| Tessera data user, reading tiles | `georvq.open`, the Reading and Rate sections below |
-| archive operator, bulk-encoding tiles | `python -m georvq.tessera.v1_1 encode` on a GPU, the quality array, the Encoding cost section |
+| Tessera data user, reading tiles | `georvq.tessera.read_tile`, `georvq.open`, the Reading and Rate sections below |
+| archive operator, bulk-encoding shards | `python -m georvq.tessera.v1_1 encode` on a GPU, the quality array, the Encoding cost section |
 | codec researcher | `georvq/{model,train,...}` and `docs/OVERVIEW.md`; `georvq/tessera/v1_1.py` is a worked example of a release layer on the Zarr store |
 
 ## Model details
@@ -87,53 +92,63 @@ can be skipped by those who only want the data.
 
 ## Data format
 
-Each store codes one 0.1 degree tile of one year, cut from the v1.1
-Zarr store as the chip-store builder (`scripts/build_store_tessera.py
---dataset v1.1`) cuts it: on the grid of the UTM zone that holds the
-tile's centre, the pixel envelope of the cell's footprint, so a tile is
-about 1110 rows by 1110 x cos(latitude) columns, and its CRS is the
-northern UTM zone (southern tiles have negative northings, as in the
-v1.1 store). The stores are named `{year}/grid_{lon}_{lat}.georvq.zarr`,
-and each header records the slice of the v1.1 store's embeddings array
-it was read from as `product.source`, and the tile's place in the zone's
-grid as `product.zone_window`.
+Each store codes one shard of the v1.1 Zarr store's arrays in one year:
+the 4096 x 4096 px region of a UTM zone's 10 m grid that one shard of
+the source's `embeddings` and `scales` arrays covers, aligned with it
+exactly, in the zone's CRS (the northern UTM zone, so southern shards
+have negative northings, as in the v1.1 store) and transform. The
+stores are named `{year}/utm{zone}/{row}_{col}.georvq.zarr` by the
+shard's row and column on the zone's shard grid, the row zero-padded
+to three digits and the column to two, which covers every zone's grid
+(446 shard rows from 84 N to 80 S and 17 columns), so that names sort
+in grid order. Each header records the shard slice of the zone's
+embeddings array as `product.source`, and the shard's place in the
+zone's grid as `product.shard`, `product.zone_window` and
+`product.zone_origin`. A shard with no valid pixel has no store. A
+shard is 64 x 64 windows, so the window grid of every store is the
+zone's.
 
-A tile index, `tessera_georvq_index.parquet`, is the place to find which
-coded store covers an area and how many bytes it costs at each rate. It
-has the columns every georvq index has (the store's path, product id,
-source URL, CRS, bounds and footprint, `bitstream_id`, sizes and bytes
-per rung), followed by Tessera's own, taken from each store's header:
-`year`, `tile_lon`, `tile_lat`, `utm_zone`, `zone_row`, `zone_col`,
-`valid_fraction` and `embeddings_version`. It is built by
-`python -m georvq.tessera.v1_1 index` (`georvq/tessera/index.py`) and
-published with the stores. The stores are plain Zarr v3, so zarr-python
-and xarray open them directly, and the georvq header is JSON in the
-group's attributes.
+The index, `tessera_georvq_index.parquet`, is the place to find which
+coded store covers an area or a tile and how many bytes it costs at
+each rate. It has the columns every georvq index has (the store's path,
+product id, source URL, CRS, bounds and footprint, `bitstream_id`,
+sizes and bytes per rung), followed by Tessera's own, taken from each
+store's header: `year`, `utm_zone`, `shard_row`, `shard_col`,
+`zone_row`, `zone_col`, `zone_west`, `zone_top`, `zone_px`,
+`valid_fraction`, `embeddings_version` and `tiles`, the geotessera
+tiles whose window touches the store, each with its name, centre and
+window in the zone's grid. A geotessera tile is cut as the chip-store
+builder (`scripts/build_store_tessera.py --dataset v1.1`) cuts it: on
+the grid of the UTM zone that holds the tile's centre, the pixel
+envelope of the cell's footprint, about 1110 rows by 1110 x
+cos(latitude) columns, so it lies in one to four stores and is listed
+in each. The index is built by `python -m georvq.tessera.v1_1 index`
+(`georvq/tessera/index.py`) and published with the stores. The stores
+are plain Zarr v3, so zarr-python and xarray open them directly, and
+the georvq header is JSON in the group's attributes.
 
 Records are grouped into square chunks, with one array per kind of
-record (`docs/GEORVQ_ZARR.md`). A tile is not a multiple of the 64 px
-window, so the last row and column of windows are padded with invalid
-pixels and coded, and the mask restores the tile's extent:
+record (`docs/GEORVQ_ZARR.md`):
 
 | kind | chunk | per window |
 |---|---|---|
-| `base` (`mask` chunked alike) | 2048 px (the whole tile) | mean (160 B) and the 20 coarse levels (20 B), 180 B |
-| `mid` | 2048 px (the whole tile) | per level, 16 cells x 11 bits, 22 B |
-| `fine` | 1024 px (two or four per tile) | per level, 256 cells x 12 bits, 384 B |
+| `base` (`mask` chunked alike) | 2048 px (four per store) | mean (160 B) and the 20 coarse levels (20 B), 180 B |
+| `mid` | 2048 px (four per store) | per level, 16 cells x 11 bits, 22 B |
+| `fine` | 1024 px (16 per store) | per level, 256 cells x 12 bits, 384 B |
 | `quality/<decoder_id>` | 2048 px | mean and p99 of the relative L2 error per rung, 84 B |
 
-The chunks are this small because a tile is about 1100 x 800 px and
-each request to a CDN costs more than the bytes of a small chunk. On
-the Bucharest tile of the sample (2024, fully valid) the store is
-1.22 MB, of which `base` takes 0.044 MB, the mask 0.002 MB, `mid`
-0.071 MB, `fine` 1.045 MB, `quality` 0.014 MB and the group metadata
-0.048 MB. The eleven sample stores take 0.52 to 1.63 MB, against 58 to
-163 MB for a tile's int8 codes and float32 scales.
+The chunks are this small because the usual read is of one geotessera
+tile, about 1100 x 800 px, which touches one to four chunks of `base`
+and `mid` and two to nine of `fine`, and each request to a CDN costs
+more than the bytes of a small chunk. A fully valid store is about
+20.8 MB, of which `fine` is nearly all; the 17 sample stores take 8.4 to
+20.9 MB (316 MB in all), against 2.2 GB for a shard's int8 codes and
+float32 scales uncompressed.
 
 ## Reading
 
 `georvq.open(store, ...)`, given a path, a URL or an open `zarr.Group`,
-returns a lazy-loaded read-only dataset with the tile's georeferencing
+returns a lazy-loaded read-only dataset with the shard's georeferencing
 and shape (`crs`, `transform`, `width`, `height`, `count` (128),
 `dtypes` (float32), `nodata` (0.0), `profile`, `bounds`, `res` and
 rasterio's window helpers), whose `read` takes rasterio's `window`
@@ -157,12 +172,32 @@ and the backend to torch.
 
 ```python
 import georvq
+import georvq.tessera
 
-ds = georvq.open("2024/grid_26.15_44.45.georvq.zarr")
+ds = georvq.open("2024/utm35/107_06.georvq.zarr")
 w = ((0, 512), (0, 512))                               # rows, cols in pixels
 a = ds.read(window=w, quality="20-13-0")               # (128, 512, 512) float32
 b = ds.read(window=w, quality="p99<=0.3")              # per window, the cheapest rung meeting the bound
+
+index = "tessera_georvq_index.parquet"                 # a path or a URL
+t = georvq.tessera.read_tile(index, 26.15, 44.45, 2024, quality="20-13-0")
+info = georvq.tessera.find_tile(index, "2024/grid_26.15_44.45")
+# t is float32 (128, height, width) on the tile's window; info has its
+# window, transform, EPSG code and the stores it was read from
 ```
+
+`read_tile(index, lon, lat, year, quality=..., window=...)` reads the
+tile centred at (lon, lat), or named as `"grid_26.15_44.45"`, from the
+stores the index lists for it, and assembles them, so the result has the
+shape, georeferencing and nodata of the tile, with the windows of the
+shard stores decoded. It takes the same `quality` as `read`, a
+`window` in the tile's pixels, and `georvq.open`'s keywords, and reuses
+the codec of the first store for the others. Reading a tile this way is
+not bit for bit the read of a store coded per tile, since the windows
+lie on the shard grid rather than the tile's own; on the eleven sample
+tiles the two reads differ from each other by about as much as each
+differs from the source (0.015 to 0.26 in relative L2), whilst their
+errors against the source agree to within 1% of each other.
 
 `quality` takes a rung (`"20-13-0"`, `"20,13,0"` or a tuple), a bound
 on a quality statistic (`"mean<=X"` or `"p99<=X"`), or `None` for full
@@ -174,41 +209,55 @@ over the window's valid pixels, measured with the decode precision the
 header records (bf16 for the sample). They are stored with 32 codes per
 decade, a step of about 7.5%, rounded up to the next step, so a window
 read to a bound that one of its rungs meets is never above it. On the
-eleven sample tiles, no window read to `p99<=0.3` exceeded the bound
+17 sample stores (four 1024 px blocks of each), no window read to `p99<=0.3` exceeded the bound
 when decoded and scored against the source.
 
-To encode tiles, read them from the v1.1 store with
-`georvq.tessera.tiles.TesseraTile.read(year, lon, lat)` (a whole tile is
-about 2,500 chunk requests and took about three minutes from our server)
-or from the command line:
+To encode shards, read them from the v1.1 store with
+`georvq.tessera.tiles.TesseraShard.read(year, zone, row, col)`, which
+reads a strip at a time, or from the command line, by shard or by the
+tiles whose shards are wanted:
 
 ```bash
+python -m georvq.tessera.v1_1 encode out_dir/ --year 2024 --shard 35,107,6 --bundle <bundle dir>
 python -m georvq.tessera.v1_1 encode out_dir/ --year 2024 --tile 26.15,44.45 --bundle <bundle dir>
 python -m georvq.tessera.v1_1 index out_dir/ out_dir/tessera_georvq_index.parquet --url-prefix ""
 ```
+
+A shard's source arrays are 0.5 to 1.8 GB of compressed codes and 14
+to 50 MB of scales. Read through zarr-python they take thousands of
+chunk requests, so for the sample each shard object was fetched whole
+into a partial local copy of the v1.1 store and read from there: the 17
+shards, 24 GB, took 29 minutes with 16 concurrent range requests, a
+single request reaching about 4 MB/s from our server.
 
 ## Rate ladder
 
 The 42 rungs fill one tier at a time: coarse from 4 to 20 levels, then
 mid from 1 to 13, then fine from 1 to 12. A level costs 8 bits per
 window in the coarse tier, 176 in mid and 3,072 in fine, and every rung
-also carries the 1280-bit mean. The relative L2 column is pooled over
-the valid pixels of the eleven sample tiles, decoded in bf16 as a
-reader decodes them. The tiles span 2017 to 2025 and latitudes 45 S to
-72 N, and at full depth they range from 0.026 (Greenland ice sheet) to
-0.232 (Bucharest).
+also carries the 1280-bit mean. The relative L2 column is from the 17
+sample stores' quality values (each window's mean, weighted by its valid
+pixels, over every window, decoded in bf16 as a reader decodes them),
+which are rounded up by at most 7.5%; a decode of 68 sampled 1024 px
+blocks of the stores gave errors 5 to 6% lower. The stores span 2017 to
+2025 and latitudes 45 S to 72 N, and at full depth they range from 0.027
+(Greenland ice sheet) to 0.20 (Hohe Tauern).
 
-| rung | bits/window | b/px | relative L2 |
-|---|---|---|---|
-| 4-0-0 | 1,312 | 0.320 | 0.318 |
-| 20-0-0 | 1,440 | 0.352 | 0.296 |
-| 20-2-0 | 1,792 | 0.438 | 0.264 |
-| 20-6-0 | 2,496 | 0.609 | 0.241 |
-| 20-13-0 | 3,728 | 0.910 | 0.225 |
-| 20-13-1 | 6,800 | 1.660 | 0.202 |
-| 20-13-3 | 12,944 | 3.160 | 0.175 |
-| 20-13-6 | 22,160 | 5.410 | 0.154 |
-| 20-13-12 | 40,592 | 9.910 | 0.133 |
+| rung | bits/window | b/px | read b/px | relative L2 |
+|---|---|---|---|---|
+| 4-0-0 | 1,312 | 0.320 | 0.337 | 0.294 |
+| 20-0-0 | 1,440 | 0.352 | 0.337 | 0.272 |
+| 20-2-0 | 1,792 | 0.438 | 0.412 | 0.241 |
+| 20-6-0 | 2,496 | 0.609 | 0.567 | 0.219 |
+| 20-13-0 | 3,728 | 0.910 | 0.843 | 0.204 |
+| 20-13-1 | 6,800 | 1.660 | 1.425 | 0.185 |
+| 20-13-3 | 12,944 | 3.160 | 2.727 | 0.161 |
+| 20-13-6 | 22,160 | 5.410 | 4.731 | 0.142 |
+| 20-13-12 | 40,592 | 9.910 | 8.815 | 0.122 |
+
+"read b/px" is the bytes a whole-store read fetches, as the index
+records them, per pixel of the 17 stores: the records compressed with
+zstd, the mask and the shard indexes included.
 
 The header's `rungs` field lists all 42 with their bits per window and
 per pixel.
@@ -229,13 +278,16 @@ pip install -e ".[onnx]"            # adds ONNX Runtime decode
 hf download earth-compress/georvq-tessera-v1.1 --local-dir georvq-tessera-v1.1
 ```
 
-A sample of eleven encoded tiles with their index is on Hugging Face as
+A sample of 17 encoded stores, every shard that eleven chosen tiles
+touch, with their index is on Hugging Face as
 [`earth-compress/georvq-tessera-v1.1-sample`](https://huggingface.co/datasets/earth-compress/georvq-tessera-v1.1-sample),
-in the same `{year}/` layout, and `georvq.open` reads them by URL, e.g.
-`https://huggingface.co/datasets/earth-compress/georvq-tessera-v1.1-sample/resolve/main/2024/grid_26.15_44.45.georvq.zarr`.
+in the same `{year}/utm{zone}/` layout, and `georvq.open` reads them by
+URL, e.g.
+`https://huggingface.co/datasets/earth-compress/georvq-tessera-v1.1-sample/resolve/main/2024/utm35/107_06.georvq.zarr`.
 
 ## Encoding cost
 
-Encoding a tile on an A100, with the quality values that take one
-decode per rung at all 42 rungs, takes about 5 s, once the tile has
-been read.
+Encoding a shard on an A100, with the quality values that take one
+decode per rung at all 42 rungs, took 53 to 490 s (230 s on average)
+for the 17 sample stores, once the shard had been read, on a machine
+whose other card and most of whose CPUs were in use by other jobs.

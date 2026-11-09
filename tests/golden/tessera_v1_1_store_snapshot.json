@@ -953,13 +953,16 @@
       },
       "epsg": 32633,
       "height": 75,
-      "id": "2024/grid_17.25_46.75",
-      "kind": "tessera-tile",
-      "lat": 46.75,
-      "lon": 17.25,
+      "id": "2024/utm33/000_00",
+      "kind": "tessera-shard",
       "nodata": null,
       "orientation": "north-up",
       "scale": "float32 per pixel, x = q * scale",
+      "shard": {
+       "col": 0,
+       "px": 4096,
+       "row": 0
+      },
       "source": "snap/utm33/embeddings[0,:,0:75,0:90]",
       "transform": [
        10.0,
@@ -972,6 +975,11 @@
       "utm_zone": 33,
       "width": 90,
       "year": 2024,
+      "zone_origin": {
+       "px": 10.0,
+       "top": 5180000.0,
+       "west": 500000.0
+      },
       "zone_window": {
        "col": 0,
        "height": 75,

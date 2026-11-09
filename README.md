@@ -194,14 +194,18 @@ a = ds.read(window=((0, 1024), (0, 1024)), quality="8-8-2")
 ```
 
 The Tessera release (`georvq/tessera/v1_1.py`, `docs/TESSERA_RELEASE.md`)
-codes each tile of the Tessera v1.1 embeddings (128 bands) as one Zarr
-store, readable at 42 rungs across 0.32–9.9 b/px. It transmits each
-window's mean (1280 bits per window) and returns float32 embeddings:
+codes each 4096 px shard of the Tessera v1.1 embeddings' zone arrays
+(128 bands) in one year as one Zarr store, readable at 42 rungs across
+0.32–9.9 b/px. It transmits each window's mean (1280 bits per window)
+and returns float32 embeddings, and `georvq.tessera.read_tile` reads a
+geotessera tile from the stores its index lists:
 
 ```python
-import georvq
-ds = georvq.open("2024/grid_26.15_44.45.georvq.zarr")
-a = ds.read(quality="20-13-0")
+import georvq, georvq.tessera
+ds = georvq.open("2024/utm35/107_06.georvq.zarr")
+a = ds.read(window=((0, 1024), (0, 1024)), quality="20-13-0")
+t = georvq.tessera.read_tile("tessera_georvq_index.parquet", 26.15, 44.45, 2024,
+                             quality="20-13-0")
 ```
 
 ## Docs

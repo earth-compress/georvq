@@ -41,16 +41,19 @@ md("""
 The TESSERA v1.1 annual embeddings (the global run produced and hosted
 by dClimate, which geotessera 0.11 reads by default) are published as
 one Zarr store with a group per UTM zone, holding 128 int8 bands and a
-float32 scale per pixel at 10 m (the embedding is `q * scale`). A 0.1
-degree tile of it is about 1100 x 800 pixels and 120 MB of codes and
-scales. The tessera-v1.1 release codes each tile as one Zarr store of
-0.5 to 1.6 MB that can be read at 42 rates, from 0.32 to 9.9 bits per
-pixel, by window, over HTTP. The reader returns float32 embeddings in
-the source's dequantised units, with zero vectors at nodata, and
-`georvq.tessera.v1_1.to_geotessera` turns them back into int8 codes and
-per-pixel scales.
+float32 scale per pixel at 10 m (the embedding is `q * scale`), in
+shards of 4096 x 4096 pixels. The tessera-v1.1 release codes each shard
+of one year as one Zarr store, about 21 MB for a fully valid shard, that can be read at 42 rates,
+from 0.32 to 9.9 bits per pixel, by window, over HTTP, so the coded
+stores have the source's layout. A 0.1 degree geotessera tile, about
+1100 x 800 pixels and 120 MB of codes and scales, lies in one to four of
+them, and `georvq.tessera.read_tile` reads it from them. The reader
+returns float32 embeddings in the source's dequantised units, with zero
+vectors at nodata, and `georvq.tessera.v1_1.to_geotessera` turns them
+back into int8 codes and per-pixel scales.
 
-This notebook opens a coded tile, compares its reconstructions with the
+This notebook opens a coded store, reads a tile through the index,
+compares its reconstructions with the
 source at several rates, measures what reads cost in bytes, requests
 and time, and repeats two common analyses (similarity search and
 clustering) on source and reconstruction. Errors are given as the
@@ -63,7 +66,7 @@ layout is in `docs/GEORVQ_ZARR.md`.
 md("""
 ## Configuration
 
-`DATA_ROOT` holds the coded stores (`{year}/grid_{lon}_{lat}.georvq.zarr`)
+`DATA_ROOT` holds the coded stores (`{year}/utm{zone}/{row}_{col}.georvq.zarr`)
 and their index. It can be a local directory or an HTTP URL, and points
 at the sample on Hugging Face unless the environment variable of the
 same name says otherwise. `STORAGE_OPTIONS` go to fsspec when the stores
@@ -123,6 +126,7 @@ from georvq.inference.records import Trace
 import re
 import zarr
 from zarr.storage import FsspecStore, WrapperStore
+from georvq.tessera import find_tile, read_tile
 from georvq.tessera.v1_1 import raw_valid, to_geotessera
 from georvq.tessera.tiles import TesseraTile
 import ae_demo_http
@@ -144,12 +148,81 @@ NODATA_RGB = (0.86, 0.86, 0.84)
 REMOTE = DATA_ROOT.startswith(("http://", "https://"))
 
 
-def data_url(tile):
-    return f"{DATA_ROOT}/{tile}.georvq.zarr"
+IDX = f"{DATA_ROOT}/tessera_georvq_index.parquet"
+SO = STORAGE_OPTIONS if REMOTE else None
 
 
-def open_tile(tile, **kw):
-    return georvq.open(data_url(tile), storage_options=STORAGE_OPTIONS if REMOTE else None, **kw)
+class TileView:
+    \"\"\"A geotessera tile read through georvq.tessera.read_tile from the stores
+    an index lists, with the dataset attributes the cells below use. Window
+    statistics are on the zone's 64 px window grid, which every store shares:
+    `window_grid` windows cover the tile, whose first pixel is at `offset`
+    in them.\"\"\"
+
+    def __init__(self, tile, index=IDX, codec=None, **open_kw):
+        self.tile, self.index, self.kw = tile, index, open_kw
+        self.info = find_tile(index, tile, storage_options=SO)
+        r0, c0, self.height, self.width = self.info["window"]
+        self.shape = (self.height, self.width)
+        self.transform = rasterio.Affine(*self.info["transform"])
+        self.stores = [georvq.open(s["path"], codec=codec, storage_options=SO, **open_kw)
+                       for s in self.info["stores"]]
+        st = self.stores[0]
+        self.crs, self.header, self.rungs = st.crs, st.header, st.rungs
+        self.count, self.dtypes, self.nodata = st.count, st.dtypes, st.nodata
+        self.window_px = W = st.window_px
+        self.profile = dict(st.profile, width=self.width, height=self.height,
+                            transform=self.transform)
+        self.tags = st.tags
+        wr0, wc0 = r0 // W, c0 // W
+        self.offset = (r0 - wr0 * W, c0 - wc0 * W)
+        self.window_grid = ((r0 + self.height - 1) // W - wr0 + 1,
+                            (c0 + self.width - 1) // W - wc0 + 1)
+        self.mosaic_transform = self.transform * rasterio.Affine.translation(
+            -self.offset[1], -self.offset[0])
+        self._w0 = (wr0, wc0)
+
+    @property
+    def codec(self):
+        return self.stores[0].codec
+
+    def read(self, quality=None, window=None):
+        if isinstance(window, Window):
+            window = ((window.row_off, window.row_off + window.height),
+                      (window.col_off, window.col_off + window.width))
+        return read_tile(self.index, self.tile, quality=quality, window=window,
+                         codec=self.codec, storage_options=SO, **self.kw)
+
+    def _mosaic(self, fn, fill=0):
+        \"\"\"fn(store dataset, window rows, window cols) per store, placed on
+        the tile's window grid.\"\"\"
+        gh, gw = self.window_grid
+        out = None
+        for d, s in zip(self.stores, self.info["stores"]):
+            W, (wr0, wc0) = self.window_px, self._w0
+            a0, b0 = max(wr0, s["row"] // W), min(wr0 + gh, -(-(s["row"] + s["height"]) // W))
+            a1, b1 = max(wc0, s["col"] // W), min(wc0 + gw, -(-(s["col"] + s["width"]) // W))
+            if a0 >= b0 or a1 >= b1:
+                continue
+            v = fn(d, (a0 - s["row"] // W, b0 - s["row"] // W),
+                   (a1 - s["col"] // W, b1 - s["col"] // W))
+            if out is None:
+                out = np.full((gh, gw) + v.shape[2:], fill, v.dtype)
+            out[a0 - wr0:b0 - wr0, a1 - wc0:b1 - wc0] = v
+        return out
+
+    def quality_codes(self):
+        return self._mosaic(lambda d, r, c: d.quality_codes(r[0], r[1], c[0], c[1]))
+
+    def window_rungs(self, bound):
+        return self._mosaic(lambda d, r, c: d.window_rungs(bound)[r[0]:r[1], c[0]:c[1]])
+
+    def dataset_mask(self):
+        return (self.read(quality="4-0-0") != 0).any(0).astype(np.uint8) * 255
+
+    def close(self):
+        for d in self.stores:
+            d.close()
 
 
 def tile_name(tile):
@@ -195,28 +268,26 @@ def source_tile(tile, store=SOURCE_STORE):
     return TesseraTile.read(*tile_name(tile), store=store)
 
 
-# the tile index, read once: store sizes, source sizes and the bytes of whole-tile reads
-idx_path = f"{DATA_ROOT}/tessera_georvq_index.parquet"
+# the index, read once: the stores, their sizes and the bytes of whole-store reads
 if REMOTE:
-    req = urllib.request.Request(idx_path, headers=(STORAGE_OPTIONS or {}).get("headers", {}))
+    req = urllib.request.Request(IDX, headers=(STORAGE_OPTIONS or {}).get("headers", {}))
     index = pq.read_table(io.BytesIO(urllib.request.urlopen(req).read()))
 else:
-    index = pq.read_table(idx_path)
+    index = pq.read_table(IDX)
 
 
-def tile_row(tile):
-    return next(r for r in index.to_pylist() if r["path"].endswith(f"{tile}.georvq.zarr"))
-
-
-def store_size(tile):
-    r = tile_row(tile)
-    return r["store_bytes"] + r["metadata_bytes"]
+def store_rows(tile):
+    \"\"\"The index rows of the stores a tile touches.\"\"\"
+    name = tile.split("/")[1]
+    year = int(tile.split("/")[0])
+    return [r for r in index.to_pylist()
+            if r["year"] == year and any(x["name"] == name for x in r["tiles"])]
 
 
 def source_size(tile):
     \"\"\"Bytes of the tile's int8 codes and float32 scales, uncompressed.\"\"\"
-    r = tile_row(tile)
-    return r["width"] * r["height"] * (128 + 4)
+    win = next(x for x in store_rows(tile)[0]["tiles"] if x["name"] == tile.split("/")[1])
+    return win["width"] * win["height"] * (128 + 4)
 
 
 # zarr-python makes the requests, so they are counted by a local server
@@ -228,9 +299,7 @@ else:
     METER, meter, _ = ae_demo_http.serve(root=DATA_ROOT)
 
 
-def metered(tile):
-    \"\"\"The store's URL through the recording server.\"\"\"
-    return f"{METER}/{tile}.georvq.zarr"
+METER_IDX = f"{METER}/tessera_georvq_index.parquet"   # the index through it
 
 
 def vec(a):
@@ -305,33 +374,54 @@ def mb(n):
 # --------------------------------------------------------------------------
 
 md("""
-## Opening a store
+## Opening a store, and finding a tile
 
-`georvq.open` opens the store with zarr-python, which reads the
-group's zarr.json with one request: the georeferencing, the codec
-header and the metadata of every array. The dataset it returns has the
-attributes of a rasterio dataset (`crs`, `transform`, `width`, `height`,
-`count`, `dtypes`, `nodata`, `profile`, `tags()`, `block_windows()`),
-on the 10 m grid of the tile's UTM zone in the v1.1 store, and its
-`read` takes rasterio's `window` argument, plus
-`quality`, the rate to decode at.
+Each store codes one 4096 x 4096 px shard of the v1.1 source's zone
+arrays in one year, `{year}/utm{zone}/{row}_{col}.georvq.zarr`, so the
+stores tile each zone's grid as the source's shards do. `georvq.open`
+opens a store with zarr-python, which reads the group's zarr.json with
+one request: the georeferencing, the codec header and the metadata of
+every array. The dataset it returns has the attributes of a rasterio
+dataset (`crs`, `transform`, `width`, `height`, `count`, `dtypes`,
+`nodata`, `profile`, `tags()`, `block_windows()`), on the 10 m grid of
+the shard's UTM zone, and its `read` takes rasterio's `window`
+argument, plus `quality`, the rate to decode at.
+
+A geotessera tile, the 0.1 degree cell most tools address, can straddle
+up to four shards. The index lists, for every store, the tiles that
+touch it and their windows in the zone's grid, so
+`georvq.tessera.find_tile` finds a tile's stores from the index alone,
+and `georvq.tessera.read_tile` reads it from them as one array, with
+the tile's shape, georeferencing and nodata. The rest of this notebook
+reads `TILE` that way, through a small wrapper (`TileView`) that gives
+it the dataset attributes the cells use.
 """)
 
 code("""
-path = data_url(TILE)
-ds = open_tile(TILE)
+info = find_tile(IDX, TILE, storage_options=SO)
+store = georvq.open(info["stores"][0]["path"], storage_options=SO)
+root = DATA_ROOT if REMOTE else os.path.abspath(DATA_ROOT)
+rel = info["stores"][0]["path"][len(root.rstrip("/")) + 1:]      # relative to DATA_ROOT
 meter.clear()
-georvq.open(metered(TILE))
+georvq.open(f"{METER}/{rel}")
 open_req, open_bytes = len(meter.events), sum(e["bytes"] for e in meter.events)
+print(f"{'store':<12}{info['stores'][0]['path']}")
+print(f"{'size':<12}{store.width} x {store.height} px, shard {store.header['product']['shard']}")
+print(f"{'extent':<12}{lonlat(store.crs, store.transform, store.height, store.width)}")
+print(f"{'opened with':<12}{open_req} request, {mb(open_bytes)}")
+print(f"{TILE} is window {info['window']} (row, col, height, width) of utm{info['zone']}, "
+      f"held by {len(info['stores'])} stores: "
+      + ", ".join(s["path"].rsplit("/", 1)[-1] for s in info["stores"]))
+print()
 
-print(f"{'store':<12}{path}")
+ds = TileView(TILE)
+print(f"{'tile':<12}{TILE}")
 print(f"{'crs':<12}{ds.crs.to_string()}")
 print(f"{'size':<12}{ds.width} x {ds.height} px, {ds.count} bands of {ds.dtypes[0]}, nodata {ds.nodata}")
 print(f"{'transform':<12}{tuple(ds.transform)[:6]}")
 print(f"{'row order':<12}{'bottom-up, as the source' if ds.transform.e > 0 else 'north-up'}")
 print(f"{'extent':<12}{lonlat(ds.crs, ds.transform, ds.height, ds.width)}")
 print(f"{'codec':<12}bitstream {ds.header['codec']['bitstream_id']}, release {ds.header['codec']['release']['name']}")
-print(f"{'opened with':<12}{open_req} request, {mb(open_bytes)}")
 """)
 
 md("""
@@ -340,23 +430,26 @@ how many residual levels of each of the three tiers to decode (coarse,
 64 px cells; mid, 16 px; fine, 4 px). The coarse tier starts at 4
 levels, the fewest the model decodes, which gives 42 rungs. `bits_px`
 counts every bit read per pixel, the transmitted window mean included,
-and `whole-tile MB` is what reading the entire tile at that rung
-fetches. The 20 coarse levels are stored in one record with the mean,
-so every coarse rung fetches the same bytes.
+and `whole-store MB` is what reading the entire first store at that
+rung fetches. The 20 coarse levels are stored in one record with the
+mean, so every coarse rung fetches the same bytes.
 """)
 
 code("""
 import pandas as pd
 
-rb = {r["rung"]: r["bytes"] for r in tile_row(TILE)["rungs"]}
+rows = store_rows(TILE)
+rb = {r["rung"]: r["bytes"] for r in rows[0]["rungs"]}
 ladder = pd.DataFrame([{"rung": "-".join(map(str, r["tuple"])),
                         "bits/window": r["bits_window"],
                         "bits/px": round(r["bits_px"], 3),
-                        "whole-tile MB": round(rb["-".join(map(str, r["tuple"]))] / 1e6, 3)}
+                        "whole-store MB": round(rb["-".join(map(str, r["tuple"]))] / 1e6, 3)}
                        for r in ds.header["rungs"]])
 src_bytes = source_size(TILE)
-print(f"coded store {mb(store_size(TILE))}, source tile {mb(src_bytes)} (codes and scales), "
-      f"ratio {src_bytes / store_size(TILE):.0f} to 1")
+sizes = [r["store_bytes"] + r["metadata_bytes"] for r in rows]
+print(f"the {len(rows)} stores holding the tile: {', '.join(mb(n) for n in sizes)}, each a "
+      f"{rows[0]['height']} x {rows[0]['width']} px shard; the tile's codes and scales "
+      f"{mb(src_bytes)} uncompressed")
 ladder.set_index("rung").T
 """)
 
@@ -449,25 +542,28 @@ plt.show()
 
 md("""
 The curve puts the 42 rungs on one axis. The blue points are measured
-on this tile here. The orange points come from the store's quality
-array, which holds, for every 64 px window and every rung, the mean and
-99th percentile of the relative L2 error measured when the tile was
-encoded; they are averaged over the tile's valid pixels and need no
-decoding. Both cover the whole tile, so the two curves should agree to
-within the coding of the quality values, which steps by 7.5% in error.
+on this tile here. The orange points come from the stores' quality
+arrays, which hold, for every 64 px window and every rung, the mean and
+99th percentile of the relative L2 error measured when the shard was
+encoded; those of the windows the tile touches are averaged, weighted
+by each window's valid pixels inside the tile, and need no decoding.
+The windows along the tile's edge extend past it, so the two curves
+should agree to within the coding of the quality values, which steps by
+7.5% in error, and the difference those windows make.
 Coarse levels cost 8 bits per window, mid levels 176 and fine levels
 3,072, which gives the three slopes.
 """)
 
 code("""
 W = ds.window_px
-gh, gw = -(-ds.height // W), -(-ds.width // W)              # the last row and column are partial
+gh, gw = ds.window_grid                     # the zone's windows that the tile touches
+oy, ox = ds.offset                          # the tile's first pixel in them
 n_r = len(ds.rungs)
 qh = ds.header["quality"]
-qc = ds.quality_codes(0, gh, 0, gw)                          # north-up window grid
+qc = ds.quality_codes()                     # north-up window grid
 mask = ds.dataset_mask() > 0
 mask_p = np.zeros((gh * W, gw * W), bool)
-mask_p[:ds.height, :ds.width] = mask
+mask_p[oy:oy + ds.height, ox:ox + ds.width] = mask
 count = mask_p.reshape(gh, W, gw, W).sum((1, 3))
 tile_mean = (quality_value(qc[..., :n_r], qh["scale"], qh["offset"])
              * count[..., None]).sum((0, 1)) / count.sum()
@@ -501,35 +597,40 @@ as the recording server between it and `DATA_ROOT` sees them. The source
 column is what the same read fetches from the v1.1 source store, whose
 arrays are sharded in 4096 px shards of 32 x 32 px chunks (all 128 bands
 in one chunk), counted by a zarr store that records each request
-zarr-python makes to the store's bucket. The three whole-tile rows fetch
-the records without decoding them.
+zarr-python makes to the store's bucket.
 """)
 
 code("""
-def cost(fn, tile=TILE):
-    with georvq.open(metered(tile), codec=ds.codec) as d:
-        meter.clear()
-        fn(d)
-        ev = list(meter.events)
-        return len(ev), sum(e["bytes"] for e in ev)
+metered_tile = TileView(TILE, index=METER_IDX, codec=ds.codec)
+
+
+def cost(fn):
+    meter.clear()
+    fn(metered_tile)
+    ev = list(meter.events)
+    return len(ev), sum(e["bytes"] for e in ev)
 
 
 # the source store, read through a zarr store that records each request
 p = ds.header["product"]
 ti = int(re.search(r"\\[(\\d+),", p["source"]).group(1))
-zw = p["zone_window"]
+zw = {"row": ds.info["window"][0], "col": ds.info["window"][1]}     # the tile's
 
 
 def src_cost(rows, cols):
     \"\"\"Requests and bytes of reading tile rows and columns [r0, r1), [c0, c1)
     from the source store, as TesseraTile.read reads them.\"\"\"
-    st, g = source_group()
-    g = g[f"utm{p['utm_zone']:02d}"]
-    st.events.clear()
     (r0, r1), (c0, c1) = rows, cols
     R0, C0 = zw["row"], zw["col"]
-    np.asarray(g["scales"][ti, R0 + r0:R0 + r1, C0 + c0:C0 + c1])
-    np.asarray(g["embeddings"][ti, :, R0 + r0:R0 + r1, C0 + c0:C0 + c1])
+    for attempt in range(3):            # the bucket drops a connection now and then
+        st, g = source_group()
+        g = g[f"utm{p['utm_zone']:02d}"]
+        try:
+            np.asarray(g["scales"][ti, R0 + r0:R0 + r1, C0 + c0:C0 + c1])
+            np.asarray(g["embeddings"][ti, :, R0 + r0:R0 + r1, C0 + c0:C0 + c1])
+            break
+        except Exception as e:
+            print(f"retrying the source read ({type(e).__name__})")
     return len(st.events), sum(e["bytes"] for e in st.events)
 
 
@@ -544,7 +645,7 @@ for q in ["20-0-0", "20-13-0", "20-13-3", "20-13-12"]:
     reads.append((f"512 px window at {q}", lambda d, q=q: d.read(window=WINDOW, quality=q), src_win))
 for q in [(20, 0, 0), (20, 13, 0), (20, 13, 12)]:
     reads.append((f"whole tile at {'-'.join(map(str, q))}",
-                  lambda d, q=q: d.reader.read(0, gh, 0, gw, depths=list(q)), src_whole))
+                  lambda d, q=q: d.read(quality="-".join(map(str, q))), src_whole))
 
 costs = pd.DataFrame([dict(zip(("read", "requests", "bytes"), (name,) + cost(fn)),
                            source_requests=s[0], source_bytes=s[1])
@@ -576,8 +677,9 @@ plt.show()
 md("""
 ## How long a read takes over HTTP
 
-This section times one cold read of the whole tile, from `georvq.open`
-to the float32 array in memory, at four rungs, and the same tile read
+This section times one cold read of the whole tile with `read_tile`,
+from opening the stores that hold it to the float32 array in memory, at
+four rungs, and the same tile read
 from the v1.1 source store with `TesseraTile.read`, which fetches its
 codes and scales chunk by chunk. The codec is loaded beforehand and
 reused, so loading the weights is not timed.
@@ -615,15 +717,16 @@ else:
     base, rec_g, srv_g = ae_demo_http.serve(upstream=DATA_ROOT,
                                             headers=(STORAGE_OPTIONS or {}).get("headers"))
 servers.append(srv_g)
-speed_url = f"{base}/{TILE}.georvq.zarr"
+speed_index = f"{base}/tessera_georvq_index.parquet"
+from georvq.tessera.index import load_index
+load_index(speed_index)                     # read once, outside the timings
 
 runs = {}
 for q in SPEED_RUNGS:
     tr = Trace()
     rec_g.clear()
     t0 = time.perf_counter()
-    with georvq.open(speed_url, codec=codec, trace=tr) as d:
-        a = d.read(quality=q)
+    a = read_tile(speed_index, TILE, quality=q, codec=codec, trace=tr)
     # the server's requests in place of the reader's per-array reads
     events = [e for e in tr.events if e["kind"] != "get"] + list(rec_g.events)
     runs[f"georvq {q}"] = {"t0": t0, "t1": time.perf_counter(), "events": events,
@@ -720,7 +823,7 @@ decoded as the values were measured.
 
 code("""
 BOUND = "p99<=0.4"
-rmap = ds.window_rungs(BOUND)                               # whole tile, north-up window grid
+rmap = ds.window_rungs(BOUND)                               # the tile's windows, north-up
 bits = np.array([r["bits_window"] for r in ds.header["rungs"]])
 names = ["-".join(map(str, r)) for r in ds.rungs]
 used = np.unique(rmap)
@@ -728,17 +831,25 @@ used = np.unique(rmap)
 d_q = cost(lambda d: d.read(quality=BOUND))
 a_q = ds.read(quality=BOUND)
 e_q = np.full((gh * W, gw * W), np.nan)
-e_q[:ds.height, :ds.width] = np.where(valid_ref, err(x_ref, vec(a_q)), np.nan)
+e_q[oy:oy + ds.height, ox:ox + ds.width] = np.where(valid_ref, err(x_ref, vec(a_q)), np.nan)
 e_w = e_q.reshape(gh, W, gw, W).transpose(0, 2, 1, 3).reshape(gh, gw, -1)
 p99_w = np.nanquantile(e_w, 0.99, axis=-1)
+# the stored statistics are of whole windows: score the windows wholly
+# inside the tile whose chosen rung meets the bound in the quality array
+inside = np.zeros((gh * W, gw * W), bool)
+inside[oy:oy + ds.height, ox:ox + ds.width] = True
+inside = inside.reshape(gh, W, gw, W).all((1, 3))
+p99_chosen = np.take_along_axis(
+    quality_value(qc[..., n_r:2 * n_r], qh["scale"], qh["offset"]), rmap[..., None], -1)[..., 0]
+scored = inside & (p99_chosen <= 0.4) & np.isfinite(p99_w)
 
 print(f"whole tile at {BOUND}: {bits[rmap].sum() / 8 / 1e6:.2f} MB of records chosen per window, "
       f"against {rmap.size * bits[-1] / 8 / 1e6:.2f} MB at 20-13-12")
 print(f"fetched: {mb(d_q[1])} in {d_q[0]} requests at {BOUND}, "
       f"against {mb(costs.loc['whole tile at 20-13-12', 'bytes'])} at 20-13-12")
-print(f"windows meeting the bound when decoded here: {(p99_w <= 0.4).mean():.1%}, "
-      f"within the coding step of it: {(p99_w <= 0.4 * 10 ** (0.5 / qh['scale'])).mean():.1%} "
-      f"(worst p99 {np.nanmax(p99_w):.3f})")
+print(f"{scored.sum()} windows wholly inside the tile whose chosen rung meets the bound: "
+      f"{(p99_w[scored] > 0.4 * (1 + 1e-6)).sum()} over it when decoded here "
+      f"(worst p99 {p99_w[scored].max():.3f})")
 print(f"windows chosen at full depth: {(rmap == n_r - 1).mean():.1%}, of which no rung "
       f"meets the bound in the quality array: "
       f"{(quality_value(qc[..., 2 * n_r - 1], qh['scale'], qh['offset']) > 0.4).mean():.1%} of all windows")
@@ -747,7 +858,7 @@ cmap = plt.get_cmap("viridis", len(used))
 lut = np.zeros(len(ds.rungs), int); lut[used] = np.arange(len(used))
 fig, ax = plt.subplots(1, 2, figsize=(12, 5.2), constrained_layout=True,
                        gridspec_kw={"width_ratios": [1.15, 1]})
-x0, y0, x1, y1 = corners(ds.transform, gh * W, gw * W)
+x0, y0, x1, y1 = corners(ds.mosaic_transform, gh * W, gw * W)
 im = ax[0].imshow(lut[rmap], cmap=cmap, vmin=-0.5, vmax=len(used) - 0.5,
                   extent=[x0 / 1e3, x1 / 1e3, y0 / 1e3, y1 / 1e3], interpolation="nearest")
 cb = fig.colorbar(im, ax=ax[0], ticks=np.arange(len(used)), shrink=0.9)
@@ -831,35 +942,44 @@ A Tessera pixel is nodata where its vector is all zero or its scale
 is not between 0 and 1. The store keeps the tile's validity mask once,
 losslessly, and the reader writes zero vectors back wherever it is
 unset, so nodata comes back exactly. A window with no valid pixel is
-not coded, and a chunk with none is not stored, which makes partial
-tiles smaller. Tiles are not multiples of the 64 px window, so the last
-row and column of windows extend past the tile; the pixels beyond it
-are coded as invalid, and the mask restores the tile's extent. The tile
-shown here is fully valid (the v1.1 run embeds open water too), so the
-cell below checks the mask against the source and compares the error in
-the partly filled edge windows with the rest of the tile; two tiles of
-the sample (Aysén in Chile and the Hohe Tauern) have nodata where the
-v1.1 run left pixels without an embedding.
+not coded, a chunk with none is not stored, and a shard with none has
+no store at all. A shard is 64 x 64 windows, so every store's window
+grid is the zone's, and a tile's edges fall inside windows, which are
+decoded whole and cropped. The tile shown here is fully valid (the v1.1
+run embeds open water too), so the cell below checks the mask against
+the source and compares the error in the windows that the tile's edges
+and the shard edge cross with the rest of the tile; two tiles of the
+sample (Aysén in Chile and the Hohe Tauern) have nodata where the v1.1
+run left pixels without an embedding.
 """)
 
 code("""
 v_src = raw_valid(src.q, src.s)
 nod_dec = (full == 0).all(0)
-empty = {g["kind"]: len(g.get("empty_chunks", [])) for g in ds.header["layout"]["groups"]}
-edge = np.zeros(mask.shape, bool)
-edge[(gh - 1) * W:, :] = True
-edge[:, (gw - 1) * W:] = True
+empty = [{g["kind"]: len(g.get("empty_chunks", [])) for g in d.header["layout"]["groups"]}
+         for d in ds.stores]
+# pixels of the tile in windows its edges cross, and in windows next to a shard edge
+r0, c0 = ds.info["window"][:2]
+rr = (np.arange(ds.height) + oy) // W
+cc = (np.arange(ds.width) + ox) // W
+edge = (rr[:, None] == 0) | (rr[:, None] == gh - 1) | (cc[None] == 0) | (cc[None] == gw - 1)
+shard_edge = np.zeros(mask.shape, bool)
+for s in ds.info["stores"][1:]:
+    if s["row"] > r0:
+        shard_edge[s["row"] - r0 - W:s["row"] - r0 + W] = True
+    if s["col"] > c0:
+        shard_edge[:, s["col"] - c0 - W:s["col"] - c0 + W] = True
 e3 = err(x_ref, vec(dec["20-13-3"]))
 
 print(f"valid pixels {mask.mean():.1%}; the store's mask and the source's validity differ at "
       f"{(mask != v_src).sum()} pixels")
 print(f"nodata pixels: {(~v_src).sum():,} in the source, {nod_dec.sum():,} decoded; "
-      f"empty chunks per kind: {empty}")
-print(f"tile {ds.height} x {ds.width} px, coded as {gh} x {gw} windows ({gh * W} x {gw * W} px); "
-      f"the last row of windows holds {ds.height - (gh - 1) * W} rows of the tile, "
-      f"the last column {ds.width - (gw - 1) * W} columns")
-print(f"mean relative L2 at 20-13-3: {e3[edge & valid_ref].mean():.4f} in the last row and column "
-      f"of windows, {e3[~edge & valid_ref].mean():.4f} elsewhere")
+      f"empty chunks per kind, per store: {empty}")
+print(f"tile {ds.height} x {ds.width} px over {gh} x {gw} windows of the zone's grid, "
+      f"starting {oy} rows and {ox} columns into the first")
+print(f"mean relative L2 at 20-13-3: {e3[edge & valid_ref].mean():.4f} in the windows the tile's "
+      f"edges cross, {e3[shard_edge & valid_ref].mean():.4f} next to the shard edge, "
+      f"{e3[~edge & ~shard_edge & valid_ref].mean():.4f} elsewhere")
 """)
 
 # --------------------------------------------------------------------------
@@ -870,45 +990,46 @@ md("""
 `tessera_georvq_index.parquet` has one row per coded store: the columns
 every georvq index has (the store's path, product id, the source URL,
 CRS, bounds and footprint, codec ids, its size, and the bytes a
-whole-tile read fetches at each rung), followed by Tessera's own, taken
-from each store's header: the year, the tile's centre (`tile_lon`,
-`tile_lat`), its UTM zone and first pixel in the zone's grid, the share
-of valid pixels and the embeddings version. pyarrow, pandas or DuckDB
-can query it without opening the coded stores.
+whole-store read fetches at each rung), followed by Tessera's own, taken
+from each store's header: the year, the UTM zone, the shard's row and
+column and its first pixel in the zone's grid, the grid's origin, the
+share of valid pixels, the embeddings version, and `tiles`, the
+geotessera tiles that touch the store with their windows, which is what
+`find_tile` and `read_tile` use. pyarrow, pandas or DuckDB can query it
+without opening the coded stores.
 """)
 
 code("""
 import pyarrow.compute as pc
 
-idx = index                                  # read with the helpers above, from idx_path
-print(f"{idx.num_rows} tiles; columns: {', '.join(idx.column_names)}")
+idx = index                                  # read with the helpers above, from IDX
+print(f"{idx.num_rows} stores; columns: {', '.join(idx.column_names)}")
 
 def at(rungs, name):
     return next(r["bytes"] for r in rungs if r["rung"] == name)
 
-tiles = pd.DataFrame({
-    "year": idx["year"].to_pylist(),
-    "tile": [p.rsplit("/", 1)[-1].split(".georvq")[0] for p in idx["path"].to_pylist()],
-    "lon": idx["tile_lon"].to_pylist(), "lat": idx["tile_lat"].to_pylist(),
+bb = idx["bbox"].to_pylist()
+stores = pd.DataFrame({
+    "store": idx["path"].to_pylist(),
+    "lon": [(b["xmin"] + b["xmax"]) / 2 for b in bb],
+    "lat": [(b["ymin"] + b["ymax"]) / 2 for b in bb],
     "valid": idx["valid_fraction"].to_pylist(),
+    "tiles": [len(x) for x in idx["tiles"].to_pylist()],
     "store MB": [(b + m) / 1e6 for b, m in zip(idx["store_bytes"].to_pylist(),
                                                idx["metadata_bytes"].to_pylist())],
-    "20-13-0 MB": [at(r, "20-13-0") / 1e6 for r in idx["rungs"].to_pylist()],
-    "source MB": [w * h * 132 / 1e6 for w, h in zip(idx["width"].to_pylist(),
-                                                     idx["height"].to_pylist())]})
+    "20-13-0 MB": [at(r, "20-13-0") / 1e6 for r in idx["rungs"].to_pylist()]})
 
-# tiles whose 0.1 degree cell intersects a box (here, northern Europe)
+# stores whose footprint intersects a box (here, northern Europe)
 box = dict(west=-10, south=45, east=30, north=60)
-lon, lat = idx["tile_lon"], idx["tile_lat"]
-sel = idx.filter(pc.and_(pc.and_(pc.greater(pc.add(lon, 0.05), box["west"]),
-                                 pc.less(pc.subtract(lon, 0.05), box["east"])),
-                         pc.and_(pc.greater(pc.add(lat, 0.05), box["south"]),
-                                 pc.less(pc.subtract(lat, 0.05), box["north"]))))
+xmin, xmax = pc.struct_field(idx["bbox"], "xmin"), pc.struct_field(idx["bbox"], "xmax")
+ymin, ymax = pc.struct_field(idx["bbox"], "ymin"), pc.struct_field(idx["bbox"], "ymax")
+sel = idx.filter(pc.and_(pc.and_(pc.greater(xmax, box["west"]), pc.less(xmin, box["east"])),
+                         pc.and_(pc.greater(ymax, box["south"]), pc.less(ymin, box["north"]))))
 print(f"in the box: {sel['path'].to_pylist()}")
 try:
     import duckdb
-    print(duckdb.sql(f"select year, tile_lon, tile_lat, valid_fraction, store_bytes "
-                     f"from read_parquet('{idx_path}') order by store_bytes").df())
+    print(duckdb.sql(f"select path, year, utm_zone, shard_row, shard_col, valid_fraction, "
+                     f"len(tiles) as tiles from read_parquet('{IDX}') order by path").df())
 except ImportError:
     print("duckdb is not installed; the same query works with read_parquet() in DuckDB")
 
@@ -919,16 +1040,16 @@ try:
     land.plot(ax=ax, color="#e9e7e1", edgecolor="#c9c6bd", lw=0.6, zorder=0)
 except Exception as e:                       # no geopandas or no network: footprints only
     print(f"no basemap ({type(e).__name__})")
-ax.scatter(tiles["lon"], tiles["lat"], s=30, color=BLUE, zorder=2)
-for _, t in tiles.iterrows():
-    ax.annotate(f"{t['year']} {t['store MB']:.1f} MB", (t["lon"], t["lat"]),
-                textcoords="offset points", xytext=(4, 3), fontsize=7.5, color=INK)
+for b in bb:
+    ax.add_patch(Rectangle((b["xmin"], b["ymin"]), b["xmax"] - b["xmin"], b["ymax"] - b["ymin"],
+                           fc=BLUE, ec=BLUE, alpha=0.6, lw=1.5, zorder=2))
+ax.scatter(stores["lon"], stores["lat"], s=0)
 ax.set_xlim(-180, 180); ax.set_ylim(-60, 85)
 ax.grid(True, color="#e4e3df", lw=0.6, zorder=-1)
 ax.set_xlabel("longitude"); ax.set_ylabel("latitude")
-ax.set_title("the sample's tiles, by centre (land from Natural Earth)")
+ax.set_title("the sample's stores, by footprint (land from Natural Earth)")
 plt.show()
-tiles.round(2)
+stores.round(2)
 """)
 
 # --------------------------------------------------------------------------
@@ -976,12 +1097,14 @@ print(f"to_geotessera: int8 {q8.shape} codes and float32 {s8.shape} scales, {mb(
       f"(the decoded floats: {scores.loc['20-13-3', 'mean']:.4f})")
 
 t = time.perf_counter()
-with open_tile(TILE, backend="onnx") as dx:
-    a_onnx = dx.read(quality="20-13-3")
+dx = TileView(TILE, backend="onnx")
+a_onnx = dx.read(quality="20-13-3")
+dx.close()
 t_onnx = time.perf_counter() - t
 a_torch = dec["20-13-3"]
-with open_tile(TILE, bf16=False) as d32:
-    a_fp32 = d32.read(quality="20-13-3")
+d32 = TileView(TILE, bf16=False)
+a_fp32 = d32.read(quality="20-13-3")
+d32.close()
 print(f"onnx backend, CPU: {t_onnx:.1f} s including loading the graphs")
 for name, a in [("torch bf16", a_torch), ("torch fp32", a_fp32)]:
     d = err(vec(a), vec(a_onnx))[valid_ref]

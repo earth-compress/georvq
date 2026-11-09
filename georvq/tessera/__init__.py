@@ -7,12 +7,14 @@ The generic, source-agnostic machinery (Codec/Packet, bundles, bitstream
 ids, the store codec and reader) lives in `georvq.inference`.
 
 `georvq.tessera.v1_1` is the Tessera v1.1 release, one georvq Zarr store
-per tile of the v1.1 embeddings (the global run produced by dClimate),
-opened with `georvq.open`; `georvq.tessera.tiles` reads those tiles from
-the v1.1 Zarr store and `georvq.tessera.index` makes the release's tile
-index. `prep` (from `io`) turns the int8 codes and scale plane into the
-model's input, and is imported on first use so that reading stores with
-the ONNX backend does not import torch.
+per 4096 px shard of the v1.1 embeddings' zone arrays (the global run
+produced by dClimate), opened with `georvq.open`; `georvq.tessera.tiles`
+reads shards and tiles from the v1.1 Zarr store, and
+`georvq.tessera.index` makes the release's index. `read_tile` (from
+`index`) reads a geotessera tile from the stores an index lists, and
+`prep` (from `io`) turns the int8 codes and scale plane into the model's
+input; both are imported on first use, so that reading stores with the
+ONNX backend does not import torch.
 
 The per-window mean is transmitted: Tessera vectors are not unit-norm,
 and a window's mean carries much of its energy, so it is sent rather
@@ -24,9 +26,9 @@ contract, not as templates to inherit blindly.
 """
 import importlib
 
-_NAMES = {"prep": "io"}
+_NAMES = {"prep": "io", "read_tile": "index", "find_tile": "index"}
 
-__all__ = ["prep"]
+__all__ = ["prep", "read_tile", "find_tile"]
 
 
 def __getattr__(name):

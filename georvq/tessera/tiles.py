@@ -1,4 +1,4 @@
-"""Tessera v1.1 tiles, read from the dClimate run's Zarr store.
+"""Tessera v1.1 embeddings, read from the dClimate run's Zarr store.
 
 The v1.1 embeddings (the global run produced and hosted by dClimate,
 which geotessera 0.11 reads by default) are published as one Zarr store
@@ -6,23 +6,29 @@ with a group per UTM zone, `utmNN`, holding int8 (time, 128, y, x)
 embeddings and float32 (time, y, x) scales on the zone's 10 m grid, with
 x = q * scale and a NaN scale marking a pixel with no embedding. Every
 zone's grid is in the northern CRS of its zone (EPSG:326NN), so southern
-tiles have negative northings. The store's attributes name the model
-that made the embeddings (`geoemb:model`), which is checked here so that
+tiles have negative northings. Both arrays are sharded in 4096 x 4096 px
+shards of 32 x 32 px chunks. The store's attributes name the model that
+made the embeddings (`geoemb:model`), which is checked here so that
 embeddings of another version are never read as v1.1.
 
-The unit of a release store is a geotessera tile, the 0.1 degree cell
-centred at (lon, lat) in one year, cut as the chip-store builder
-(scripts/build_store_tessera.py) cuts it: from the grid of the zone that
-holds the cell's centre, the pixel envelope of the cell's footprint
-(`tile_window`). NaN or infinite scales become the v1 nodata convention,
-an all-zero vector with a zero scale (`clean_nodata`), so that the int8
-codes are the source's unchanged.
+The unit of a release store is one such shard of one year
+(`TesseraShard`): the store mirrors the source's layout, as the AE
+release mirrors its source tiles, and is named by year, zone and shard
+row and column (`shard_id`). NaN or infinite scales become the v1
+nodata convention, an all-zero vector with a zero scale
+(`clean_nodata`), so that the int8 codes are the source's unchanged.
 
-`TesseraTile.read` reads one tile from the store (by default the public
-copy on Source Cooperative) as a georvq.inference.store_codec
-.ProductSource, and `TesseraTile.from_arrays` makes the same object from
-arrays already read, such as a local copy. Its `source` is the URL of
-the zone's embeddings array followed by the slice read from it.
+A geotessera tile is the 0.1 degree cell centred at (lon, lat) in one
+year, cut as the chip-store builder (scripts/build_store_tessera.py)
+cuts it: from the grid of the zone that holds the cell's centre, the
+pixel envelope of the cell's footprint (`tile_window`). A tile can
+straddle up to four shards; `tiles_in_region` lists the tiles that touch
+a region of a zone's grid, which the release index records per store so
+that georvq.tessera.index.read_tile can assemble a tile from the stores.
+`TesseraTile.read` reads one tile straight from the source store.
+
+A product's `source` is the URL of the zone's embeddings array followed
+by the slice read from it.
 """
 from __future__ import annotations
 
@@ -44,6 +50,7 @@ V11_MODEL = "https://geotessera.org/model/1.1"
 EMBEDDINGS = {"name": "TESSERA", "version": "1.1", "run": "dclimate",
               "model": V11_MODEL, "store": V11_STORE}
 BANDS = 128
+SHARD_PX = 4096           # the source arrays' shard side, in pixels
 
 
 def utm_zone(lon: float) -> int:
@@ -191,3 +198,158 @@ class TesseraTile:
 
     def read_strip(self, y0, y1):
         return self.q[:, y0:y1], self.s[y0:y1]
+
+
+# --------------------------------------------------------------------------
+# shards: the release's product
+# --------------------------------------------------------------------------
+
+def shard_id(year, zone, row, col) -> str:
+    """`{year}/utm{zone}/{row}_{col}`, the row zero-padded to 3 digits and
+    the column to 2, which cover every zone's shard grid (446 rows of
+    4096 px from 84 N to 80 S, 17 columns), so that names sort in grid
+    order."""
+    return f"{int(year)}/utm{int(zone):02d}/{int(row):03d}_{int(col):02d}"
+
+
+def shards_of_window(r0, c0, h, w, shard_px=SHARD_PX) -> list:
+    """(row, col) of every shard a zone-grid window touches."""
+    return [(r, c) for r in range(r0 // shard_px, (r0 + h - 1) // shard_px + 1)
+            for c in range(c0 // shard_px, (c0 + w - 1) // shard_px + 1)]
+
+
+def tiles_in_region(zone, epsg, west, top, px, r0, c0, h, w) -> list:
+    """The geotessera tiles of zone `zone` whose window touches the
+    region [r0, r0 + h) x [c0, c0 + w) of the zone's grid (origin west,
+    top, pixel size px): per tile {name, lon, lat, row, col, height,
+    width}, the window in zone pixels. A tile belongs to the zone holding
+    its centre."""
+    from pyproj import Transformer
+    fwd = Transformer.from_crs("EPSG:4326", f"EPSG:{epsg}", always_xy=True)
+    inv = Transformer.from_crs(f"EPSG:{epsg}", "EPSG:4326", always_xy=True)
+    ys = np.linspace(r0, r0 + h, 9)
+    xs = np.linspace(c0, c0 + w, 9)
+    gy, gx = np.meshgrid(ys, xs)
+    lon, lat = inv.transform(west + gx.ravel() * px, top - gy.ravel() * px)
+    lo0 = max(-180 + 6 * (zone - 1), np.floor(min(lon) * 10) / 10 - 0.1)
+    lo1 = min(-180 + 6 * zone, np.ceil(max(lon) * 10) / 10 + 0.1)
+    la0 = max(-90.0, np.floor(min(lat) * 10) / 10 - 0.1)
+    la1 = min(90.0, np.ceil(max(lat) * 10) / 10 + 0.1)
+    out = []
+    for i in range(int(round(lo0 * 10)), int(round(lo1 * 10))):
+        clon = round(i / 10 + 0.05, 2)
+        if utm_zone(clon) != zone:
+            continue
+        for j in range(int(round(la0 * 10)), int(round(la1 * 10))):
+            clat = round(j / 10 + 0.05, 2)
+            a, b, hh, ww = tile_window(clon, clat, west, top, px, fwd.transform)
+            if a < r0 + h and a + hh > r0 and b < c0 + w and b + ww > c0:
+                out.append({"name": tile_name(clon, clat), "lon": clon,
+                            "lat": clat, "row": a, "col": b, "height": hh,
+                            "width": ww})
+    return out
+
+
+class TesseraShard:
+    """A region of one zone's grid in one year, normally one 4096 px
+    shard of the source arrays, as a georvq.inference.store_codec
+    .ProductSource, north-up on the zone's 10 m grid. Rows are read from
+    the source (or the arrays given) a strip at a time."""
+
+    orientation = "north-up"
+
+    def __init__(self, year, zone, epsg, west, top, px, r0, c0, h, w,
+                 source, strip, shard=None):
+        from georvq.inference.store_codec import crs_from_epsg
+        self.year, self.zone, self.epsg = int(year), int(zone), int(epsg)
+        self.r0, self.c0 = int(r0), int(c0)
+        self.height, self.width = int(h), int(w)
+        self.crs = crs_from_epsg(self.epsg)
+        self.transform = (float(px), 0.0, float(west) + self.c0 * px, 0.0,
+                          -float(px), float(top) - self.r0 * px)
+        self.zone_origin = (float(west), float(top), float(px))
+        self.source = source
+        self._strip = strip
+        self.shard = None if shard is None else tuple(int(v) for v in shard)
+        self.product_id = (shard_id(year, zone, *self.shard) if self.shard
+                           else f"{self.year}/utm{self.zone:02d}/"
+                                f"r{self.r0}_c{self.c0}")
+        self.product_meta = {
+            "count": BANDS, "dtype": "int8", "nodata": None,
+            "scale": "float32 per pixel, x = q * scale",
+            "year": self.year, "utm_zone": self.zone,
+            "shard": (None if self.shard is None else
+                      {"row": self.shard[0], "col": self.shard[1],
+                       "px": int(SHARD_PX)}),
+            "zone_window": {"row": self.r0, "col": self.c0,
+                            "height": self.height, "width": self.width},
+            "zone_origin": {"west": float(west), "top": float(top),
+                            "px": float(px)},
+            "embeddings": dict(EMBEDDINGS)}
+        self.aux = None
+
+    @classmethod
+    def read(cls, year, zone, row, col, store=V11_STORE, source_store=None):
+        """Shard (row, col) of zone `zone` in `year`, read lazily from the
+        v1.1 store (a URL, a local path or an open zarr group).
+        `source_store`, when given, is the store the product's `source`
+        names instead, for a shard read from a local copy of it."""
+        g = open_store(store)
+        zg = zone_grid(g, int(zone))
+        if int(year) not in zg["years"]:
+            raise ValueError(f"utm{int(zone):02d} has no {year}; it has "
+                             f"{zg['years']}")
+        ti = zg["years"].index(int(year))
+        sh = zg["emb"].shards or zg["emb"].chunks
+        if tuple(sh[-2:]) != (SHARD_PX, SHARD_PX):
+            raise ValueError(f"the source's shards are {sh}, not "
+                             f"{SHARD_PX} px")
+        H, W = zg["emb"].shape[-2:]
+        r0, c0 = int(row) * SHARD_PX, int(col) * SHARD_PX
+        if not (0 <= r0 < H and 0 <= c0 < W):
+            raise ValueError(f"shard {row}_{col} is outside utm{int(zone):02d}")
+        h, w = min(SHARD_PX, H - r0), min(SHARD_PX, W - c0)
+
+        def strip(y0, y1):
+            s = np.asarray(zg["scales"][ti, r0 + y0:r0 + y1, c0:c0 + w],
+                           np.float32)
+            q = np.asarray(zg["emb"][ti, :, r0 + y0:r0 + y1, c0:c0 + w])
+            return clean_nodata(q, s)
+        out = cls(year, zone, zg["epsg"], zg["west"], zg["top"], zg["px"],
+                  r0, c0, h, w,
+                  source_url(source_store or store, int(zone), ti, r0, c0, h, w),
+                  strip, shard=(row, col))
+        out._scales = lambda: np.asarray(
+            zg["scales"][ti, r0:r0 + h, c0:c0 + w], np.float32)
+        return out
+
+    @classmethod
+    def from_arrays(cls, year, zone, q, s, epsg, west, top, px, r0, c0,
+                    source, shard=None):
+        """A region from arrays already read: q int8 (128, H, W), s (H, W),
+        its first pixel at (r0, c0) of the zone's grid."""
+        q = np.asarray(q)
+        s = np.asarray(s, np.float32)
+        if q.dtype != np.int8 or q.ndim != 3 or q.shape[0] != BANDS:
+            raise ValueError(f"expected int8 ({BANDS}, H, W) codes, got "
+                             f"{q.dtype} {q.shape}")
+        if s.shape != q.shape[1:]:
+            raise ValueError(f"scale plane {s.shape} does not match the "
+                             f"codes {q.shape}")
+        q, s = clean_nodata(np.array(q), np.array(s))
+        out = cls(year, zone, epsg, west, top, px, r0, c0, *s.shape, source,
+                  lambda y0, y1: (q[:, y0:y1], s[y0:y1]), shard=shard)
+        out._scales = lambda: s
+        out.q, out.s = q, s
+        return out
+
+    def valid_fraction(self) -> float:
+        """The share of the region's pixels with an embedding, from the
+        scales alone (every pixel with a finite positive scale below 1
+        has a non-zero vector)."""
+        s = self._scales()
+        with np.errstate(invalid="ignore"):
+            return float((np.isfinite(s) & (s > 0) & (s < 1.0)).mean())
+
+    def read_strip(self, y0, y1):
+        return self._strip(y0, y1)

@@ -2,7 +2,7 @@
 
 Two checks, as tests/test_ae_v2_format.py makes them for AE v2:
 
-- A store written by `georvq.tessera.v1_1.encode_tile` for a tiny
+- A store written by `georvq.tessera.v1_1.encode_shard` for a tiny
   Tessera-shaped codec is compared with
   golden/tessera_v1_1_store_snapshot.json: every node's attributes and
   array metadata as JSON, the stored keys, and the sha256 of every
@@ -103,8 +103,8 @@ def _codec():
 
 
 def _source():
-    """A tile with nodata as all-zero vectors, as NaN, infinite and zero
-    scales, and in all of the top-right fine chunk."""
+    """A shard (a small one) with nodata as all-zero vectors, as NaN,
+    infinite and zero scales, and in all of the top-right fine chunk."""
     rng = np.random.default_rng(2)
     q = rng.integers(-127, 128, size=(128, H, WD), dtype=np.int8)
     s = rng.uniform(0.001, 0.05, size=(H, WD)).astype(np.float32)
@@ -113,9 +113,9 @@ def _source():
     s[60, 3] = np.inf
     s[30:35, 30:34] = 0.0
     q[:, :32, 64:] = 0
-    t = (10.0, 0.0, 500000.0, 0.0, -10.0, 5180000.0)
-    return v1_1.TesseraTile.from_arrays(YEAR, LON, LAT, q, s, 32633, t,
-                                        SOURCE, (0, 0))
+    return v1_1.TesseraShard.from_arrays(YEAR, 33, q, s, 32633, 500000.0,
+                                         5180000.0, 10.0, 0, 0, SOURCE,
+                                         shard=(0, 0))
 
 
 def _write_store(tmp):
